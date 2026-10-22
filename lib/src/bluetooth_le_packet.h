@@ -27,7 +27,13 @@
 #include <stdio.h>
 #include <stdlib.h>
 
-#define MAX_LE_SYMBOLS 64
+/* Access address (4) + PDU header (2) + max DLE payload (251) + CRC (3). */
+#define MAX_LE_SYMBOLS 260
+
+/* How many bytes lell_allocate_and_decode() reads. It takes no length, and
+ * this is what it has always read, so its callers all pass a buffer at least
+ * this long. New callers should use lell_allocate_and_decode_n() instead. */
+#define LELL_LEGACY_STREAM_LEN 64
 
 #define LE_ADV_AA 0x8E89BED6
 

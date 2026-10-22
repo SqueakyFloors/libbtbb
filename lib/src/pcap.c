@@ -297,8 +297,8 @@ assemble_pcapng_le_packet( pcap_le_packet * pkt,
 
 	pkt->pcap_header.ts_sec  = ns / 1000000000ull;
 	pkt->pcap_header.ts_usec = ns % 1000000000ull;
-	pkt->pcap_header.incl_len = sizeof(pcap_bluetooth_le_ll_header)+caplen;
-	pkt->pcap_header.orig_len = sizeof(pcap_bluetooth_le_ll_header)+incl_len;
+	pkt->pcap_header.incl_len = sizeof(pcap_bluetooth_le_ll_header)+incl_len;
+	pkt->pcap_header.orig_len = sizeof(pcap_bluetooth_le_ll_header)+caplen;
 
 	pkt->le_ll_header.rf_channel = rf_channel;
 	pkt->le_ll_header.signal_power = signal_power;

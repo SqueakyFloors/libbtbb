@@ -79,12 +79,15 @@ typedef struct __attribute__((packed)) {
   pcap_bluetooth_le_ll_header le_ll_header;
   uint8_t le_packet[LE_MAX_PAYLOAD];
 
-  /* Force 32 bit alignment for options and blk_tot_length. */
+  /* The block header, the pseudoheader and LE_MAX_PAYLOAD together come to
+     2 more than a multiple of 4, so these two bytes round the record up to a
+     4-byte boundary. A longer LE_MAX_PAYLOAD would need this adjusted, or
+     the longest block would run past the end of this struct. */
   uint8_t pad[2];
 
-  /* Add space for OPTIONS and BLOCK_TOTAL_LENGTH at end of
-     block. These won't be at this position in the structure unless
-     the LE PDU is the full 39 bytes. */
+  /* Room for the options word and the trailing block length. They are
+     written at the aligned end of the record actually built, which for a
+     packet shorter than the maximum is before these two members. */
   uint32_t options;
   uint32_t blk_tot_length;
 } pcapng_le_packet;

@@ -353,7 +353,7 @@ create_le_capture_file_single_interface( PCAPNG_HANDLE * handle,
 				(const option_header *) &libbtbb_section_options, 
 				(size_t) getpagesize( ),
 				DLT_BLUETOOTH_LE_LL_WITH_PHDR,
-				64,
+				sizeof(pcap_bluetooth_le_ll_header) + LE_MAX_PAYLOAD,
 				interface_options,
 				(size_t) getpagesize( ) );
 
@@ -434,11 +434,16 @@ assemble_pcapng_le_packet( pcapng_le_packet * pkt,
 			   const uint16_t flags,
 			   const uint8_t * lepkt )
 {
-	uint32_t pcapng_caplen = sizeof(pcap_bluetooth_le_ll_header)+caplen;
+	uint32_t stored_caplen = MIN(LE_MAX_PAYLOAD, caplen);
+	uint32_t pcapng_caplen = sizeof(pcap_bluetooth_le_ll_header)+stored_caplen;
+	uint32_t pcapng_origlen = sizeof(pcap_bluetooth_le_ll_header)+caplen;
 	uint32_t block_length  = 4*((PCAPNG_ENHANCED_BLK_SZ+pcapng_caplen+3)/4);
 
-	// TODO this should never happen, but handle it if it does
-	assert(caplen <= LE_MAX_PAYLOAD);
+	/* The block is rounded up to a 4-byte boundary, so up to three bytes
+	 * after the packet are written out without ever being filled in. Clear
+	 * the whole record first, so a capture file cannot carry whatever the
+	 * caller's memory happened to hold there. */
+	memset( pkt, 0, sizeof( *pkt ) );
 
 	pkt->blk_header.block_type = BLOCK_TYPE_ENHANCED_PACKET;
 	pkt->blk_header.block_total_length = block_length;
@@ -446,14 +451,14 @@ assemble_pcapng_le_packet( pcapng_le_packet * pkt,
 	pkt->blk_header.timestamp_high = (uint32_t) (ns >> 32);
 	pkt->blk_header.timestamp_low = (uint32_t) (ns & 0x0ffffffffull);
 	pkt->blk_header.captured_len = pcapng_caplen;
-	pkt->blk_header.packet_len = pcapng_caplen;
+	pkt->blk_header.packet_len = pcapng_origlen;
 	pkt->le_ll_header.rf_channel = rf_channel;
 	pkt->le_ll_header.signal_power = signal_power;
 	pkt->le_ll_header.noise_power = noise_power;
 	pkt->le_ll_header.access_address_offenses = access_address_offenses;
 	pkt->le_ll_header.ref_access_address = htole32( ref_access_address );
 	pkt->le_ll_header.flags = htole16( flags );
-	(void) memcpy( &pkt->le_packet[0], lepkt, caplen );
+	(void) memcpy( &pkt->le_packet[0], lepkt, stored_caplen );
 	((uint32_t *)pkt)[block_length/4-2] = 0x00000000; /* no-options */
 	((uint32_t *)pkt)[block_length/4-1] = block_length;
 }
