@@ -49,11 +49,13 @@ jobs:
           CC: ${{ matrix.cc }}
 
       - name: Configure
+        # The vendored uthash.h falls through between switch cases on purpose,
+        # which gcc reports: that one warning stays visible but not fatal.
         run: >
           cmake -S . -B build
           -DCMAKE_BUILD_TYPE=RelWithDebInfo
           -DENABLE_PYTHON=ON
-          -DCMAKE_C_FLAGS="-Wall -Wextra -Werror"
+          -DCMAKE_C_FLAGS="-Wall -Wextra -Werror -Wno-error=implicit-fallthrough"
         env:
           CC: ${{ matrix.cc }}
 
@@ -88,7 +90,7 @@ jobs:
           cmake -S . -B build
           -DCMAKE_BUILD_TYPE=Debug
           -DENABLE_PYTHON=OFF
-          -DCMAKE_C_FLAGS="-Wall -Wextra -Werror -g -fno-omit-frame-pointer -fsanitize=address,undefined -fno-sanitize-recover=all"
+          -DCMAKE_C_FLAGS="-Wall -Wextra -Werror -Wno-error=implicit-fallthrough -g -fno-omit-frame-pointer -fsanitize=address,undefined -fno-sanitize-recover=all"
         env:
           CC: clang
 

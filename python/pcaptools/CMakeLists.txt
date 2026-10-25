@@ -31,6 +31,19 @@ if(PIP_MISSING)
 	return()
 endif()
 
+# Build against the setuptools that is already installed where there is one,
+# so that the build needs no network. Where there is not, pip fetches the
+# build backend itself.
+execute_process(COMMAND ${Python3_EXECUTABLE} -c "import setuptools"
+                RESULT_VARIABLE SETUPTOOLS_MISSING
+                OUTPUT_QUIET ERROR_QUIET)
+if(SETUPTOOLS_MISSING)
+	message(STATUS "setuptools not found - pip will fetch the build backend")
+	set(PIP_ISOLATION)
+else()
+	set(PIP_ISOLATION "--no-build-isolation")
+endif()
+
 # The package is assembled in the build directory: the generated
 # pyproject.toml carries the version, and the sources are copied in beside it
 # so that pip sees one self-contained project and the source tree stays clean.
@@ -49,7 +62,7 @@ endforeach()
 add_custom_command(OUTPUT ${OUTPUT}/timestamp
                    COMMAND ${CMAKE_COMMAND} -E make_directory ${OUTPUT}
                    COMMAND ${Python3_EXECUTABLE} -m pip wheel
-                           --no-build-isolation --no-deps
+                           ${PIP_ISOLATION} --no-deps
                            --wheel-dir ${OUTPUT} ${PROJECT_DIR}
                    COMMAND ${CMAKE_COMMAND} -E touch ${OUTPUT}/timestamp
                    DEPENDS ${DEPS}
