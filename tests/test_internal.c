@@ -117,6 +117,26 @@ static void test_unfec23(void)
 	}
 }
 
+/*
+ * The first ten vectors above are the codewords for the ten single-bit data
+ * values, so they say what fec23() must produce without asking unfec23(),
+ * which computes parity with fec23() itself.
+ */
+static void test_fec23_against_vectors(void)
+{
+	int i, bit;
+
+	for (i = 0; i < 10; ++i) {
+		uint16_t expected = 0;
+
+		for (bit = 0; bit < 15; ++bit)
+			expected |= (uint16_t)
+				((FEC23_INPUT[i][bit] & 1) << bit);
+
+		CHECK(fec23((uint16_t) (1 << i)) == expected);
+	}
+}
+
 /* What fec23() encodes, unfec23() decodes back. */
 static void test_fec23_round_trip(void)
 {
@@ -367,6 +387,7 @@ int main(void)
 	test_unfec23_multiple_blocks();
 	test_unfec23_check_bit_error();
 	test_unfec23_rejects_two_bit_errors();
+	test_fec23_against_vectors();
 	test_fec23_round_trip();
 	test_header_decode();
 	test_gen_syndrome();
