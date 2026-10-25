@@ -1,3 +1,11 @@
+libbtbb (2020-12-R1+fork2) unstable; urgency=low
+  * LE decode complaints ("Error: attempt to read past end of buffer",
+    "Early return due to 0 length" and the "Wrong length" messages) now go to
+    stderr instead of into the packet dump on stdout. The messages themselves
+    are unchanged.
+
+ -- Russell Wagner <152923636+SqueakyFloors@users.noreply.github.com>  25 Oct 2026 01:00:00 -0700
+
 libbtbb (2020-12-R1+fork1) unstable; urgency=low
   * Builds and installs out of the box on current tools: the CMake minimum is
     now 3.5, so CMake 4 accepts the project, and the Python tools get a PEP 440

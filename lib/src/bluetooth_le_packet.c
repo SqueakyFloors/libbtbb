@@ -28,10 +28,28 @@
 #include "btbb.h"
 #include "bluetooth_le_packet.h"
 #include <ctype.h>
+#include <stdarg.h>
 #include <string.h>
 
 /* company identifier lookup */
 const char *bt_compidtostr(uint16_t compid);
+
+/* Report a problem with a packet. These go to stderr so that a dump on
+ * stdout holds nothing but the dump. */
+#ifdef __GNUC__
+__attribute__((format(printf, 1, 2)))
+#endif
+static void _warn(const char *fmt, ...)
+{
+	va_list ap;
+
+	/* keep the two streams in order when both are a terminal */
+	fflush(stdout);
+	va_start(ap, fmt);
+	vfprintf(stderr, fmt, ap);
+	va_end(ap);
+	fflush(stderr);
+}
 
 /* string representations of advertising packet type */
 static const char *ADV_TYPE_NAMES[] = {
@@ -407,11 +425,11 @@ static void _dump_scan_rsp_data(const uint8_t *buf, int len) {
 		sublen = buf[pos];
 		++pos;
 		if (pos + sublen > len) {
-			printf("Error: attempt to read past end of buffer (%d + %d > %d)\n", pos, sublen, len);
+			_warn("Error: attempt to read past end of buffer (%d + %d > %d)\n", pos, sublen, len);
 			return;
 		}
 		if (sublen == 0) {
-			printf("Early return due to 0 length\n");
+			_warn("Early return due to 0 length\n");
 			return;
 		}
 		type = buf[pos];
@@ -469,7 +487,7 @@ print128:
 					}
 				}
 				else {
-					printf("Wrong length (%d, must be divisible by 16)\n", sublen-1);
+					_warn("Wrong length (%d, must be divisible by 16)\n", sublen-1);
 				}
 				break;
 			case 0x09:
@@ -481,33 +499,30 @@ print128:
 				break;
 			case 0x0a:
 				printf(" (Tx Power Level)\n");
-				printf("           ");
 				if (sublen-1 == 1) {
 					cval = (char *)&buf[pos+1];
-					printf("%d dBm\n", *cval);
+					printf("           %d dBm\n", *cval);
 				} else {
-					printf("Wrong length (%d, should be 1)\n", sublen-1);
+					_warn("Wrong length (%d, should be 1)\n", sublen-1);
 				}
 				break;
 			case 0x12:
 				printf(" (Slave Connection Interval Range)\n");
-				printf("           ");
 				if (sublen-1 == 4) {
 					val = (buf[pos+2] << 8) | buf[pos+1];
-					printf("(%0.2f, ", val * 1.25);
+					printf("           (%0.2f, ", val * 1.25);
 					val = (buf[pos+4] << 8) | buf[pos+3];
 					printf("%0.2f) ms\n", val * 1.25);
 				}
 				else {
-					printf("Wrong length (%d, should be 4)\n", sublen-1);
+					_warn("Wrong length (%d, should be 4)\n", sublen-1);
 				}
 				break;
 			case 0x16:
 				printf(" (Service Data)\n");
-				printf("           ");
 				if (sublen-1 >= 2) {
 					val = (buf[pos+2] << 8) | buf[pos+1];
-					printf("UUID: %02x", val);
+					printf("           UUID: %02x", val);
 					if (sublen-1 > 2) {
 						printf(", Additional:");
 						for (i = 3; i < sublen; ++i)
@@ -516,15 +531,14 @@ print128:
 					printf("\n");
 				}
 				else {
-					printf("Wrong length (%d, should be >= 2)\n", sublen-1);
+					_warn("Wrong length (%d, should be >= 2)\n", sublen-1);
 				}
 				break;
 			case 0xff:
 				printf(" (Manufacturer Specific Data)\n");
-				printf("           ");
 				if (sublen - 1 >= 2) {
 					uint16_t company = (buf[pos+2] << 8) | buf[pos+1];
-					printf("Company: %s\n", bt_compidtostr(company));
+					printf("           Company: %s\n", bt_compidtostr(company));
 					printf("           ");
 					printf("Data:");
 					for (i = 3; i < sublen; ++i)
@@ -532,7 +546,7 @@ print128:
 					printf("\n");
 				}
 				else {
-					printf("Wrong length (%d, should be >= 2)\n", sublen-1);
+					_warn("Wrong length (%d, should be >= 2)\n", sublen-1);
 				}
 				break;
 			default:
