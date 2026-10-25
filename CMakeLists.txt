@@ -20,7 +20,7 @@
 #
 #top level cmake project for libbtbb lib + tools
 
-cmake_minimum_required(VERSION 2.8)
+cmake_minimum_required(VERSION 3.5...3.31)
 project(libbtbb_all)
 set(CMAKE_MODULE_PATH ${PROJECT_SOURCE_DIR}/cmake/modules)
 
@@ -32,6 +32,9 @@ set(ENABLE_PYTHON ON CACHE BOOL "Build python tools")
 
 # Comment the following out for releases.
 set(CMAKE_C_FLAGS "$ENV{CFLAGS}" CACHE STRING "C Flags")
+
+# Sets RELEASE_STRING and PACKAGE_VERSION for everything below.
+include(${PROJECT_SOURCE_DIR}/cmake/set_release.cmake)
 
 add_subdirectory(lib)
 include(CTest)

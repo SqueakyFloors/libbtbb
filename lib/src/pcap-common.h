@@ -56,7 +56,9 @@ inline uint64_t le64toh(uint64_t little_endian_64bits) { return little_endian_64
 #endif /* __GNUC__ */
 #endif /* htole16 */
 
+#ifndef MIN
 #define MIN(X, Y) (((X) < (Y)) ? (X) : (Y))
+#endif
 
 /* --------------------------------- BR/EDR ----------------------------- */
 

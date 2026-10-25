@@ -288,11 +288,13 @@ void lell_allocate_and_decode(const uint8_t *stream, uint16_t phys_channel, uint
 	(*pkt)->channel_k = (phys_channel-2402)/2;
 	(*pkt)->clk100ns = clk100ns;
 
+	/* the casts keep the shift out of a signed int, where it would
+	 * overflow into the sign bit */
 	(*pkt)->access_address = 0;
-	(*pkt)->access_address |= (*pkt)->symbols[0];
-	(*pkt)->access_address |= (*pkt)->symbols[1] << 8;
-	(*pkt)->access_address |= (*pkt)->symbols[2] << 16;
-	(*pkt)->access_address |= (*pkt)->symbols[3] << 24;
+	(*pkt)->access_address |= (uint32_t) (*pkt)->symbols[0];
+	(*pkt)->access_address |= (uint32_t) (*pkt)->symbols[1] << 8;
+	(*pkt)->access_address |= (uint32_t) (*pkt)->symbols[2] << 16;
+	(*pkt)->access_address |= (uint32_t) (*pkt)->symbols[3] << 24;
 
 	if (lell_packet_is_data(*pkt)) {
 		// data PDU
@@ -368,10 +370,10 @@ static void _dump_24(char *name, const uint8_t *buf, int offset) {
 }
 
 static void _dump_32(const char *name, const uint8_t *buf, int offset) {
-	uint32_t val = buf[offset+3] << 24 |
-				   buf[offset+2] << 16 |
-				   buf[offset+1] << 8 |
-				   buf[offset+0];
+	uint32_t val = (uint32_t) buf[offset+3] << 24 |
+				   (uint32_t) buf[offset+2] << 16 |
+				   (uint32_t) buf[offset+1] << 8 |
+				   (uint32_t) buf[offset+0];
 	printf("    %s%08x\n", name, val);
 }
 
@@ -437,8 +439,15 @@ static void _dump_scan_rsp_data(const uint8_t *buf, int len) {
 print16:
 				if ((sublen - 1) % 2 == 0) {
 					for (i = 0; i < sublen - 1; i += 2) {
-						uint16_t *uuid = (uint16_t *)&buf[pos+1+i];
-						printf("           %04x\n", *uuid);
+						/* assembled a byte at a time: the
+						 * buffer is not aligned for a
+						 * uint16_t, and the UUID is
+						 * little endian whatever the
+						 * host is */
+						uint16_t uuid = (uint16_t)
+							(buf[pos+2+i] << 8 |
+							 buf[pos+1+i]);
+						printf("           %04x\n", uuid);
 					}
 				}
 				break;
