@@ -24,7 +24,7 @@ jobs:
             os: macos-15
             cc: clang
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Configure
         # Warnings in lib/ are logged, not fatal: libbtbb issue #1 clears the
@@ -53,7 +53,7 @@ jobs:
     name: ubuntu-24.04 clang asan+ubsan
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Configure
         run: >
