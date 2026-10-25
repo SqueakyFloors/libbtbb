@@ -1,0 +1,125 @@
+name: CI
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+
+# A superseded run of the same branch is of no interest.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # Current Ubuntu LTS.
+          - name: ubuntu-24.04 gcc
+            os: ubuntu-24.04
+            cc: gcc
+          # Apple silicon runner.
+          - name: macos-15 clang
+            os: macos-15
+            cc: clang
+    steps:
+      - uses: actions/checkout@v5
+
+      # The Ubuntu runner image carries CMake 3.31, and the point is to build
+      # with current CMake 4. The macOS image already has 4.x.
+      - name: Install CMake 4
+        if: runner.os == 'Linux'
+        run: |
+          python3 -m venv "$RUNNER_TEMP/cmake"
+          "$RUNNER_TEMP/cmake/bin/pip" install --quiet "cmake==4.4.4"
+          echo "$RUNNER_TEMP/cmake/bin" >> "$GITHUB_PATH"
+
+      - name: Versions
+        run: |
+          cmake --version
+          ${CC:-cc} --version
+        env:
+          CC: ${{ matrix.cc }}
+
+      - name: Configure
+        # Warnings in lib/ are logged, not fatal: libbtbb issue #1 clears the
+        # current ones, and should add -Werror here.
+        # -DCMAKE_POLICY_VERSION_MINIMUM and -DENABLE_PYTHON=OFF work around
+        # the build failures in libbtbb issue #1; it should drop both.
+        run: >
+          cmake -S . -B build
+          -DCMAKE_BUILD_TYPE=RelWithDebInfo
+          -DCMAKE_POLICY_VERSION_MINIMUM=3.5
+          -DENABLE_PYTHON=OFF
+          -DCMAKE_C_FLAGS="-Wall -Wextra"
+        env:
+          CC: ${{ matrix.cc }}
+
+      - name: Build
+        run: cmake --build build -j
+
+      - name: Test
+        run: ctest --test-dir build --output-on-failure
+
+      - name: Install
+        run: cmake --install build --prefix "$RUNNER_TEMP/prefix"
+
+  sanitizers:
+    name: ubuntu-24.04 clang asan+ubsan
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Install CMake 4
+        run: |
+          python3 -m venv "$RUNNER_TEMP/cmake"
+          "$RUNNER_TEMP/cmake/bin/pip" install --quiet "cmake==4.4.4"
+          echo "$RUNNER_TEMP/cmake/bin" >> "$GITHUB_PATH"
+
+      - name: Versions
+        run: |
+          cmake --version
+          clang --version
+
+      - name: Configure
+        run: >
+          cmake -S . -B build
+          -DCMAKE_BUILD_TYPE=Debug
+          -DCMAKE_POLICY_VERSION_MINIMUM=3.5
+          -DENABLE_PYTHON=OFF
+          -DCMAKE_C_FLAGS="-Wall -Wextra -g -fno-omit-frame-pointer -fsanitize=address,undefined"
+        env:
+          CC: clang
+
+      - name: Build
+        run: cmake --build build -j
+
+      - name: Test
+        # UBSan findings are reported but do not fail the job yet: libbtbb
+        # issue #1 clears the current ones, and should add
+        # -fno-sanitize-recover=all above. ASan findings always fail.
+        env:
+          ASAN_OPTIONS: detect_leaks=1
+          UBSAN_OPTIONS: print_stacktrace=1
+        shell: bash
+        # -V so sanitizer output from passing tests is in the log too.
+        run: ctest --test-dir build -V 2>&1 | tee ctest.log
+
+      - name: Report sanitizer findings
+        # Also, and especially, when the tests failed.
+        if: always()
+        run: |
+          if grep -q "runtime error" ctest.log; then
+            grep "runtime error" ctest.log | sort -u | while read -r line; do
+              echo "::warning title=UBSan::$line"
+            done
+          else
+            echo "no UBSan findings"
+          fi
