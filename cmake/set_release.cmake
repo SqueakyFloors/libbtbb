@@ -13,17 +13,21 @@ set(LATEST_RELEASE "2020-12-R1")
 # Map a release string onto a PEP 440 public version with an optional local
 # version, which is what Python packaging tools accept:
 #
-#   2020-12-R1   -> 2020.12.1
-#   2018-06-R1   -> 2018.6.1        (leading zeros are not PEP 440 normal form)
-#   git-f0fe176  -> 2020.12.1+git.f0fe176
-#   git-f0fe176* -> 2020.12.1+git.f0fe176.dirty
+#   2020-12-R1       -> 2020.12.1
+#   2018-06-R1       -> 2018.6.1    (leading zeros are not PEP 440 normal form)
+#   2020-12-R1+fork1 -> 2020.12.1+fork1
+#   git-f0fe176      -> 2020.12.1+git.f0fe176
+#   git-f0fe176*     -> 2020.12.1+git.f0fe176.dirty
 #
 # A release string in no recognised form keeps the latest release as the
 # public version and carries the string itself in the local version, with
 # anything PEP 440 does not allow there replaced by a dot.
 function(btbb_pep440_version out release fallback_public)
-	if(release MATCHES "^([0-9]+)-0*([0-9]+)-[Rr]0*([0-9]+)$")
-		set(${out} "${CMAKE_MATCH_1}.${CMAKE_MATCH_2}.${CMAKE_MATCH_3}" PARENT_SCOPE)
+	if(release MATCHES "^([0-9]+)-0*([0-9]+)-[Rr]0*([0-9]+)(\\+[a-zA-Z0-9]+)?$")
+		string(TOLOWER "${CMAKE_MATCH_4}" local)
+		set(${out}
+		    "${CMAKE_MATCH_1}.${CMAKE_MATCH_2}.${CMAKE_MATCH_3}${local}"
+		    PARENT_SCOPE)
 		return()
 	endif()
 

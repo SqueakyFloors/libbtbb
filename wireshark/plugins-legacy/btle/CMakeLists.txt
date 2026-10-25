@@ -21,10 +21,9 @@
 # Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 #
 
-project(btle-wireshark-plugin C)
-
 cmake_minimum_required(VERSION 3.5...3.31)
-set(CMAKE_BACKWARDS_COMPATIBILITY 2.6)
+
+project(btle-wireshark-plugin C)
 set(CMAKE_MODULE_PATH ${CMAKE_SOURCE_DIR}/cmake)
 
 IF ( NOT CMAKE_INSTALL_LIBDIR )

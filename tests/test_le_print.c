@@ -58,14 +58,20 @@ static const uint8_t CONNECT_REQ_PACKET[MAX_LE_SYMBOLS] = {
 	0xde, 0xad, 0xbe,			/* CRC */
 };
 
-/* An ADV_IND whose advertising data is a list of two 16-bit service UUIDs. */
+/*
+ * An ADV_IND whose advertising data is a list of two 16-bit service UUIDs.
+ * The flags element in front of them is what puts the list on an odd offset,
+ * so that reading a UUID through a uint16_t pointer is a misaligned load the
+ * sanitizer reports.
+ */
 static const uint8_t ADV_IND_UUID16_PACKET[MAX_LE_SYMBOLS] = {
 	0xd6, 0xbe, 0x89, 0x8e,			/* advertising access address */
 	0x00,					/* ADV_IND, TxAdd public */
-	12,					/* 6 + 6 bytes */
+	15,					/* 6 + 9 bytes */
 	0x66, 0x55, 0x44, 0x33, 0x22, 0x11,	/* AdvA */
+	0x02, 0x01, 0x1a,			/* flags */
 	0x05, 0x03, 0x0d, 0x18, 0x0f, 0x18,	/* UUIDs 0x180d and 0x180f */
-	0xde, 0xad, 0xbe,			/* CRC */
+	0xde, 0xad, 0xbe,			/* CRC, unchecked */
 };
 
 /* Run lell_print() with stdout redirected into buf. */
@@ -148,8 +154,8 @@ static void test_uuid16_advertising_data(void)
 	} else {
 		CHECK_CONTAINS(out, "Type 03 (16-bit Service UUIDs)");
 		/* UUIDs are little endian on air, whatever the host is */
-		CHECK_CONTAINS(out, "180d");
-		CHECK_CONTAINS(out, "180f");
+		CHECK_CONTAINS(out, "\n           180d\n");
+		CHECK_CONTAINS(out, "\n           180f\n");
 	}
 
 	lell_packet_unref(pkt);

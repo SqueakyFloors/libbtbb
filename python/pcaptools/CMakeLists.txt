@@ -31,14 +31,18 @@ if(PIP_MISSING)
 	return()
 endif()
 
-# Build against the setuptools that is already installed where there is one,
-# so that the build needs no network. Where there is not, pip fetches the
-# build backend itself.
-execute_process(COMMAND ${Python3_EXECUTABLE} -c "import setuptools"
-                RESULT_VARIABLE SETUPTOOLS_MISSING
+# Build against the setuptools that is already installed when it is one that
+# can do the whole job on its own, so that the build needs no network:
+# the [project] table needs 61, and building a wheel without the separate
+# wheel package needs 70.1. Otherwise pip fetches a build backend itself.
+execute_process(COMMAND ${Python3_EXECUTABLE} -c
+                "import sys, setuptools; \
+                 v = setuptools.__version__.split('.'); \
+                 sys.exit(0 if (int(v[0]), int(v[1] if len(v) > 1 else 0)) >= (70, 1) else 1)"
+                RESULT_VARIABLE SETUPTOOLS_TOO_OLD
                 OUTPUT_QUIET ERROR_QUIET)
-if(SETUPTOOLS_MISSING)
-	message(STATUS "setuptools not found - pip will fetch the build backend")
+if(SETUPTOOLS_TOO_OLD)
+	message(STATUS "no setuptools 70.1 or newer - pip will fetch a build backend")
 	set(PIP_ISOLATION)
 else()
 	set(PIP_ISOLATION "--no-build-isolation")
@@ -59,7 +63,11 @@ foreach(source ${SOURCES})
 	list(APPEND DEPS ${PROJECT_DIR}/${source})
 endforeach()
 
+# The wheel directory is emptied first: its name carries the version, so a
+# reconfigure would otherwise leave a second wheel behind for the install step
+# to trip over.
 add_custom_command(OUTPUT ${OUTPUT}/timestamp
+                   COMMAND ${CMAKE_COMMAND} -E rm -rf ${OUTPUT}
                    COMMAND ${CMAKE_COMMAND} -E make_directory ${OUTPUT}
                    COMMAND ${Python3_EXECUTABLE} -m pip wheel
                            ${PIP_ISOLATION} --no-deps
@@ -70,18 +78,21 @@ add_custom_command(OUTPUT ${OUTPUT}/timestamp
 
 add_custom_target(pcapdump ALL DEPENDS ${OUTPUT}/timestamp)
 
-# BUILD_ROOT is how the packaging scripts stage an install under a temporary
-# root. CMAKE_INSTALL_PREFIX is read at install time so that
+# DESTDIR is how a packager stages an install under a temporary root, and
+# BUILD_ROOT is this project's own version of the same idea; both are honoured,
+# as is CMAKE_INSTALL_PREFIX, which is read at install time so that
 # `cmake --install --prefix` works.
 install(CODE "
 	file(GLOB wheels \"${OUTPUT}/pcapdump-*.whl\")
-	if(NOT wheels)
-		message(FATAL_ERROR \"no pcapdump wheel in ${OUTPUT} - build first\")
+	list(LENGTH wheels wheel_count)
+	if(NOT wheel_count EQUAL 1)
+		message(FATAL_ERROR
+			\"expected one pcapdump wheel in ${OUTPUT}, found \${wheel_count}\")
 	endif()
 	execute_process(
 		COMMAND \"${Python3_EXECUTABLE}\" -m pip install
 			--no-deps --upgrade
-			--prefix \"${BUILD_ROOT}\${CMAKE_INSTALL_PREFIX}\"
+			--prefix \"\$ENV{DESTDIR}${BUILD_ROOT}\${CMAKE_INSTALL_PREFIX}\"
 			\${wheels}
 		RESULT_VARIABLE pip_result)
 	if(NOT pip_result EQUAL 0)

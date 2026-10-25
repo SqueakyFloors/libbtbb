@@ -5,11 +5,13 @@ if(NOT DEFINED SET_RELEASE_CMAKE)
 	message(FATAL_ERROR "SET_RELEASE_CMAKE is not set")
 endif()
 
-# release string -> expected PACKAGE_VERSION
+# Release string -> expected PACKAGE_VERSION. The expectations spell out the
+# version LATEST_RELEASE maps to, so moving that release moves these too.
 set(cases
 	"2020-12-R1|2020.12.1"
 	"2018-06-R1|2018.6.1"
 	"2015-09-R2|2015.9.2"
+	"2020-12-R1+fork1|2020.12.1+fork1"
 	"git-f0fe176|2020.12.1+git.f0fe176"
 	"git-f0fe176*|2020.12.1+git.f0fe176.dirty"
 	"git-F0FE176|2020.12.1+git.f0fe176"
