@@ -23,10 +23,8 @@ if(BUILD_TESTING)
     # source itself rather than linking the library.
     add_executable(test_internal test_internal.c)
     target_include_directories(test_internal PRIVATE ${PROJECT_SOURCE_DIR}/lib/src)
-    # VERSION and RELEASE are macros lib/src/CMakeLists.txt defines for that
-    # source; what they say does not matter here.
-    target_compile_definitions(test_internal PRIVATE
-                               VERSION="test" RELEASE="test")
+    # the library source is built the way the library builds it
+    target_compile_options(test_internal PRIVATE -std=gnu90)
     add_test(NAME internal COMMAND test_internal)
     set_tests_properties(internal PROPERTIES TIMEOUT 30)
 
