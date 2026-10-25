@@ -19,6 +19,15 @@ if(BUILD_TESTING)
     add_test(NAME le_print COMMAND test_le_print)
     set_tests_properties(le_print PROPERTIES TIMEOUT 30)
 
+    # The functions this one covers are internal, so it compiles the library
+    # source itself rather than linking the library.
+    add_executable(test_internal test_internal.c)
+    target_include_directories(test_internal PRIVATE ${PROJECT_SOURCE_DIR}/lib/src)
+    # the library source is built the way the library builds it
+    target_compile_options(test_internal PRIVATE -std=gnu90)
+    add_test(NAME internal COMMAND test_internal)
+    set_tests_properties(internal PROPERTIES TIMEOUT 30)
+
     add_test(NAME release_version COMMAND ${CMAKE_COMMAND}
              -DSET_RELEASE_CMAKE=${PROJECT_SOURCE_DIR}/cmake/set_release.cmake
              -P ${CMAKE_CURRENT_SOURCE_DIR}/test_release_version.cmake)
