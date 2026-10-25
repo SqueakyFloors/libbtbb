@@ -36,6 +36,9 @@ const char *bt_compidtostr(uint16_t compid);
 
 /* Report a problem with a packet. These go to stderr so that a dump on
  * stdout holds nothing but the dump. */
+#ifdef __GNUC__
+__attribute__((format(printf, 1, 2)))
+#endif
 static void _warn(const char *fmt, ...)
 {
 	va_list ap;
