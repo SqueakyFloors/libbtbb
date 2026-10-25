@@ -1,6 +1,9 @@
 /*
- * Smoke test: build against the installed-style public API and decode one
- * known packet of each kind.
+ * Smoke test: link the library and decode one known packet of each kind.
+ *
+ * It works through the public API in btbb.h, except that it reads a couple of
+ * packet fields the public API has no getter for straight out of the
+ * internal header.
  *
  * This file is part of libbtbb
  *
