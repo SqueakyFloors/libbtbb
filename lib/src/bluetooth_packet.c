@@ -27,8 +27,6 @@
 #include "uthash.h"
 #include "sw_check_tables.h"
 
-#define MIN(X, Y) (((X) < (Y)) ? (X) : (Y))
-
 /* Maximum number of AC errors supported by library. Caller may
  * specify any value <= AC_ERROR_LIMIT in btbb_init(). */
 #define AC_ERROR_LIMIT 5
@@ -887,7 +885,8 @@ static int decode_payload_header(char *stream, int clock, int header_bytes, int 
 			max_length = 343;
 			break;
 	}
-	pkt->payload_length = MIN(pkt->payload_length, max_length);
+	if (pkt->payload_length > max_length)
+		pkt->payload_length = max_length;
 	pkt->payload_llid = air_to_host8(&pkt->payload_header[0], 2);
 	pkt->payload_flow = air_to_host8(&pkt->payload_header[2], 1);
 	pkt->payload_header_length = header_bytes;

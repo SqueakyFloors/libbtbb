@@ -1,3 +1,13 @@
+libbtbb (2020-12-R1+fork1) unstable; urgency=low
+  * Builds and installs out of the box on current tools: the CMake minimum is
+    now 3.5, so CMake 4 accepts the project, and the Python tools get a PEP 440
+    version and install from a wheel instead of the removed
+    "setup.py install". Building them no longer has to be turned off.
+  * Fixed undefined behaviour in the LE decoder and packet dump, and an
+    unaligned, host-endian read of 16-bit service UUIDs in advertising data.
+
+ -- Russell Wagner <152923636+SqueakyFloors@users.noreply.github.com>  25 Oct 2026 00:30:00 -0700
+
 libbtbb (2020-12-R1) unstable; urgency=low
   * Python 3 support
   * Minor bugfixes

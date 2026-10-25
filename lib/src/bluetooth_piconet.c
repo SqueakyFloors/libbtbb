@@ -650,7 +650,6 @@ int btbb_uap_from_header(btbb_packet *pkt, btbb_piconet *pn)
 	uint8_t UAP;
 	int count, crc_chk, first_clock = 0;
 
-	int starting = 0;
 	int remaining = 0;
 	uint32_t clkn = pkt->clkn;
 
@@ -678,7 +677,6 @@ int btbb_uap_from_header(btbb_packet *pkt, btbb_piconet *pn)
 			|| !btbb_piconet_get_flag(pn, BTBB_GOT_FIRST_PACKET)) {
 			/* clock value for the current packet assuming count was the clock of the first packet */
 			int clock = (count + clkn - pn->first_pkt_time) % 64;
-			starting++;
 			UAP = try_clock(clock, pkt);
 			crc_chk = -1;
 
@@ -724,8 +722,6 @@ int btbb_uap_from_header(btbb_packet *pkt, btbb_piconet *pn)
 	}
 
 	btbb_piconet_set_flag(pn, BTBB_GOT_FIRST_PACKET, 1);
-
-	//printf("reduced from %d to %d CLK1-6 candidates\n", starting, remaining);
 
 	if (remaining == 1) {
 		pn->clk_offset = (first_clock - (pn->first_pkt_time & 0x3f)) & 0x3f;

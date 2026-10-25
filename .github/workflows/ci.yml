@@ -49,16 +49,13 @@ jobs:
           CC: ${{ matrix.cc }}
 
       - name: Configure
-        # Warnings in lib/ are logged, not fatal: libbtbb issue #1 clears the
-        # current ones, and should add -Werror here.
-        # -DCMAKE_POLICY_VERSION_MINIMUM and -DENABLE_PYTHON=OFF work around
-        # the build failures in libbtbb issue #1; it should drop both.
+        # The vendored uthash.h falls through between switch cases on purpose,
+        # which gcc reports: that one warning stays visible but not fatal.
         run: >
           cmake -S . -B build
           -DCMAKE_BUILD_TYPE=RelWithDebInfo
-          -DCMAKE_POLICY_VERSION_MINIMUM=3.5
-          -DENABLE_PYTHON=OFF
-          -DCMAKE_C_FLAGS="-Wall -Wextra"
+          -DENABLE_PYTHON=ON
+          -DCMAKE_C_FLAGS="-Wall -Wextra -Werror -Wno-error=implicit-fallthrough"
         env:
           CC: ${{ matrix.cc }}
 
@@ -92,9 +89,8 @@ jobs:
         run: >
           cmake -S . -B build
           -DCMAKE_BUILD_TYPE=Debug
-          -DCMAKE_POLICY_VERSION_MINIMUM=3.5
           -DENABLE_PYTHON=OFF
-          -DCMAKE_C_FLAGS="-Wall -Wextra -g -fno-omit-frame-pointer -fsanitize=address,undefined"
+          -DCMAKE_C_FLAGS="-Wall -Wextra -Werror -Wno-error=implicit-fallthrough -g -fno-omit-frame-pointer -fsanitize=address,undefined -fno-sanitize-recover=all"
         env:
           CC: clang
 
@@ -102,9 +98,6 @@ jobs:
         run: cmake --build build -j
 
       - name: Test
-        # UBSan findings are reported but do not fail the job yet: libbtbb
-        # issue #1 clears the current ones, and should add
-        # -fno-sanitize-recover=all above. ASan findings always fail.
         env:
           ASAN_OPTIONS: detect_leaks=1
           UBSAN_OPTIONS: print_stacktrace=1
