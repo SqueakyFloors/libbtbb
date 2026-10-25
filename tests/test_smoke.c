@@ -42,18 +42,27 @@ static int failures = 0;
 
 /*
  * One ADV_IND, unwhitened, as the decoder receives it: access address,
- * header, 6-byte advertiser address, 9 bytes of advertising data (flags and
- * a complete local name) and a CRC. The buffer is MAX_LE_SYMBOLS long
- * because lell_allocate_and_decode() copies that much.
+ * header, 6-byte advertiser address, 31 bytes of advertising data (flags and
+ * a complete local name) and a CRC placeholder, which nothing checks. The
+ * buffer is MAX_LE_SYMBOLS long because lell_allocate_and_decode() copies
+ * that much.
+ *
+ * The payload is deliberately longer than 31 bytes in total, so that a
+ * decoder reading the advertising length as five bits rather than six gets it
+ * wrong.
  */
 static const uint8_t ADV_IND_PACKET[MAX_LE_SYMBOLS] = {
 	0xd6, 0xbe, 0x89, 0x8e,			/* access address 0x8e89bed6 */
 	0x40,					/* ADV_IND, TxAdd random */
-	15,					/* 6 + 9 bytes */
+	37,					/* 6 + 31 bytes */
 	0x66, 0x55, 0x44, 0x33, 0x22, 0x11,	/* AdvA 11:22:33:44:55:66 */
 	0x02, 0x01, 0x06,			/* flags */
-	0x05, 0x09, 'b', 't', 'b', 'b',		/* complete local name */
-	0xde, 0xad, 0xbe,			/* CRC */
+	0x1b, 0x09,				/* complete local name */
+	'a', ' ', 'n', 'a', 'm', 'e', ' ', 'l',
+	'o', 'n', 'g', ' ', 'e', 'n', 'o', 'u',
+	'g', 'h', ' ', 't', 'o', ' ', 'p', 'a',
+	's', 's', ' ', '3', '1',
+	0xde, 0xad, 0xbe,			/* CRC, unchecked */
 };
 
 /*
@@ -84,7 +93,7 @@ static void test_le_advertising_packet(void)
 	CHECK(lell_get_channel_index(pkt) == 37);
 	CHECK(lell_get_channel_k(pkt) == 0);
 	CHECK(strcmp(lell_get_adv_type_str(pkt), "ADV_IND") == 0);
-	CHECK(pkt->length == 15);
+	CHECK(pkt->length == 37);
 	CHECK(pkt->adv_tx_add == 1);
 	CHECK(pkt->adv_rx_add == 0);
 	CHECK(pkt->clk100ns == 0x12345678);
@@ -95,8 +104,8 @@ static void test_le_advertising_packet(void)
 	lell_packet_unref(pkt);
 }
 
-/* How far into the symbol stream below the sync word starts. */
 #define SEARCH_LENGTH 24
+/* how far into the symbol stream below the sync word starts */
 #define PACKET_OFFSET 10
 
 /* The sync word a LAP generates, and the LAP a sync word decodes back to. */
@@ -126,6 +135,18 @@ static void test_bredr_syncword(void)
 	if (pkt != NULL) {
 		CHECK(btbb_packet_get_lap(pkt) == KNOWN_SYNCWORDS[0].lap);
 		CHECK(btbb_packet_get_ac_errors(pkt) == 0);
+		btbb_packet_unref(pkt);
+		pkt = NULL;
+	}
+
+	/* one wrong bit is corrected, and counted */
+	stream[PACKET_OFFSET + 20] ^= 1;
+	offset = btbb_find_ac(stream, SEARCH_LENGTH, LAP_ANY, 2, &pkt);
+	CHECK(offset == PACKET_OFFSET);
+	CHECK(pkt != NULL);
+	if (pkt != NULL) {
+		CHECK(btbb_packet_get_lap(pkt) == KNOWN_SYNCWORDS[0].lap);
+		CHECK(btbb_packet_get_ac_errors(pkt) == 1);
 		btbb_packet_unref(pkt);
 	}
 }

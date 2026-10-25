@@ -2,7 +2,13 @@ name: CI
 
 on:
   push:
+    branches: [master]
   pull_request:
+
+# A superseded run of the same branch is of no interest.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 permissions:
   contents: read
@@ -107,6 +113,8 @@ jobs:
         run: ctest --test-dir build -V 2>&1 | tee ctest.log
 
       - name: Report sanitizer findings
+        # Also, and especially, when the tests failed.
+        if: always()
         run: |
           if grep -q "runtime error" ctest.log; then
             grep "runtime error" ctest.log | sort -u | while read -r line; do
