@@ -25,6 +25,7 @@
 #include "uthash.h"
 #include <stdlib.h>
 #include <stdio.h>
+#include <string.h>
 
 int perm_table_initialized = 0;
 char perm_table[0x20][0x20][0x200];
@@ -379,12 +380,11 @@ static void gen_hops(btbb_piconet *pn)
 	}
 }
 
-/* Function to calculate piconet hopping patterns and add to hash map */
-void gen_hop_pattern(btbb_piconet *pn)
+/* Fill a sequence buffer this piconet already owns. */
+static void fill_hop_pattern(btbb_piconet *pn, char *sequence)
 {
 	printf("\nCalculating complete hopping sequence.\n");
-	/* this holds the entire hopping sequence */
-	pn->sequence = (char*) malloc(SEQUENCE_LENGTH);
+	pn->sequence = sequence;
 
 	precalc(pn);
 	address_precalc(((pn->UAP<<24) | pn->LAP) & 0xfffffff, pn);
@@ -393,9 +393,23 @@ void gen_hop_pattern(btbb_piconet *pn)
 	printf("Hopping sequence calculated.\n");
 }
 
+/* Function to calculate piconet hopping patterns and add to hash map */
+void gen_hop_pattern(btbb_piconet *pn)
+{
+	/* this holds the entire hopping sequence */
+	fill_hop_pattern(pn, (char*) malloc(SEQUENCE_LENGTH));
+}
+
 /* Container for hopping pattern */
+/*
+ * Container for hopping pattern, one per address. A sequence is 128 MB, so
+ * rather than keep one per map ever seen, the entry records what it was built
+ * from and is rebuilt in place when that no longer describes the piconet.
+ */
 typedef struct {
-    uint64_t key; /* afh flag + address */
+    uint32_t address;	/* the key */
+    uint8_t afh;	/* the sequence is adapted to afh_map */
+    uint8_t afh_map[10];
     char *sequence;
     UT_hash_handle hh;
 } hopping_struct;
@@ -406,22 +420,35 @@ static hopping_struct *hopping_map = NULL;
 void get_hop_pattern(btbb_piconet *pn)
 {
 	hopping_struct *s;
-	uint64_t key;
+	uint32_t address;
+	uint8_t afh;
 
-	/* Two stages to avoid "left shift count >= width of type" warning */
-	key = btbb_piconet_get_flag(pn, BTBB_IS_AFH);
-	key = (key<<39) | ((uint64_t)pn->used_channels<<32) | ((uint32_t)pn->UAP<<24) | pn->LAP;
-	/* The whole key: the AFH flag and the used-channel count are above the
-	 * address, so a shorter one would hand out a basic sequence for an
-	 * adaptive piconet with the same address. */
-	HASH_FIND(hh, hopping_map, &key, sizeof(key), s);
+	/* The map may have been written through btbb_piconet_get_afh_map(),
+	 * which leaves the tables describing an older one. */
+	precalc(pn);
+	address = (((uint32_t)pn->UAP << 24) | pn->LAP) & 0xfffffff;
+	/* Below Nmin the sequence is the basic one, whatever the map says. */
+	afh = btbb_piconet_get_flag(pn, BTBB_IS_AFH) &&
+		pn->used_channels >= AFH_MIN_USED_CHANNELS;
+
+	HASH_FIND(hh, hopping_map, &address, sizeof(address), s);
 
 	if (s == NULL) {
 		gen_hop_pattern(pn);
 		s = malloc(sizeof(hopping_struct));
-		s->key = key;
+		s->address = address;
+		s->afh = afh;
+		memcpy(s->afh_map, pn->afh_map, sizeof(s->afh_map));
 		s->sequence = pn->sequence;
-		HASH_ADD(hh, hopping_map, key, sizeof(key), s);
+		HASH_ADD(hh, hopping_map, address, sizeof(address), s);
+	} else if (s->afh != afh ||
+		   (afh && memcmp(s->afh_map, pn->afh_map,
+				  sizeof(s->afh_map)) != 0)) {
+		/* Two maps marking the same channel count used still give
+		 * different sequences, so the map itself decides this. */
+		s->afh = afh;
+		memcpy(s->afh_map, pn->afh_map, sizeof(s->afh_map));
+		fill_hop_pattern(pn, s->sequence);
 	} else {
 		printf("\nFound hopping sequence in cache.\n");
 		pn->sequence = s->sequence;

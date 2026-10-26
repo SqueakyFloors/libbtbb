@@ -291,40 +291,75 @@ static void test_set_afh_map_rebuilds_the_table(void)
 	btbb_piconet_unref(pn);
 }
 
+/* hop() for a clock value: the sequence is indexed by CLK27-1. */
+static void check_sequence(btbb_piconet *pn, int afh)
+{
+	size_t i;
+
+	for (i = 0; i < NUM_VECTORS; i++) {
+		uint32_t index = HOP_VECTORS[i].clock >> 1;
+		if (index >= SEQUENCE_LENGTH)
+			continue;	/* past CLK27 */
+		if (afh)
+			CHECK_EQ(HOP_VECTORS[i].afh,
+				 2402 + hop((int) index, pn));
+		else
+			CHECK_EQ(HOP_VECTORS[i].basic,
+				 2402 + hop((int) index, pn));
+	}
+}
+
 /*
  * The generated sequence is what the host actually predicts from, so it has to
- * agree with single_hop(), and an adaptive piconet must not be handed the
- * basic sequence cached for the same address. The sequence is indexed by
- * CLK27-1, so a clock value indexes it shifted down by one.
+ * agree with single_hop(), whatever map the piconet was last seen with: an
+ * adaptive piconet must not be handed the sequence cached for the same address
+ * and another map. One sequence is 128 MB, so the cache keeps one per address
+ * and rebuilds it in place rather than keeping one per map.
  */
 static void test_generated_sequence_matches_single_hop(void)
 {
 	btbb_piconet *pn = btbb_piconet_new();
 	uint8_t map[10];
-	char *basic_sequence;
+	char *sequence;
 	size_t i;
 
 	btbb_init_piconet(pn, TEST_LAP);
 	btbb_piconet_set_uap(pn, TEST_UAP);
 	get_hop_pattern(pn);
-	basic_sequence = pn->sequence;
-	for (i = 0; i < NUM_VECTORS; i++) {
-		uint32_t index = HOP_VECTORS[i].clock >> 1;
-		if (index < SEQUENCE_LENGTH)
-			CHECK_EQ(HOP_VECTORS[i].basic,
-				 2402 + hop((int) index, pn));
-	}
+	sequence = pn->sequence;
+	check_sequence(pn, 0);
 
 	btbb_piconet_set_flag(pn, BTBB_IS_AFH, 1);
 	memcpy(map, AFH_MAP, sizeof(map));
-	btbb_piconet_set_afh_map(pn, map);	/* generates the AFH sequence */
-	CHECK(pn->sequence != basic_sequence);
+	btbb_piconet_set_afh_map(pn, map);
+	CHECK(pn->sequence == sequence);
+	check_sequence(pn, 1);
+
+	/*
+	 * Another map marking the same number of channels used, so only the
+	 * map itself tells the two sequences apart: channel 21 instead of 22.
+	 */
+	map[2] &= (uint8_t) ~0x40;
+	map[2] |= 0x20;
+	btbb_piconet_set_afh_map(pn, map);
+	CHECK_EQ(34, pn->used_channels);
+	CHECK(pn->sequence == sequence);
 	for (i = 0; i < NUM_VECTORS; i++) {
 		uint32_t index = HOP_VECTORS[i].clock >> 1;
 		if (index < SEQUENCE_LENGTH)
-			CHECK_EQ(HOP_VECTORS[i].afh,
+			CHECK_EQ(2402 + single_hop((int) HOP_VECTORS[i].clock, pn),
 				 2402 + hop((int) index, pn));
 	}
+
+	/* And back to the first map, and to basic hopping. */
+	memcpy(map, AFH_MAP, sizeof(map));
+	btbb_piconet_set_afh_map(pn, map);
+	CHECK(pn->sequence == sequence);
+	check_sequence(pn, 1);
+	btbb_piconet_set_flag(pn, BTBB_IS_AFH, 0);
+	get_hop_pattern(pn);
+	CHECK(pn->sequence == sequence);
+	check_sequence(pn, 0);
 	btbb_piconet_unref(pn);
 }
 
