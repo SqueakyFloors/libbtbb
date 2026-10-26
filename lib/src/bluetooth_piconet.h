@@ -29,6 +29,10 @@
 /* number of channels in use */
 #define BT_NUM_CHANNELS 79
 
+/* Nmin, the fewest used channels AFH is defined for
+ * (Bluetooth Core v5.1 | Vol 2, Part B, Section 2.3.1). */
+#define AFH_MIN_USED_CHANNELS 20
+
 struct btbb_piconet {
 
 	uint32_t refcount;
@@ -41,7 +45,8 @@ struct btbb_piconet {
 	/* AFH channel map - either read or derived from observed packets */
 	uint8_t afh_map[10];
 
-	/* Number of used channel derived from AFH channel map */
+	/* Number of entries in afh_bank, i.e. channels 0-78 the map marks
+	 * used.  Maintained by precalc(), which is the only writer. */
 	uint8_t used_channels;
 
 	/* lower address part (of master's BD_ADDR) */
@@ -63,8 +68,14 @@ struct btbb_piconet {
 	 * precalculated part of a) */
 	int a1, c1, d1;
 
-	/* frequency register bank */
+	/* Basic mapping table (Vol 2, Part B, Section 2.6.2): even channels in
+	 * ascending order followed by odd channels.  AFH consults it first, so
+	 * it always describes the full basic sequence. */
 	int bank[BT_NUM_CHANNELS];
+
+	/* AFH mapping table (2.6.3.1): the basic table with every unused
+	 * channel removed, holding used_channels entries. */
+	int afh_bank[BT_NUM_CHANNELS];
 
 	/* this holds the entire hopping sequence */
 	char *sequence;

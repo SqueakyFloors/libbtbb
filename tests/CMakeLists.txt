@@ -28,6 +28,17 @@ if(BUILD_TESTING)
     add_test(NAME internal COMMAND test_internal)
     set_tests_properties(internal PROPERTIES TIMEOUT 30)
 
+    add_executable(test_hop test_hop.c)
+    target_include_directories(test_hop PRIVATE ${PROJECT_SOURCE_DIR}/lib/src)
+    if(BUILD_SHARED_LIB)
+        target_link_libraries(test_hop btbb)
+    else()
+        target_link_libraries(test_hop btbb-static)
+    endif()
+    add_test(NAME hop COMMAND test_hop)
+    # Generating a whole hopping sequence is 2^27 hops, twice over.
+    set_tests_properties(hop PROPERTIES TIMEOUT 300)
+
     add_test(NAME release_version COMMAND ${CMAKE_COMMAND}
              -DSET_RELEASE_CMAKE=${PROJECT_SOURCE_DIR}/cmake/set_release.cmake
              -P ${CMAKE_CURRENT_SOURCE_DIR}/test_release_version.cmake)

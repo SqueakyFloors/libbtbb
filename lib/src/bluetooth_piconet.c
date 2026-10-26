@@ -25,6 +25,7 @@
 #include "uthash.h"
 #include <stdlib.h>
 #include <stdio.h>
+#include <string.h>
 
 int perm_table_initialized = 0;
 char perm_table[0x20][0x20][0x200];
@@ -125,12 +126,11 @@ void btbb_piconet_set_clk_offset(btbb_piconet *pn, int clk_offset)
 
 void btbb_piconet_set_afh_map(btbb_piconet *pn, uint8_t *afh_map) {
 	int i;
-	pn->used_channels = 0;
-	// DGS: Unroll this?
-	for(i=0; i<10; i++) {
+	for(i=0; i<10; i++)
 		pn->afh_map[i] = afh_map[i];
-		pn->used_channels += count_bits(pn->afh_map[i]);
-	}
+	/* Rebuild the mapping tables and the used-channel count from the new
+	 * map, so they describe it before anything hops on it. */
+	precalc(pn);
 	if(btbb_piconet_get_flag(pn, BTBB_UAP_VALID))
 		get_hop_pattern(pn);
 }
@@ -141,9 +141,12 @@ uint8_t *btbb_piconet_get_afh_map(btbb_piconet *pn) {
 
 uint8_t btbb_piconet_set_channel_seen(btbb_piconet *pn, uint8_t channel)
 {
-	if(!(pn->afh_map[channel/8] & 0x1 << (channel % 8))) {
+	if(channel < BT_NUM_CHANNELS &&
+	   !(pn->afh_map[channel/8] & 0x1 << (channel % 8))) {
 		pn->afh_map[channel/8] |= 0x1 << (channel % 8);
-		pn->used_channels++;
+		/* The AFH mapping table has to follow the map it is built
+		 * from, or hop selection would index past its entries. */
+		precalc(pn);
 		return 1;
 	}
 	return 0;
@@ -151,9 +154,10 @@ uint8_t btbb_piconet_set_channel_seen(btbb_piconet *pn, uint8_t channel)
 
 uint8_t btbb_piconet_clear_channel_seen(btbb_piconet *pn, uint8_t channel)
 {
-	if((pn->afh_map[channel/8] & 0x1 << (channel % 8))) {
+	if(channel < BT_NUM_CHANNELS &&
+	   (pn->afh_map[channel/8] & 0x1 << (channel % 8))) {
 		pn->afh_map[channel/8] &= ~(0x1 << (channel % 8));
-		pn->used_channels--;
+		precalc(pn);
 		return 1;
 	}
 	return 0;
@@ -175,22 +179,20 @@ void precalc(btbb_piconet *pn)
 	int chan;
 
 	/* populate frequency register bank*/
-	for (i = 0; i < BT_NUM_CHANNELS; i++) {
-
-		/* AFH is used, hopping sequence contains only used channels */
-		if(btbb_piconet_get_flag(pn, BTBB_IS_AFH)) {
-			chan = (i * 2) % BT_NUM_CHANNELS;
-			if(btbb_piconet_get_channel_seen(pn, chan))
-				pn->bank[j++] = chan;
-		}
-
-		/* all channels are used */
-		else {
-			pn->bank[i] = ((i * 2) % BT_NUM_CHANNELS);
-		}
-	}
+	for (i = 0; i < BT_NUM_CHANNELS; i++)
+		pn->bank[i] = ((i * 2) % BT_NUM_CHANNELS);
 	/* actual frequency is 2402 + pn->bank[i] MHz */
 
+	/* The AFH mapping table is built by walking the basic table, so it
+	 * keeps that channel order, and only the entries actually placed are
+	 * counted, so a stray reserved bit 79 in the map cannot index past
+	 * the used channels. */
+	for (i = 0; i < BT_NUM_CHANNELS; i++) {
+		chan = pn->bank[i];
+		if(btbb_piconet_get_channel_seen(pn, chan))
+			pn->afh_bank[j++] = chan;
+	}
+	pn->used_channels = j;
 }
 
 /* do precalculation that requires the address */
@@ -315,7 +317,13 @@ static void gen_hops(btbb_piconet *pn)
 	/* e is already defined */
 	int a, c, d, x;
 	uint32_t base_f, f, f_dash;
-	int h, i, j, k, c_flipped, perm_in, perm_out;
+	int h, i, j, k, c_flipped, perm_in, perm_out, chan;
+
+	int n_used = pn->used_channels;
+	/* Fewer used channels than AFH is defined for (or an unset map) falls
+	 * back to basic hopping, which also avoids dividing by zero. */
+	int afh = btbb_piconet_get_flag(pn, BTBB_IS_AFH) &&
+			n_used >= AFH_MIN_USED_CHANNELS;
 
 	/* sequence index = clock >> 1 */
 	/* (hops only happen at every other clock value) */
@@ -338,35 +346,45 @@ static void gen_hops(btbb_piconet *pn)
 
 						/* y1 (clock bit 1) = 0, y2 = 0 */
 						perm_out = fast_perm(perm_in, c, d);
-						if (btbb_piconet_get_flag(pn, BTBB_IS_AFH))
-							pn->sequence[index] = pn->bank[(perm_out + pn->e + f_dash) % pn->used_channels];
-						else
-							pn->sequence[index] = pn->bank[(perm_out + pn->e + f) % BT_NUM_CHANNELS];
+						chan = pn->bank[(perm_out + pn->e + f) % BT_NUM_CHANNELS];
+						/* AFH re-mapping (2.6.3.1): a used basic
+						 * channel is kept unchanged; an unused one is
+						 * replaced by entry k' of the AFH mapping
+						 * table. */
+						if (afh && !btbb_piconet_get_channel_seen(pn, chan))
+							chan = pn->afh_bank[(perm_out + pn->e + f_dash) % n_used];
+						pn->sequence[index] = chan;
 
-						/* y1 (clock bit 1) = 1, y2 = 32 */
-						perm_out = fast_perm(perm_in, c_flipped, d);
-						if (btbb_piconet_get_flag(pn, BTBB_IS_AFH))
-							pn->sequence[index + 1] = pn->bank[(perm_out + pn->e + f_dash + 32) % pn->used_channels];
-						else
+						if (afh) {
+							/* AFH same channel mechanism (2.6.1): the
+							 * peripheral slot reuses the channel of the
+							 * central slot before it, i.e. CLK1 = 0. */
+							pn->sequence[index + 1] = chan;
+						} else {
+							/* y1 (clock bit 1) = 1, y2 = 32 */
+							perm_out = fast_perm(perm_in, c_flipped, d);
 							pn->sequence[index + 1] = pn->bank[(perm_out + pn->e + f + 32) % BT_NUM_CHANNELS];
+						}
 
 						index += 2;
 					}
 					base_f += 16;
 					f = base_f % BT_NUM_CHANNELS;
-					f_dash = f % pn->used_channels;
+					/* F' = 16 * CLK27-7 mod N, taken from base_f and
+					 * not from F, which is already reduced mod 79. */
+					if (afh)
+						f_dash = base_f % n_used;
 				}
 			}
 		}
 	}
 }
 
-/* Function to calculate piconet hopping patterns and add to hash map */
-void gen_hop_pattern(btbb_piconet *pn)
+/* Fill a sequence buffer this piconet already owns. */
+static void fill_hop_pattern(btbb_piconet *pn, char *sequence)
 {
 	printf("\nCalculating complete hopping sequence.\n");
-	/* this holds the entire hopping sequence */
-	pn->sequence = (char*) malloc(SEQUENCE_LENGTH);
+	pn->sequence = sequence;
 
 	precalc(pn);
 	address_precalc(((pn->UAP<<24) | pn->LAP) & 0xfffffff, pn);
@@ -375,9 +393,23 @@ void gen_hop_pattern(btbb_piconet *pn)
 	printf("Hopping sequence calculated.\n");
 }
 
+/* Function to calculate piconet hopping patterns and add to hash map */
+void gen_hop_pattern(btbb_piconet *pn)
+{
+	/* this holds the entire hopping sequence */
+	fill_hop_pattern(pn, (char*) malloc(SEQUENCE_LENGTH));
+}
+
 /* Container for hopping pattern */
+/*
+ * Container for hopping pattern, one per address. A sequence is 128 MB, so
+ * rather than keep one per map ever seen, the entry records what it was built
+ * from and is rebuilt in place when that no longer describes the piconet.
+ */
 typedef struct {
-    uint64_t key; /* afh flag + address */
+    uint32_t address;	/* the key */
+    uint8_t afh;	/* the sequence is adapted to afh_map */
+    uint8_t afh_map[10];
     char *sequence;
     UT_hash_handle hh;
 } hopping_struct;
@@ -388,19 +420,35 @@ static hopping_struct *hopping_map = NULL;
 void get_hop_pattern(btbb_piconet *pn)
 {
 	hopping_struct *s;
-	uint64_t key;
+	uint32_t address;
+	uint8_t afh;
 
-	/* Two stages to avoid "left shift count >= width of type" warning */
-	key = btbb_piconet_get_flag(pn, BTBB_IS_AFH);
-	key = (key<<39) | ((uint64_t)pn->used_channels<<32) | ((uint32_t)pn->UAP<<24) | pn->LAP;
-	HASH_FIND(hh, hopping_map, &key, 4, s);
+	/* The map may have been written through btbb_piconet_get_afh_map(),
+	 * which leaves the tables describing an older one. */
+	precalc(pn);
+	address = (((uint32_t)pn->UAP << 24) | pn->LAP) & 0xfffffff;
+	/* Below Nmin the sequence is the basic one, whatever the map says. */
+	afh = btbb_piconet_get_flag(pn, BTBB_IS_AFH) &&
+		pn->used_channels >= AFH_MIN_USED_CHANNELS;
+
+	HASH_FIND(hh, hopping_map, &address, sizeof(address), s);
 
 	if (s == NULL) {
 		gen_hop_pattern(pn);
 		s = malloc(sizeof(hopping_struct));
-		s->key = key;
+		s->address = address;
+		s->afh = afh;
+		memcpy(s->afh_map, pn->afh_map, sizeof(s->afh_map));
 		s->sequence = pn->sequence;
-		HASH_ADD(hh, hopping_map, key, 4, s);
+		HASH_ADD(hh, hopping_map, address, sizeof(address), s);
+	} else if (s->afh != afh ||
+		   (afh && memcmp(s->afh_map, pn->afh_map,
+				  sizeof(s->afh_map)) != 0)) {
+		/* Two maps marking the same channel count used still give
+		 * different sequences, so the map itself decides this. */
+		s->afh = afh;
+		memcpy(s->afh_map, pn->afh_map, sizeof(s->afh_map));
+		fill_hop_pattern(pn, s->sequence);
 	} else {
 		printf("\nFound hopping sequence in cache.\n");
 		pn->sequence = s->sequence;
@@ -414,6 +462,16 @@ char single_hop(int clock, btbb_piconet *pn)
 	int a, c, d, x, y1, y2, perm, next_channel;
 	uint32_t base_f, f, f_dash;
 
+	int n_used = pn->used_channels;
+	/* Fewer used channels than AFH is defined for (or an unset map) falls
+	 * back to basic hopping, which also avoids dividing by zero. */
+	int afh = btbb_piconet_get_flag(pn, BTBB_IS_AFH) &&
+			n_used >= AFH_MIN_USED_CHANNELS;
+
+	/* AFH same channel mechanism (2.6.1): the peripheral slot reuses the
+	 * channel of the central slot before it, i.e. CLK1 = 0. */
+	if (afh)
+		clock &= ~0x2;
 	/* following variable names used in section 2.6 of the spec */
 	x = (clock >> 2) & 0x1f;
 	y1 = (clock >> 1) & 0x01;
@@ -431,11 +489,13 @@ char single_hop(int clock, btbb_piconet *pn)
 		(y1 * 0x1f) ^ c,
 		d);
 	/* hop selection */
-	if(btbb_piconet_get_flag(pn, BTBB_IS_AFH)) {
-		f_dash = base_f % pn->used_channels;
-		next_channel = pn->bank[(perm + pn->e + f_dash + y2) % pn->used_channels];
-	} else {
-		next_channel = pn->bank[(perm + pn->e + f + y2) % BT_NUM_CHANNELS];
+	next_channel = pn->bank[(perm + pn->e + f + y2) % BT_NUM_CHANNELS];
+	/* AFH re-mapping (2.6.3.1): a used basic channel is kept unchanged; an
+	 * unused one is replaced by entry k' = (PERM5 + E + F' + Y2) mod N of
+	 * the AFH mapping table, where F' = 16 * CLK27-7 mod N. */
+	if(afh && !btbb_piconet_get_channel_seen(pn, next_channel)) {
+		f_dash = base_f % n_used;
+		next_channel = pn->afh_bank[(perm + pn->e + f_dash + y2) % n_used];
 	}
 	return next_channel;
 }
