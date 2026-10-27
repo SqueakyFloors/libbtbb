@@ -22,6 +22,7 @@
 #ifndef INCLUDED_BTBB_H
 #define INCLUDED_BTBB_H
 
+#include <stddef.h>
 #include <stdint.h>
 
 #define BTBB_WHITENED    0
@@ -230,6 +231,9 @@ int btbb_pcapng_close(btbb_pcapng_handle * h);
 typedef struct lell_packet lell_packet;
 /* decode and allocate LE packet */
 void lell_allocate_and_decode(const uint8_t *stream, uint16_t phys_channel, uint32_t clk100ns, lell_packet **pkt);
+void lell_allocate_and_decode_n(const uint8_t *stream, size_t stream_len,
+                                uint16_t phys_channel, uint32_t clk100ns,
+                                lell_packet **pkt);
 lell_packet *lell_packet_new(void);
 void lell_packet_ref(lell_packet *pkt);
 void lell_packet_unref(lell_packet *pkt);
@@ -238,6 +242,7 @@ unsigned lell_get_access_address_offenses(const lell_packet *pkt);
 unsigned lell_packet_is_data(const lell_packet *pkt);
 unsigned lell_get_channel_index(const lell_packet *pkt);
 unsigned lell_get_channel_k(const lell_packet *pkt);
+unsigned lell_get_payload_length(const lell_packet *pkt);
 const char * lell_get_adv_type_str(const lell_packet *pkt);
 void lell_print(const lell_packet *pkt);
 

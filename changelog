@@ -1,3 +1,23 @@
+libbtbb (2020-12-R1+fork4) unstable; urgency=low
+  * LE packets from Bluetooth 4.2 and later devices keep their whole payload.
+    A data PDU's length is read from all 8 bits of the field and allowed up to
+    the 251 bytes Data Length Extension permits, frame storage holds a complete
+    260-byte packet, and PCAP and PCAPNG files record the full packet instead
+    of the first 64 bytes.
+  * Fixed the captured and original lengths in LE PCAP records, which were the
+    wrong way round, and stopped the PCAPNG writer copying more than the
+    record holds.
+  * New decoder entry point lell_allocate_and_decode_n(), which takes the
+    number of bytes captured so it cannot read past the end of a caller's
+    buffer, and reports a payload no longer than the capture holds. The
+    64-byte lell_allocate_and_decode() stays for existing callers.
+  * An allocation failure in the LE decoder is no longer dereferenced.
+  * An LE PCAPNG record no longer carries up to three bytes of whatever the
+    caller's memory held in the padding that rounds the record to a 4-byte
+    boundary.
+
+ -- Russell Wagner <152923636+SqueakyFloors@users.noreply.github.com>  26 Oct 2026 19:00:00 -0700
+
 libbtbb (2020-12-R1+fork3) unstable; urgency=low
   * Adaptive frequency hopping (AFH) now follows the Core specification
     (Vol 2, Part B, 2.6.3.1): a basic-sequence channel the map marks used is

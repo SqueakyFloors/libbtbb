@@ -263,6 +263,8 @@ lell_packet *
 lell_packet_new(void)
 {
 	lell_packet *pkt = (lell_packet *)calloc(1, sizeof(lell_packet));
+	if (pkt == NULL)
+		return NULL;
 	pkt->refcount = 1;
 	return pkt;
 }
@@ -297,10 +299,20 @@ static uint8_t le_channel_index(uint16_t phys_channel) {
 	return ret;
 }
 
-void lell_allocate_and_decode(const uint8_t *stream, uint16_t phys_channel, uint32_t clk100ns, lell_packet **pkt)
+void lell_allocate_and_decode_n(const uint8_t *stream, size_t stream_len,
+                                uint16_t phys_channel, uint32_t clk100ns,
+                                lell_packet **pkt)
 {
-	*pkt = lell_packet_new( );
-	memcpy((*pkt)->symbols, stream, MAX_LE_SYMBOLS);
+	size_t copy_len = stream_len < MAX_LE_SYMBOLS ? stream_len : MAX_LE_SYMBOLS;
+	unsigned declared_len = 0;
+	unsigned captured_len = 0;
+
+	*pkt = lell_packet_new();
+	if (*pkt == NULL)
+		return;
+
+	if (stream != NULL && copy_len != 0)
+		memcpy((*pkt)->symbols, stream, copy_len);
 
 	(*pkt)->channel_idx = le_channel_index(phys_channel);
 	(*pkt)->channel_k = (phys_channel-2402)/2;
@@ -308,27 +320,53 @@ void lell_allocate_and_decode(const uint8_t *stream, uint16_t phys_channel, uint
 
 	/* the casts keep the shift out of a signed int, where it would
 	 * overflow into the sign bit */
-	(*pkt)->access_address = 0;
-	(*pkt)->access_address |= (uint32_t) (*pkt)->symbols[0];
-	(*pkt)->access_address |= (uint32_t) (*pkt)->symbols[1] << 8;
-	(*pkt)->access_address |= (uint32_t) (*pkt)->symbols[2] << 16;
-	(*pkt)->access_address |= (uint32_t) (*pkt)->symbols[3] << 24;
+	if (copy_len >= 4) {
+		(*pkt)->access_address = 0;
+		(*pkt)->access_address |= (uint32_t) (*pkt)->symbols[0];
+		(*pkt)->access_address |= (uint32_t) (*pkt)->symbols[1] << 8;
+		(*pkt)->access_address |= (uint32_t) (*pkt)->symbols[2] << 16;
+		(*pkt)->access_address |= (uint32_t) (*pkt)->symbols[3] << 24;
+	}
+
+	/* The access address (4 bytes), the PDU header (2) and the CRC (3) are
+	 * not part of the payload length, so 9 bytes of the capture are not
+	 * payload. */
+	if (copy_len >= 9)
+		captured_len = (unsigned)(copy_len - 9);
 
 	if (lell_packet_is_data(*pkt)) {
-		// data PDU
-		(*pkt)->length = (*pkt)->symbols[5] & 0x1f;
+		/* BT 4.2 Data Length Extension uses the full octet (0..251). */
+		if (copy_len >= 6)
+			declared_len = (*pkt)->symbols[5];
+		if (declared_len > 251)
+			declared_len = 251;
+		(*pkt)->length = declared_len < captured_len ? declared_len : captured_len;
 		(*pkt)->access_address_offenses = aa_data_channel_offenses((*pkt)->access_address);
 		(*pkt)->flags.as_bits.access_address_ok = (*pkt)->access_address_offenses ? 0 : 1;
 	} else {
-		// advertising PDU
-		(*pkt)->length = (*pkt)->symbols[5] & 0x3f;
-		(*pkt)->adv_type = (*pkt)->symbols[4] & 0xf;
-		(*pkt)->adv_tx_add = (*pkt)->symbols[4] & 0x40 ? 1 : 0;
-		(*pkt)->adv_rx_add = (*pkt)->symbols[4] & 0x80 ? 1 : 0;
+		/* Legacy advertising PDU length remains a 6-bit field. */
+		if (copy_len >= 6)
+			declared_len = (*pkt)->symbols[5] & 0x3f;
+		(*pkt)->length = declared_len < captured_len ? declared_len : captured_len;
+		if (copy_len >= 5) {
+			(*pkt)->adv_type = (*pkt)->symbols[4] & 0xf;
+			(*pkt)->adv_tx_add = (*pkt)->symbols[4] & 0x40 ? 1 : 0;
+			(*pkt)->adv_rx_add = (*pkt)->symbols[4] & 0x80 ? 1 : 0;
+		}
 		(*pkt)->flags.as_bits.access_address_ok = ((*pkt)->access_address == 0x8e89bed6);
 		(*pkt)->access_address_offenses = (*pkt)->flags.as_bits.access_address_ok ? 0 :
 			(aa_access_channel_off_by_one((*pkt)->access_address) ? 1 : 32);
 	}
+}
+
+void lell_allocate_and_decode(const uint8_t *stream, uint16_t phys_channel,
+                              uint32_t clk100ns, lell_packet **pkt)
+{
+	/* This entry point takes no length, and every caller it has ever had
+	 * passes a buffer of at least this many bytes, which is what it used to
+	 * read unconditionally. */
+	lell_allocate_and_decode_n(stream, LELL_LEGACY_STREAM_LEN, phys_channel,
+	                           clk100ns, pkt);
 }
 
 unsigned lell_packet_is_data(const lell_packet *pkt)
@@ -354,6 +392,11 @@ unsigned lell_get_channel_index(const lell_packet *pkt)
 unsigned lell_get_channel_k(const lell_packet *pkt)
 {
 	return pkt->channel_k;
+}
+
+unsigned lell_get_payload_length(const lell_packet *pkt)
+{
+	return pkt->length;
 }
 
 const char * lell_get_adv_type_str(const lell_packet *pkt)
