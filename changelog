@@ -75,6 +75,9 @@ libbtbb (2020-12-R1+fork5) unstable; urgency=low
     recorded as having had none checked, and so is a packet recorded while the
     library is still guessing the piconet's upper address part, where a CRC
     failure says the guess was wrong rather than anything about the packet.
+    A record only reports a result when the reference address part it carries
+    is the one the result was reached with, which is what the format's reader
+    has to go on.
   * A failed or incomplete write to a PCAPNG file is reported to the caller
     instead of returning success, and the part of a record that did reach the
     file is taken back out, so a capture that runs out of disk space is

@@ -443,6 +443,12 @@ static void test_bredr_pcapng_record(void)
 	/* a reference UAP with its top bit set is recorded as given; it is the
 	   value whose shift used to run into the sign bit of an int */
 	CHECK(high_refuap_lap_uap == (SPEC_DH1_LAP | 0x80000000u));
+	/* and it is not the UAP the HEC and CRC were checked against, so this
+	   record says nothing about either */
+	CHECK((rd16(blk + 28 + 20) & BREDR_REFUAP_VALID) != 0);
+	CHECK((rd16(blk + 28 + 20) &
+	       (BREDR_HEC_CHECKED | BREDR_HEC_VALID |
+		BREDR_CRC_CHECKED | BREDR_CRC_VALID)) == 0);
 }
 
 /* A POLL has no payload, so the record carries none and says so. */
@@ -496,10 +502,11 @@ static void test_bredr_pcapng_empty_payload(void)
 	}
 	btbb_packet_unref(pkt);
 
-	/* No reference LAP or UAP was given, and a POLL carries no CRC, so
-	   only the HEC bits join the two that are always set. */
+	/* No reference LAP or UAP was given, so the record has no UAP to
+	   attribute a HEC or CRC result to and says nothing was checked, and
+	   a POLL carries no CRC in any case. */
 	expected_flags = BREDR_DEWHITENED | BREDR_SIGPOWER_VALID |
-		BREDR_NOISEPOWER_VALID | BREDR_HEC_CHECKED | BREDR_HEC_VALID;
+		BREDR_NOISEPOWER_VALID;
 
 	if (ph != NULL) {
 		CHECK(read_capture(pcap_name));
@@ -529,7 +536,7 @@ static void test_bredr_pcapng_empty_payload(void)
 	data = blk + 28;
 	CHECK(rd16(data + 20) == expected_flags);
 	CHECK((rd16(data + 20) & BREDR_PAYLOAD_PRESENT) == 0);
-	CHECK((rd16(data + 20) & BREDR_CRC_CHECKED) == 0);
+	CHECK((rd16(data + 20) & (BREDR_HEC_CHECKED | BREDR_CRC_CHECKED)) == 0);
 
 	CHECK(all_zero(blk + 50, 2));
 	CHECK(rd32(blk + 52) == 0);
@@ -798,8 +805,12 @@ static void test_bredr_uap_search(void)
 			btbb_piconet_unref(pn);
 			return;
 		}
+		/* the reference UAP a capture tool passes is the piconet's,
+		   which is only known once the search has settled it */
 		CHECK(btbb_pcapng_append_packet(h, 17ull, -20, -80,
-						SPEC_DH1_LAP, UAP_ANY,
+						SPEC_DH1_LAP,
+						found ? btbb_piconet_get_uap(pn)
+						      : UAP_ANY,
 						pkt) == 0);
 		(void) btbb_pcapng_close(h);
 		btbb_packet_unref(pkt);

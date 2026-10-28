@@ -94,6 +94,15 @@ static inline uint16_t bredr_record_flags( const int8_t sigdbm,
 					   const uint8_t refuap,
 					   const btbb_packet *pkt )
 {
+	/* The format defines the reference UAP as the one a HEC or CRC result
+	   was reached with, and gives a reader no other field to learn which
+	   UAP that was. The library checks against the packet's own UAP, so
+	   only say what was checked when the reference UAP in the record is
+	   that same one. A capture tool that follows a piconet passes its UAP
+	   for both, so this costs it nothing. */
+	int refuap_is_the_one_checked = (refuap != UAP_ANY) &&
+		(refuap == btbb_packet_get_uap(pkt));
+
 	return (uint16_t) (BREDR_DEWHITENED | BREDR_SIGPOWER_VALID |
 		((noisedbm < sigdbm) ? BREDR_NOISEPOWER_VALID : 0) |
 		((reflap != LAP_ANY) ? BREDR_REFLAP_VALID : 0) |
@@ -103,10 +112,14 @@ static inline uint16_t bredr_record_flags( const int8_t sigdbm,
 		   CRC whenever the packet type carries one, and records both
 		   answers on the packet. A reader needs these to tell a
 		   verified payload from a guess. */
-		(btbb_packet_get_flag(pkt, BTBB_HEC_CHECKED) ? BREDR_HEC_CHECKED : 0) |
-		(btbb_packet_get_flag(pkt, BTBB_HEC_VALID)   ? BREDR_HEC_VALID   : 0) |
-		(btbb_packet_get_flag(pkt, BTBB_CRC_CHECKED) ? BREDR_CRC_CHECKED : 0) |
-		(btbb_packet_get_flag(pkt, BTBB_CRC_CORRECT) ? BREDR_CRC_VALID   : 0));
+		((refuap_is_the_one_checked &&
+		  btbb_packet_get_flag(pkt, BTBB_HEC_CHECKED)) ? BREDR_HEC_CHECKED : 0) |
+		((refuap_is_the_one_checked &&
+		  btbb_packet_get_flag(pkt, BTBB_HEC_VALID))   ? BREDR_HEC_VALID   : 0) |
+		((refuap_is_the_one_checked &&
+		  btbb_packet_get_flag(pkt, BTBB_CRC_CHECKED)) ? BREDR_CRC_CHECKED : 0) |
+		((refuap_is_the_one_checked &&
+		  btbb_packet_get_flag(pkt, BTBB_CRC_CORRECT)) ? BREDR_CRC_VALID   : 0));
 }
 
 typedef struct __attribute__((packed)) _pcap_bluetooth_bredr_bb_header {
