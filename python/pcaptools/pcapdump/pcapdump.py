@@ -140,8 +140,18 @@ class PcapReader:
                 rechdrtmp[2], 
                 rechdrtmp[3]
                 ]
-        if rechdr[1] > rechdr[2] or rechdr[1] > self._pcaphsnaplen or rechdr[2] > self._pcaphsnaplen:
-            raise ValueError('Corrupted or invalid libpcap record header (included length exceeds actual length)')
+        # How much of the packet is in the file cannot be more than the
+        # packet was, nor more than the snapshot length the capture was taken
+        # at. How long the packet was may well be more than either: that is
+        # what a snapshot length is for.
+        if rechdr[1] > rechdr[2]:
+            raise ValueError('Corrupted or invalid libpcap record header '
+                             '(included length %d exceeds the packet length %d)'
+                             % (rechdr[1], rechdr[2]))
+        if rechdr[1] > self._pcaphsnaplen:
+            raise ValueError('Corrupted or invalid libpcap record header '
+                             '(included length %d exceeds the capture snapshot '
+                             'length %d)' % (rechdr[1], self._pcaphsnaplen))
 
         # Read the included packet length
         frame = self.__fh.read(rechdr[1])

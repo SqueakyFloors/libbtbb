@@ -84,10 +84,13 @@ jobs:
         run: |
           "$RUNNER_TEMP/prefix/bin/btaptap" -h
           # The keystrokes the recorded Ellisys export holds, from the copy
-          # that is installed.
-          "$RUNNER_TEMP/prefix/bin/btaptap" -e python/pcaptools/tests/ellysis-keyboard.csv \
-              | tee /tmp/keystrokes
-          grep -q "Return" /tmp/keystrokes
+          # that is installed. Not through a pipe: that would hide the tool's
+          # exit status.
+          "$RUNNER_TEMP/prefix/bin/btaptap" \
+              -e python/pcaptools/tests/ellysis-keyboard.csv \
+              > "$RUNNER_TEMP/keystrokes"
+          cat "$RUNNER_TEMP/keystrokes"
+          grep -q "Return" "$RUNNER_TEMP/keystrokes"
 
   sanitizers:
     name: ubuntu-24.04 clang asan+ubsan

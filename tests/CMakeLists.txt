@@ -114,9 +114,14 @@ if(BUILD_TESTING)
 
     # This one configures and builds the tree itself, in library
     # configurations the build running it is not in.
+    # The generator, compiler and toolchain file are handed on, so that the
+    # trees it configures are built the way this one was.
     add_test(NAME library_config COMMAND ${CMAKE_COMMAND}
              -DSOURCE_DIR=${PROJECT_SOURCE_DIR}
              -DBINARY_DIR=${CMAKE_CURRENT_BINARY_DIR}/library-config-test
+             -DGENERATOR=${CMAKE_GENERATOR}
+             -DC_COMPILER=${CMAKE_C_COMPILER}
+             -DTOOLCHAIN_FILE=${CMAKE_TOOLCHAIN_FILE}
              -P ${CMAKE_CURRENT_SOURCE_DIR}/test_library_config.cmake)
     # Two configures and one compile: 5.5 s on an arm64 Mac, 15 s on a
     # slower CI runner.

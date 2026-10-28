@@ -380,6 +380,14 @@ active_keys = []
 line_open = False
 
 def error(message):
+    global line_open
+    # The keystrokes found so far get their line finished and go out first:
+    # the two streams are often one file or one pipe, where standard output
+    # is buffered and would otherwise arrive after this, or on the same line.
+    if line_open:
+        print()
+        line_open = False
+    sys.stdout.flush()
     print("error: %s" % message, file=sys.stderr)
 
 def emit(text):
@@ -404,9 +412,9 @@ def hid2ascii(scancode, shift):
         return "[Reserved]" 
     return code
 
-def usage(stream=sys.stdout):
+def usage(stream=None):
     print("Usage: btaptap [-r pcapfile.pcap | -e ellisysfile.csv] [-c count] [-h]",
-          file=stream)
+          file=stream or sys.stdout)
 
 def parse_l2cap_keydata(l2cappkt):
     global active_keys
@@ -478,10 +486,10 @@ def parse_ellisys_export(exportfile):
     Read an Ellisys CSV export. Returns an exit status.
     '''
     try:
-        # newline="" so the line endings reach the header comparison below as
-        # the file holds them: an Ellisys export ends every line CR LF, and
-        # text mode would otherwise hand over a bare LF, which the header the
-        # comparison expects does not have.
+        # newline="" so the lines arrive as the file holds them, which is
+        # what an Ellisys export's own CR LF endings are; the header
+        # comparison below leaves the ending out, so an export whose endings
+        # a checkout or an editor has changed is read just the same.
         cap = open(exportfile, "r", newline="")
     except (OSError, IOError) as e:
         error("cannot read %s: %s" % (exportfile, e.strerror or e))
@@ -490,7 +498,7 @@ def parse_ellisys_export(exportfile):
     with cap:
         # Check to make sure the CSV file header matches out expectations
         hdr=cap.readline()
-        if (hdr != ELLISYS_CSV_HDR):
+        if (hdr.rstrip("\r\n") != ELLISYS_CSV_HDR.rstrip("\r\n")):
             error("%s does not match the Ellisys export format" % exportfile)
             return 1
 
@@ -636,13 +644,19 @@ if __name__ == '__main__':
         usage(sys.stderr)
         sys.exit(1)
 
+    def fail(message):
+        # The usage text is printed only because -h asked for it, and last,
+        # as it is beside a job that did run.
+        error(message)
+        if arg_help:
+            usage()
+        sys.exit(1)
+
     def next_value(op, already):
         if already is not None:
-            error("%s given twice" % op)
-            sys.exit(1)
+            fail("%s given twice" % op)
         if len(sys.argv) < 2:
-            error("%s needs a value" % op)
-            sys.exit(1)
+            fail("%s needs a value" % op)
         return sys.argv.pop(1)
 
     while len(sys.argv) > 1:
@@ -656,39 +670,40 @@ if __name__ == '__main__':
             try:
                 arg_count = int(count)
             except ValueError:
-                error("-c needs a number, not '%s'" % count)
-                sys.exit(1)
+                fail("-c needs a number, not '%s'" % count)
             if arg_count < 0:
-                error("-c needs a count of 0 or more")
-                sys.exit(1)
+                fail("-c needs a count of 0 or more")
         elif op == '-h':
             # The usage text is printed after the job the rest of the command
             # line asked for, so that it is the last thing on screen.
             arg_help = True
         else:
-            error("unknown option '%s'" % op)
-            sys.exit(1)
+            fail("unknown option '%s'" % op)
+
+    # -h on its own is a command in itself; -h beside anything else asks for
+    # the usage text as well as that job, and the job still has to make sense.
+    if arg_help and arg_pcapfile == None and arg_ellisysfile == None \
+            and arg_count == None:
+        usage()
+        sys.exit(0)
 
     if (arg_ellisysfile == None and arg_pcapfile == None):
-        if arg_help:
-            usage()
-            sys.exit(0)
-        error("must specify a libpcap capture or an Ellisys CSV file")
-        sys.exit(1)
+        fail("must specify a libpcap capture or an Ellisys CSV file")
 
     # Two captures are two jobs: which one the keystrokes came from would not
     # be in the output.
     if arg_ellisysfile != None and arg_pcapfile != None:
-        error("-r and -e name two captures: give one")
-        sys.exit(1)
+        fail("-r and -e name two captures: give one")
 
-    status = 0
+    # An Ellisys export is read as rows, not packets, so there is nothing for
+    # a packet count to stop after.
+    if arg_count != None and arg_pcapfile == None:
+        fail("-c needs -r")
 
     if arg_pcapfile != None:
-        status |= read_pcap_file(arg_pcapfile, arg_count)
-
-    if arg_ellisysfile != None:
-        status |= parse_ellisys_export(arg_ellisysfile)
+        status = read_pcap_file(arg_pcapfile, arg_count)
+    else:
+        status = parse_ellisys_export(arg_ellisysfile)
 
     if line_open:
         print()

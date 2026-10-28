@@ -25,8 +25,9 @@ Usage: btaptap [-r pcapfile.pcap | -e ellisysfile.csv] [-c count] [-h]
 -r reads a libpcap capture, either of baseband frames with the data link layer
 DLT_EN10MB and the frame 20 bytes in, or of HCI traffic with
 DLT_BLUETOOTH_HCI_H4.  -e reads an Ellisys CSV export.  -c stops after that
-many packets.  The keystrokes go to standard output; anything that stops the
-capture being read through is reported on standard error and exits non-zero.
+many packets of a capture read with -r.  The keystrokes go to standard output;
+anything that stops the capture being read through is reported on standard
+error and exits non-zero.
 
 Note that the Ubertooth tools write their captures with a Bluetooth baseband
 data link layer, which btaptap does not read: it refuses such a capture rather

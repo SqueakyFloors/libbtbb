@@ -9,6 +9,19 @@ if(NOT DEFINED SOURCE_DIR OR NOT DEFINED BINARY_DIR)
 	message(FATAL_ERROR "SOURCE_DIR and BINARY_DIR must be set")
 endif()
 
+# What the build running this test is using, so that the trees configured
+# below are built the same way: a cross-build's compiler is not the host's.
+set(like_this_build)
+if(GENERATOR)
+	list(APPEND like_this_build -G "${GENERATOR}")
+endif()
+if(C_COMPILER)
+	list(APPEND like_this_build -DCMAKE_C_COMPILER=${C_COMPILER})
+endif()
+if(TOOLCHAIN_FILE)
+	list(APPEND like_this_build -DCMAKE_TOOLCHAIN_FILE=${TOOLCHAIN_FILE})
+endif()
+
 set(failures 0)
 
 function(fail message)
@@ -25,6 +38,7 @@ set(no_library ${BINARY_DIR}/no-library)
 file(REMOVE_RECURSE ${no_library})
 execute_process(
 	COMMAND ${CMAKE_COMMAND} -S ${SOURCE_DIR} -B ${no_library}
+	        ${like_this_build}
 	        -DBUILD_SHARED_LIB=OFF -DBUILD_STATIC_LIB=OFF
 	        -DENABLE_PYTHON=OFF -DBUILD_TESTING=OFF
 	RESULT_VARIABLE result
@@ -44,6 +58,7 @@ set(static_only ${BINARY_DIR}/static-only)
 file(REMOVE_RECURSE ${static_only})
 execute_process(
 	COMMAND ${CMAKE_COMMAND} -S ${SOURCE_DIR} -B ${static_only}
+	        ${like_this_build}
 	        -DBUILD_SHARED_LIB=OFF -DBUILD_STATIC_LIB=ON
 	        -DENABLE_PYTHON=OFF
 	RESULT_VARIABLE result

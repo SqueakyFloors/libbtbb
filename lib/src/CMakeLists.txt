@@ -43,7 +43,7 @@ endif()
 
 set(CMAKE_MACOSX_RPATH 1)
 
-if( ${BUILD_SHARED_LIB} )
+if( BUILD_SHARED_LIB )
     # Shared library
     message(STATUS "Building shared library")
     add_library(btbb SHARED ${c_sources})
@@ -52,9 +52,9 @@ if( ${BUILD_SHARED_LIB} )
     install(TARGETS btbb
             LIBRARY DESTINATION lib${LIB_SUFFIX}
             COMPONENT sharedlibs)
-endif( ${BUILD_SHARED_LIB} )
+endif()
 
-if( ${BUILD_STATIC_LIB} )
+if( BUILD_STATIC_LIB )
     # Static library
     message(STATUS "Building static library")
     add_library(btbb-static STATIC ${c_sources})
@@ -63,7 +63,7 @@ if( ${BUILD_STATIC_LIB} )
     install(TARGETS btbb-static
             DESTINATION lib${LIB_SUFFIX}
             COMPONENT staticlibs)
-endif( ${BUILD_STATIC_LIB} )
+endif()
 
 install(FILES ${c_headers}
         DESTINATION include

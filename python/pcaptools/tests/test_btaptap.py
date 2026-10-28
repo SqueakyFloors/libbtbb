@@ -213,6 +213,18 @@ class Keystrokes(CaptureFileTestCase):
         self.assertEqual(done.stdout, "a\n")
         self.assertEqual(done.returncode, 0)
 
+    def test_ellisys_export_with_normalized_line_endings(self):
+        # The export's own endings are CR LF, which a checkout or an editor
+        # may have replaced; the rows are the same either way.
+        path = self.path("lf.csv")
+        with open(ELLISYS_CSV, newline="") as src:
+            with open(path, "w", newline="\n") as dst:
+                dst.write(src.read().replace("\r\n", "\n"))
+
+        done = btaptap("-e", path)
+        self.assertIn("Enter the TCP sequence number:", done.stdout)
+        self.assertEqual(done.returncode, 0)
+
     def test_ellisys_export(self):
         # A recording of someone typing, 864 HID reports.
         done = btaptap("-e", ELLISYS_CSV)
@@ -289,6 +301,24 @@ class Failures(CaptureFileTestCase):
 
         self.assertFailed(btaptap("-e", path), "Ellisys export format")
 
+    def test_errors_come_after_the_keystrokes_they_follow(self):
+        # Both streams go to one file here, as they do down a pipe, where
+        # standard output is buffered: the keystrokes still come first.
+        path = self.path("both.pcap")
+        pcap_file(path, DLT_EN10MB, [dm1_frame(l2cap_keystroke([0x04]))])
+        with open(path, "ab") as fh:
+            fh.write(bytes(5))
+
+        merged = self.path("merged.txt")
+        with open(merged, "w") as fh:
+            done = subprocess.run([sys.executable, BTAPTAP, "-r", path],
+                                  stdout=fh, stderr=subprocess.STDOUT,
+                                  timeout=60)
+        self.assertEqual(done.returncode, 1)
+        with open(merged) as fh:
+            output = fh.read()
+        self.assertTrue(output.startswith("a\nerror: "), output)
+
     def test_missing_ellisys_file(self):
         self.assertFailed(btaptap("-e", self.path("nothing.csv")),
                           "nothing.csv")
@@ -301,6 +331,14 @@ class CommandLine(CaptureFileTestCase):
         self.assertIn("Usage: btaptap", done.stdout)
         self.assertEqual(done.stderr, "")
         self.assertEqual(done.returncode, 0)
+
+    def test_help_does_not_excuse_a_command_that_cannot_run(self):
+        # -h beside an option that asks for something impossible: the error
+        # is still an error, and the usage text comes after it.
+        done = btaptap("-c", "1", "-h")
+        self.assertIn("error: ", done.stderr)
+        self.assertIn("Usage: btaptap", done.stdout)
+        self.assertEqual(done.returncode, 1)
 
     def test_help_beside_a_capture_prints_both(self):
         # Help does not cancel the job it was asked beside, and it is the
@@ -332,8 +370,10 @@ class CommandLine(CaptureFileTestCase):
             (("-r", cap, "-r", cap), "-r given twice"),
             (("-c", "1", "-c", "2", "-r", cap), "-c given twice"),
             (("-r", cap, "-e", ELLISYS_CSV), "two captures"),
+            (("-e", ELLISYS_CSV, "-c", "1"), "-c needs -r"),
             (("--count", "1"), "unknown option"),
             (("-r", cap, "extra"), "unknown option"),
+            ("--", "unknown option"),
         )
         for args, expected in cases:
             with self.subTest(args=args):
@@ -369,6 +409,23 @@ class PcapModule(CaptureFileTestCase):
         self.assertEqual(header[1], 3)
         self.assertEqual(header[2], 10)
         self.assertEqual(reader.pnext()[1], b"de")
+
+    def test_a_packet_longer_than_the_capture_snapshot_length(self):
+        # A capture taken at a snapshot length holds that much of a longer
+        # packet, so the length the packet was is above the file's snapshot
+        # length. That is the one thing it is for, not a corrupt record.
+        path = self.path("snaplen.pcap")
+        with open(path, "wb") as fh:
+            fh.write(struct.pack("<IHHiIII", PCAP_MAGIC, 2, 4, 0, 0, 40,
+                                 DLT_EN10MB))
+            fh.write(struct.pack("<IIII", 1700000000, 0, 40, 50))
+            fh.write(bytes(40))
+
+        reader = PcapReader(path)
+        self.addCleanup(reader.close)
+        header, packet = reader.pnext()
+        self.assertEqual(len(packet), 40)
+        self.assertEqual(header[2], 50)
 
     def test_capture_cut_off_mid_record(self):
         # A capture a tool was killed in the middle of writing: the

@@ -25,9 +25,18 @@ libbtbb (2020-12-R1+fork5) unstable; urgency=low
     not a capture at all is refused rather than read as one, which the magic
     number check could not do before. A capture a tool was killed in the
     middle of writing is reported too, where part of a record read as the end
-    of the capture, and the module's writer puts a record's two lengths in the
-    order the format has them: a capture holding the first bytes of longer
-    packets had them the wrong way round.
+    of the capture. A capture taken at a snapshot length is read rather than
+    called corrupt - a packet longer than that length is what the field it
+    tripped over is for - and the module's writer puts a record's two lengths
+    in the order the format has them, where a capture holding the first bytes
+    of longer packets had them the wrong way round.
+  * btaptap's command line is checked. An unknown option, a missing option
+    value, a count that is not a number, an option given a value twice, -r
+    together with -e, and -c without -r were all accepted in silence, some of
+    them doing nothing; each is now one "error:" line and exit 1. -h prints
+    the usage text on standard output rather than standard error, and beside a
+    capture it no longer cancels it: the keystrokes come first and the usage
+    text last.
   * A build asking for no library is refused while configuring. The check for
     it named an option that does not exist, so "cmake -DBUILD_SHARED_LIB=OFF"
     - the obvious way to ask for a static build, which also has to set
