@@ -247,7 +247,12 @@ int btbb_pcapng_close(btbb_pcapng_handle * h);
 
 /* BLE support */
 typedef struct lell_packet lell_packet;
-/* decode and allocate LE packet */
+/* Decode and allocate an LE packet. The _n form takes the number of
+ * bytes 'stream' holds and reads no more than that, keeping whatever
+ * of the packet it was given and no further; it stores at most 260
+ * bytes, the longest LE packet. The form without a length reads 64
+ * bytes, which is what it has always read and what every caller it
+ * has had provides. */
 void lell_allocate_and_decode(const uint8_t *stream, uint16_t phys_channel, uint32_t clk100ns, lell_packet **pkt);
 void lell_allocate_and_decode_n(const uint8_t *stream, size_t stream_len,
                                 uint16_t phys_channel, uint32_t clk100ns,
