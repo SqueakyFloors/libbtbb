@@ -34,11 +34,6 @@ SITE_DIR_PATTERNS = (
     "local/lib*/python*/*-packages",
 )
 
-# How far above this script to look for the install prefix. It is one
-# directory up for a script in <prefix>/bin, and the further levels cover a
-# build configured with a deeper binary directory, such as usr/bin.
-PREFIX_SEARCH_DEPTH = 3
-
 
 def site_dir_for(module):
     '''
@@ -51,38 +46,33 @@ def site_dir_for(module):
     built for, so look under the prefix this script is installed in, which
     is where the module that goes with it is.
 
-    The directory is searched for rather than worked out, because which one
-    pip chose depends on both the interpreter and the version of pip.
+    The prefix is the directory above this script's, and nothing further up
+    is looked in: what is in a prefix above this one belongs to another
+    install, and where a prefix sits under a directory anyone can write to,
+    that is a module anyone could have put there. An install configured with
+    a binary directory deeper than one level therefore does not find the
+    module this way.
+
+    The site directory is searched for rather than worked out, because which
+    one pip chose depends on both the interpreter and the version of pip.
     '''
+    prefix = os.path.dirname(os.path.dirname(os.path.realpath(__file__)))
+
+    candidates = []
+    for pattern in SITE_DIR_PATTERNS:
+        # The prefix is a path, not a pattern: a directory named with a glob
+        # metacharacter stands for itself.
+        candidates.extend(
+            glob.glob(os.path.join(glob.escape(prefix), pattern)))
+
     # The module is pure Python, so a directory belonging to another
     # interpreter version would serve; the running one's is preferred.
     running = "python%d.%d" % sys.version_info[:2]
+    candidates.sort(key=lambda path: (running not in path.split(os.sep), path))
 
-    directory = os.path.dirname(os.path.realpath(__file__))
-    for _ in range(PREFIX_SEARCH_DEPTH):
-        directory = os.path.dirname(directory)
-
-        candidates = []
-        for pattern in SITE_DIR_PATTERNS:
-            # The directory is a path, not a pattern: one named with a glob
-            # metacharacter stands for itself.
-            candidates.extend(
-                glob.glob(os.path.join(glob.escape(directory), pattern)))
-        if not candidates:
-            continue
-        candidates.sort(
-            key=lambda path: (running not in path.split(os.sep), path))
-
-        for path in candidates:
-            if os.path.isdir(os.path.join(path, module)):
-                return path
-
-        # A directory with a site directory in it is the install prefix, so
-        # the search ends here whether the module was in it or not. What is
-        # in a prefix further up belongs to some other install, and on a
-        # prefix under a directory anyone can write to, that is a module
-        # anyone could have put there.
-        return None
+    for path in candidates:
+        if os.path.isdir(os.path.join(path, module)):
+            return path
     return None
 
 
@@ -90,11 +80,12 @@ try:
     from pcapdump.pcapdump import *
 except ImportError:
     # Only once the plain import has failed, so an install whose module the
-    # interpreter already finds keeps the sys.path it has.
+    # interpreter already finds keeps the sys.path it has. The directory goes
+    # on the end of sys.path, since the module is not on it at all.
     site_dir = site_dir_for("pcapdump")
     if site_dir is None:
         raise
-    sys.path.insert(0, site_dir)
+    sys.path.append(site_dir)
     from pcapdump.pcapdump import *
 
 DLT_EN10MB = 1

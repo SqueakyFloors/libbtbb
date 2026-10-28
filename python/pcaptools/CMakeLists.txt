@@ -103,9 +103,12 @@ install(CODE "
 		message(FATAL_ERROR
 			\"expected one pcapdump wheel in ${OUTPUT}, found \${wheel_count}\")
 	endif()
+	# --ignore-installed because pip otherwise leaves the prefix empty, and
+	# says so and exits 0, when the same version is already installed where
+	# the interpreter itself looks.
 	execute_process(
 		COMMAND \"${Python3_EXECUTABLE}\" -m pip install
-			--no-deps --upgrade
+			--no-deps --upgrade --ignore-installed
 			--prefix \"\$ENV{DESTDIR}${BUILD_ROOT}\${CMAKE_INSTALL_PREFIX}\"
 			\${wheels}
 		RESULT_VARIABLE pip_result)
