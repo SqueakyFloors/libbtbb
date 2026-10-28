@@ -416,31 +416,38 @@ static uint32_t followed_offset(const btbb_piconet *pn)
 	return ((uint32_t) pn->clk_offset >> 1) & (SEQUENCE_LENGTH - 1);
 }
 
-static int offset_rejected(const btbb_piconet *pn, uint32_t offset)
+/* Was this clock given up under the UAP the piconet is searching with now?
+ * A rejection made under another UAP describes hops this search does not
+ * predict, so it is not held against it. */
+static int clock_rejected(const btbb_piconet *pn, uint32_t offset)
 {
 	int i;
 
 	for (i = 0; i < pn->num_rejected; i++) {
-		if (pn->rejected_offsets[i] == offset)
+		if (pn->rejected_offsets[i] == offset &&
+		    pn->rejected_uaps[i] == pn->UAP)
 			return 1;
 	}
 	return 0;
 }
 
-/* Remember a clock as one not to accept again for this LAP.  The oldest is
- * dropped once the list is full: the newest rejection is the one a restart
- * would otherwise choose again. */
+/* Remember a clock as one not to accept again for this LAP and UAP.  The
+ * oldest is dropped once the list is full: the newest rejection is the one a
+ * restart would otherwise choose again. */
 static void reject_clock(btbb_piconet *pn, uint32_t offset)
 {
 	int i;
 
-	if (offset_rejected(pn, offset))
+	if (clock_rejected(pn, offset))
 		return;
 	if (pn->num_rejected == MAX_REJECTED_CLOCKS) {
-		for (i = 1; i < MAX_REJECTED_CLOCKS; i++)
+		for (i = 1; i < MAX_REJECTED_CLOCKS; i++) {
 			pn->rejected_offsets[i - 1] = pn->rejected_offsets[i];
+			pn->rejected_uaps[i - 1] = pn->rejected_uaps[i];
+		}
 		pn->num_rejected--;
 	}
+	pn->rejected_uaps[pn->num_rejected] = pn->UAP;
 	pn->rejected_offsets[pn->num_rejected++] = offset;
 }
 
@@ -491,7 +498,7 @@ static int init_candidates(char channel, int known_clock_bits,
 		/* A clock already followed and given up is not a candidate
 		 * again, so discovery starting over cannot end where it just
 		 * came from. */
-		if (offset_rejected(pn, clock_as_offset(pn, clk1_27)))
+		if (clock_rejected(pn, clock_as_offset(pn, clk1_27)))
 			continue;
 		if (count == room) {
 			/* Double the list each time, so the copying costs a
@@ -1069,7 +1076,8 @@ btbb_piconet *btbb_next_survey_result() {
 }
 
 /* How long the current run of failing headers has been going, in 625 us
- * slots.  Both clocks are the piconet's CLK1-27, which wraps at
+ * slots.  Both values are clocks the packets carried, so whichever clock the
+ * caller's receiver counts, their difference is elapsed slots; it wraps at
  * SEQUENCE_LENGTH, so the subtraction is taken modulo that. */
 static uint32_t failure_run_slots(const btbb_piconet *pn, uint32_t clkn)
 {
@@ -1088,10 +1096,10 @@ static uint32_t failure_run_slots(const btbb_piconet *pn, uint32_t clkn)
 
 /*
  * Has the run of failing headers said enough to give the clock up?  Either it
- * holds the full count of failures, or it holds fewer but has already been
- * failing for longer than a wrong clock may be followed for.  The second is
- * what bounds the time: on a link too quiet to produce twenty headers in a
- * hurry, the answer still arrives within a few seconds of the first failure.
+ * holds the full count of failures, or half of them where the run has already
+ * been failing for FOLLOW_FAILURE_SLOTS.  The second is what a slow link
+ * costs: it still takes a packet to answer on, but ten of them rather than
+ * twenty.
  */
 static int follow_run_is_enough(const btbb_piconet *pn, uint32_t clkn)
 {
@@ -1190,10 +1198,17 @@ int btbb_process_packet(btbb_packet *pkt, btbb_piconet *pn) {
 			if (btbb_packet_get_flag(pkt, BTBB_HEC_CHECKED)) {
 				if (btbb_packet_get_flag(pkt, BTBB_HEC_VALID)) {
 					pn->follow_header_failures = 0;
-					/* this clock has decoded a header, so
-					 * it was the piconet's at least once */
-					if (pn->clock_recovered)
+					/* This clock has decoded a header, so
+					 * it was the piconet's at least once.
+					 * Recovery is working for this
+					 * piconet, so the losses that came
+					 * before are history: a loss after
+					 * this one is worth reporting again. */
+					if (pn->clock_recovered) {
 						pn->lock_worked = 1;
+						pn->lock_losses = 0;
+						pn->lock_loss_reported = 0;
+					}
 				} else if (pn->clock_recovered) {
 					if (pn->follow_header_failures == 0)
 						pn->first_failure_time =

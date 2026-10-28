@@ -1230,6 +1230,51 @@ static void test_a_clock_that_never_worked_is_not_chosen_again(void)
 }
 
 /*
+ * A rejection is only about the hops one UAP predicts. A failed header says
+ * the clock or the UAP was wrong without saying which, and both go into the
+ * address hop selection runs on, so discovery that goes on to find a
+ * different UAP is searching a different sequence and the clock it gave up
+ * belongs in it again. Without that, a wrong UAP would cost the piconet the
+ * clock that was right all along.
+ */
+static void test_a_rejected_clock_binds_only_under_its_own_uap(void)
+{
+	btbb_piconet *pn = following_a_recovered_clock();
+	btbb_packet *pkt = failed_header_packet();
+	int i;
+
+	CHECK(pkt != NULL);
+	if (pkt == NULL) {
+		btbb_piconet_unref(pn);
+		return;
+	}
+	for (i = 0; i < FOLLOW_HEADER_FAILURES; i++)
+		(void) btbb_process_packet(pkt, pn);
+	CHECK_EQ(1, pn->num_rejected);
+	CHECK_EQ(TEST_UAP, pn->rejected_uaps[0]);
+
+	/* the same UAP: the clock it gave up stays out of the search */
+	btbb_piconet_set_uap(pn, TEST_UAP);
+	btbb_piconet_set_flag(pn, BTBB_CLK6_VALID, 1);
+	btbb_piconet_set_flag(pn, BTBB_GOT_FIRST_PACKET, 1);
+	pn->first_pkt_time = 0;
+	first_hop(pn, channel_at(pn, 0));
+	CHECK(btbb_init_hop_reversal(0, pn) > 1);
+	CHECK(!candidate_listed(pn, 0));
+
+	/* a UAP the next round of discovery found instead: another sequence,
+	 * and the same clock is a candidate in it */
+	btbb_piconet_set_uap(pn, OTHER_UAP);
+	address_precalc((int) (((((uint32_t) OTHER_UAP) << 24) | TEST_LAP) &
+			       0xfffffff), pn);
+	first_hop(pn, channel_at(pn, 0));
+	CHECK(btbb_init_hop_reversal(0, pn) > 1);
+	CHECK(candidate_listed(pn, 0));
+	btbb_packet_unref(pkt);
+	btbb_piconet_unref(pn);
+}
+
+/*
  * A clock that did decode a header is given up when it stops working, but it
  * is not ruled out: it was the piconet's at least once, so it may be the
  * piconet's still, on a link that has gone bad or quiet. Ruling it out on
@@ -1436,6 +1481,55 @@ static void test_giving_up_is_reported_once(void)
 }
 
 /*
+ * That note is about a piconet nothing works for. A capture that loses a few
+ * clocks, then locks one that decodes, and loses another an hour later should
+ * hear about that one: a clock that works starts the count again.
+ */
+static void test_a_working_lock_restores_the_reporting(void)
+{
+	btbb_piconet *pn = discovered(NULL, 0);
+	btbb_packet *bad = failed_header_packet();
+	btbb_packet *good = decodable_packet();
+	char out[4096], err[4096];
+	int i;
+
+	CHECK(bad != NULL);
+	CHECK(good != NULL);
+	if (bad == NULL || good == NULL) {
+		btbb_piconet_unref(pn);
+		return;
+	}
+	for (i = 1; i <= LOCK_LOSS_TRIES; i++) {
+		follow_a_clock(pn, i * 2);
+		CHECK(headers_until_the_clock_is_given_up(pn, bad, 1) > 0);
+	}
+	CHECK_EQ(1, pn->lock_loss_reported);
+
+	/* a clock that decodes a header of the piconet */
+	follow_a_clock(pn, 100);
+	CHECK_EQ(0, btbb_process_packet(good, pn));
+	CHECK_EQ(1, pn->lock_worked);
+	CHECK_EQ(0, pn->lock_losses);
+	CHECK_EQ(0, pn->lock_loss_reported);
+
+	/* so the loss that comes after it is reported */
+	if (capture_or_fail() != 0) {
+		btbb_packet_unref(bad);
+		btbb_packet_unref(good);
+		btbb_piconet_unref(pn);
+		return;
+	}
+	CHECK(headers_until_the_clock_is_given_up(pn, bad, 1) > 0);
+	capture_stop(out, sizeof(out), err, sizeof(err));
+	CHECK(strstr(err, "giving up this clock") != NULL);
+	if (failures != 0)
+		printf("stderr was: %s\n", err);
+	btbb_packet_unref(bad);
+	btbb_packet_unref(good);
+	btbb_piconet_unref(pn);
+}
+
+/*
  * Everything UAP and clock discovery has to say about its progress goes to
  * stderr. A tool that dumps its capture to stdout would otherwise have these
  * lines in the dump, with nothing to tell them from capture data.
@@ -1604,11 +1698,13 @@ int main(void)
 	test_a_failed_payload_is_not_evidence();
 	test_a_clock_the_caller_set_is_kept();
 	test_a_clock_that_never_worked_is_not_chosen_again();
+	test_a_rejected_clock_binds_only_under_its_own_uap();
 	test_a_clock_that_worked_is_not_ruled_out();
 	test_a_wrong_clock_is_given_up_within_a_few_seconds();
 	test_rejected_clocks_are_forgotten_with_the_lap();
 	test_the_rejected_clocks_are_a_short_list();
 	test_giving_up_is_reported_once();
+	test_a_working_lock_restores_the_reporting();
 	test_a_refused_aliased_request_leaves_recovery_alone();
 
 	if (failures != 0) {
