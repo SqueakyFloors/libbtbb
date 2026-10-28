@@ -62,7 +62,9 @@ if(BUILD_TESTING)
     target_include_directories(test_piconet PRIVATE ${PROJECT_SOURCE_DIR}/lib/src)
     target_compile_options(test_piconet PRIVATE -std=gnu90)
     add_test(NAME piconet COMMAND test_piconet)
-    set_tests_properties(piconet PROPERTIES TIMEOUT 30)
+    # Under a second, but each candidate list is a walk over 2^21 clock
+    # values, which a sanitizer build takes a few seconds over.
+    set_tests_properties(piconet PROPERTIES TIMEOUT 60)
 
     add_executable(test_hop test_hop.c)
     target_include_directories(test_hop PRIVATE ${PROJECT_SOURCE_DIR}/lib/src)
