@@ -25,7 +25,7 @@ import sys
 import struct
 import time
 
-# Where to look under the install prefix for a site directory. The name
+# Where to look under an install prefix for a site directory. The name
 # varies: Debian and Ubuntu call it dist-packages, and their own install
 # scheme adds a "local" level; a distribution that separates architectures
 # uses lib64. These two patterns cover all of those.
@@ -33,6 +33,11 @@ SITE_DIR_PATTERNS = (
     "lib*/python*/*-packages",
     "local/lib*/python*/*-packages",
 )
+
+# How far above this script to look for the install prefix. It is one
+# directory up for a script in <prefix>/bin, and the further levels cover a
+# build configured with a deeper binary directory, such as usr/bin.
+PREFIX_SEARCH_DEPTH = 3
 
 
 def site_dir_for(module):
@@ -49,20 +54,26 @@ def site_dir_for(module):
     The directory is searched for rather than worked out, because which one
     pip chose depends on both the interpreter and the version of pip.
     '''
-    prefix = os.path.dirname(os.path.dirname(os.path.realpath(__file__)))
-
-    candidates = []
-    for pattern in SITE_DIR_PATTERNS:
-        candidates.extend(glob.glob(os.path.join(prefix, pattern)))
-
-    # A prefix can hold a directory for more than one interpreter version.
-    # The running one's comes first.
+    # The module is pure Python, so a directory belonging to another
+    # interpreter version would serve; the running one's is preferred.
     running = "python%d.%d" % sys.version_info[:2]
-    candidates.sort(key=lambda path: (running not in path.split(os.sep), path))
 
-    for path in candidates:
-        if os.path.isdir(os.path.join(path, module)):
-            return path
+    directory = os.path.dirname(os.path.realpath(__file__))
+    for _ in range(PREFIX_SEARCH_DEPTH):
+        directory = os.path.dirname(directory)
+
+        candidates = []
+        for pattern in SITE_DIR_PATTERNS:
+            # The directory is a path, not a pattern: one named with a glob
+            # metacharacter stands for itself.
+            candidates.extend(
+                glob.glob(os.path.join(glob.escape(directory), pattern)))
+        candidates.sort(
+            key=lambda path: (running not in path.split(os.sep), path))
+
+        for path in candidates:
+            if os.path.isdir(os.path.join(path, module)):
+                return path
     return None
 
 
@@ -70,12 +81,11 @@ try:
     from pcapdump.pcapdump import *
 except ImportError:
     # Only once the plain import has failed, so an install whose module the
-    # interpreter already finds keeps the sys.path it has. If the module is
-    # not under the prefix either, the second import reports it as the first
-    # one would have.
+    # interpreter already finds keeps the sys.path it has.
     site_dir = site_dir_for("pcapdump")
-    if site_dir is not None:
-        sys.path.insert(0, site_dir)
+    if site_dir is None:
+        raise
+    sys.path.insert(0, site_dir)
     from pcapdump.pcapdump import *
 
 DLT_EN10MB = 1

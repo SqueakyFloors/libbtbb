@@ -2,8 +2,9 @@ This directory contains supplemental tools for working with pcap files produced
 by libbtbb.  (Actually libbtbb doesn't produce such files by itself at this
 time, but you can produce them with the Ubertooth tools.
 
-These tools are installed with libbtbb unless the build is configured with
-ENABLE_PYTHON=OFF, and can also be used right out of this directory.
+These tools are installed with libbtbb when the build finds python3 and is not
+configured with ENABLE_PYTHON=OFF; the pcapdump module also needs pip.  They
+can be used right out of this directory too.
 
 pcapdump: a Python module for pcap
 

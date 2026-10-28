@@ -89,7 +89,7 @@ if(BUILD_TESTING)
 	         -DBINDIR=${INSTALL_DEFAULT_BINDIR}
 	         -DPREFIX=${CMAKE_CURRENT_BINARY_DIR}/install-prefix-test
 	         -P ${CMAKE_CURRENT_SOURCE_DIR}/test_install_prefix.cmake)
-	set_tests_properties(btaptap_install_prefix PROPERTIES TIMEOUT 120)
+	set_tests_properties(btaptap_install_prefix PROPERTIES TIMEOUT 60)
 endif()
 
 # DESTDIR is how a packager stages an install under a temporary root, and
