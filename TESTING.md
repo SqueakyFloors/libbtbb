@@ -10,7 +10,7 @@ Specification's own published sample data, and they run on every push and pull
 request on Linux and macOS, plain and under AddressSanitizer and
 UndefinedBehaviorSanitizer.
 
-They found 61 defects — what you would expect of decoders nothing had
+They found 63 defects — what you would expect of decoders nothing had
 exercised: packet types that never produced a payload at all, a capture file
 whose connection parameters all belonged to other parts of the packet, buffers
 written and read past their ends, and hop predictions for channels the piconet
@@ -204,6 +204,8 @@ vectors.
 | An unsupported data link layer was reported once per packet, and the run still exited 0 | a capture from the Ubertooth tools, whose link type `btaptap` does not read, printed one line per packet and reported success | `btaptap`, a `DLT_BLUETOOTH_BREDR_BB` capture | #64 | #55 |
 | `PcapDumper` joined the bytes of its file and record headers with `''.join()` | the half of the `pcapdump` module the README offers could not write a capture at all | `btaptap`'s module cases, which write a capture and read it back | #64 | #55 |
 | `PcapReader` built a record's timestamp by writing the fraction-of-a-second field after the decimal point, `float("%s.%s")`, which is only right when the field is written in as many digits as it is wide | a fraction starting with a zero came out up to a second late: 5 microseconds past the second read as half a second, and one record in ten of a nanosecond capture, where the fraction is below 0.1 s, was wrong | `btaptap`'s timestamp cases, a microsecond and a nanosecond capture | #64 | #55 |
+| `PcapReader` answered "end of capture" for a record header it had only part of, and handed back a frame shorter than the record said it was | a capture a tool was killed in the middle of writing was reported as read right through: `btaptap` stopped there, said nothing and exited 0 | `btaptap`, captures cut off mid-record-header and mid-record | #64 | #55 |
+| `PcapDumper` wrote a record's two lengths the wrong way round, the length the packet was in the field that says how much of it is in the file | a capture holding the first bytes of longer packets, which is the one thing that field is for, claimed more bytes per record than it held, and a reader walking it either read into the next record or rejected it as corrupt | `btaptap`'s snapshot-length case, two records read back | #64 | #55 |
 | `PcapReader` never looked at which libpcap magic number a capture holds: it took any file whose first four bytes were not the byte-swapped one as a little-endian microsecond capture, so its "not a libpcap capture" could not be reached and a nanosecond capture, which is what this library's own writer produces, was not told apart | a file that is not a capture was read as one and failed later with a traceback out of the reader, and scaling the fraction field at all needed the unit the magic number carries | `btaptap`, a text file, a file shorter than a capture header, and a nanosecond capture read back | #64 | #55 |
 | `lib/src/CMakeLists.txt` guarded "no library at all" with an option name nothing sets | `cmake -DBUILD_SHARED_LIB=OFF`, the obvious way to ask for a static build, configured a tree with no library in it and failed halfway through the build with `ld: library 'btbb-static' not found` | `library_config`, and a static-only job in CI | #64 | #62 |
 

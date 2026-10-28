@@ -23,7 +23,11 @@ libbtbb (2020-12-R1+fork5) unstable; urgency=low
     nanosecond-resolution files this library's own writer produces - the
     Ubertooth tools' pcap files - are read as nanoseconds, and a file that is
     not a capture at all is refused rather than read as one, which the magic
-    number check could not do before.
+    number check could not do before. A capture a tool was killed in the
+    middle of writing is reported too, where part of a record read as the end
+    of the capture, and the module's writer puts a record's two lengths in the
+    order the format has them: a capture holding the first bytes of longer
+    packets had them the wrong way round.
   * A build asking for no library is refused while configuring. The check for
     it named an option that does not exist, so "cmake -DBUILD_SHARED_LIB=OFF"
     - the obvious way to ask for a static build, which also has to set

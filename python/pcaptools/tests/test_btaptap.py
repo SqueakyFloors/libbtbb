@@ -325,6 +325,47 @@ class PcapModule(CaptureFileTestCase):
     own and which also writes them.
     '''
 
+    def test_a_packet_longer_than_the_snapshot(self):
+        # What orig_len is for: the file holds the first bytes of a longer
+        # packet. The two lengths go into the record in the format's order,
+        # the included one first, or a reader reads past the record.
+        path = self.path("snap.pcap")
+
+        dumper = PcapDumper(DLT_EN10MB, path)
+        dumper.pcap_dump(b"abc", ts_sec=1700000000, ts_usec=0, orig_len=10)
+        dumper.pcap_dump(b"de", ts_sec=1700000001, ts_usec=0, orig_len=10)
+        dumper.close()
+
+        reader = PcapReader(path)
+        self.addCleanup(reader.close)
+        header, packet = reader.pnext()
+        self.assertEqual(packet, b"abc")
+        self.assertEqual(header[1], 3)
+        self.assertEqual(header[2], 10)
+        self.assertEqual(reader.pnext()[1], b"de")
+
+    def test_capture_cut_off_mid_record(self):
+        # A capture a tool was killed in the middle of writing: the
+        # keystrokes found so far are kept, and the run says the capture was
+        # not read through rather than reporting it as finished.
+        for cut in (5, 16 + 5):
+            with self.subTest(cut=cut):
+                path = self.path("cut%d.pcap" % cut)
+                pcap_file(path, DLT_EN10MB,
+                          [dm1_frame(l2cap_keystroke([0x04]))])
+                with open(path, "rb") as fh:
+                    whole = fh.read()
+                with open(path, "wb") as fh:
+                    # A record header, or a record, left half written.
+                    fh.write(whole + bytes(cut))
+
+                done = btaptap("-r", path)
+                self.assertEqual(done.stdout, "a\n")
+                self.assertIn("error: ", done.stderr)
+                self.assertIn("partial", done.stderr)
+                self.assertNotIn("Traceback", done.stderr)
+                self.assertEqual(done.returncode, 1)
+
     def test_write_and_read_back(self):
         path = self.path("written.pcap")
         packets = [b"\x01\x02\x03", bytes(range(40))]

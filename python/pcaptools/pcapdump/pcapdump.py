@@ -111,19 +111,26 @@ class PcapReader:
     def pcap_next(self):
         '''
         Retrieves the next packet from the capture file.  Returns a list of
-        [Hdr, packet] where Hdr is a list of [timestamp, snaplen, plen] and
-        packet is a string of the payload content.  Returns None at the end
-        of the packet capture.
+        [Hdr, packet] where Hdr is a list of [timestamp, the length in the
+        file, the length the packet was] and packet is the bytes of the
+        payload content.  Returns [None, None] at the end of the packet
+        capture, and raises ValueError for a capture that cannot be read
+        through.
         @rtype: List
         '''
         # Read the next header block
         PCAPH_RECLEN = 16
         rechdrdata = self.__fh.read(PCAPH_RECLEN)
 
-        try:
-            rechdrtmp = struct.unpack("%sIIII"%self.__endflag, rechdrdata)
-        except struct.error:
+        # Nothing left is the end of the capture. Some of a record header is
+        # a capture that was cut off while it was being written, which the
+        # caller is told about rather than left to read as the end.
+        if len(rechdrdata) == 0:
             return [None,None]
+        if len(rechdrdata) < PCAPH_RECLEN:
+            raise ValueError('Capture ends in a partial libpcap record header')
+
+        rechdrtmp = struct.unpack("%sIIII"%self.__endflag, rechdrdata)
 
         rechdr = [
                 # The record holds whole seconds and a fraction of a second
@@ -138,6 +145,9 @@ class PcapReader:
 
         # Read the included packet length
         frame = self.__fh.read(rechdr[1])
+        if len(frame) < rechdr[1]:
+            raise ValueError('Capture ends in a partial libpcap record: %d of '
+                             '%d bytes' % (len(frame), rechdr[1]))
         return [rechdr, frame]
 
 
@@ -195,11 +205,13 @@ class PcapDumper:
 
         plen = len(packet)
 
+        # The record's two lengths, in the order the format has them: how
+        # much of the packet is in the file, then how long the packet was.
         self.__fh.write(b''.join([
             struct.pack("I", ts_sec),
             struct.pack("I", ts_usec),
-            struct.pack("I", orig_len),
             struct.pack("I", plen),
+            struct.pack("I", orig_len),
             packet
             ]))
 
