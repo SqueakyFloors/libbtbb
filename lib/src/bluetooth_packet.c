@@ -43,6 +43,18 @@
 /* Default access code, used for calculating syndromes */
 #define DEFAULT_AC 0xcc7b7268ff614e1bULL
 
+/*
+ * The packet header is 18 bits, and Vol 2, Part B, Section 7.2 runs the
+ * whitening generator over the header and the payload without reinitializing
+ * it in between, so a payload continues this far into the sequence.
+ */
+#define HEADER_WHITENING_BITS 18
+
+/* The DV packet's voice field comes before its data field (Vol 2, Part B,
+ * Section 6.5.2.4), and Section 7.2 whitens it along with the rest, so the
+ * data field continues this much further into the sequence. */
+#define DV_VOICE_BITS 80
+
 /* index into whitening data array */
 static const uint8_t INDICES[] = {99, 85, 17, 50, 102, 58, 108, 45, 92, 62, 32, 118, 88, 11, 80, 2, 37, 69, 55, 8, 20, 40, 74, 114, 15, 106, 30, 78, 53, 72, 28, 26, 68, 7, 39, 113, 105, 77, 71, 25, 84, 49, 57, 44, 61, 117, 10, 1, 123, 124, 22, 125, 111, 23, 42, 126, 6, 112, 76, 24, 48, 43, 116, 0};
 
@@ -370,6 +382,12 @@ int promiscuous_packet_search(char *stream, int search_length, uint32_t *lap,
 	char *symbols;
 	int count, offset = -1;
 
+	/* With no offset to search there is no sync word to filter, and the
+	 * caller has promised nothing about the symbols the filter below
+	 * would read. */
+	if (search_length < 1)
+		return -1;
+
 	/* Barker code at end of sync word (includes
 	 * MSB of LAP) is used as a rough filter.
 	 */
@@ -467,6 +485,13 @@ void btbb_packet_set_data(btbb_packet *pkt, char *data, int length,
 {
 	int i;
 
+	/* The symbol count is stored unsigned, so a negative one would come
+	 * back out as a very large count and tell every decoder there are
+	 * symbols here that the caller never provided. A caller that worked
+	 * one out by subtraction can land here with one.
+	 */
+	if (length < 0)
+		length = 0;
 	if (length > MAX_SYMBOLS)
 		length = MAX_SYMBOLS;
 	for (i = 0; i < length; i++)
@@ -647,6 +672,17 @@ static char *unfec23(char *input, int length)
 }
 
 
+/*
+ * The number of symbols a payload of this many bits arrives in when it is
+ * carried by the rate 2/3 FEC code. The code sends 15 symbols for every 10
+ * bits and pads the last block out, so the symbols a payload needs are half
+ * again as many as its bits, rounded up to a whole block.
+ */
+static int fec23_symbols(int bits)
+{
+	return ((bits + 9) / 10) * 15;
+}
+
 /* Remove the whitening from an air order array */
 static void unwhiten(char* input, char* output, int clock, int length, int skip, btbb_packet* pkt)
 {
@@ -772,6 +808,12 @@ static int payload_crc(btbb_packet* pkt)
 	uint16_t crc;   /* CRC calculated from payload data */
 	uint16_t check; /* CRC supplied by packet */
 
+	/* A payload cannot be shorter than the two byte CRC it carries plus
+	 * the byte the CRC covers, so below that there is no CRC to check and
+	 * reading one would read from before the payload. */
+	if (pkt->payload_length < 3)
+		return 0;
+
 	crc = crcgen(pkt->payload, (pkt->payload_length - 2) * 8, pkt->UAP);
 	check = air_to_host16(&pkt->payload[(pkt->payload_length - 2) * 8], 16);
 
@@ -787,15 +829,24 @@ int fhs(int clock, btbb_packet* pkt)
 
 	pkt->payload_length = 20;
 
-	if (size < pkt->payload_length * 12)
+	if (size < fec23_symbols(pkt->payload_length * 8)) {
+		/* the capture ends before the payload does, so there is
+		 * nothing decoded to report */
+		pkt->payload_length = 0;
 		return 1; //FIXME should throw exception
+	}
 
 	char *corrected = unfec23(stream, pkt->payload_length * 8);
-	if (!corrected)
+	if (!corrected) {
+		/* a block the error correction could not put right, so
+		 * nothing is decoded to report */
+		pkt->payload_length = 0;
 		return 0;
+	}
 
 	/* try to unwhiten with known clock bits */
-	unwhiten(corrected, pkt->payload, clock, pkt->payload_length * 8, 18, pkt);
+	unwhiten(corrected, pkt->payload, clock, pkt->payload_length * 8,
+		 HEADER_WHITENING_BITS, pkt);
 	if (payload_crc(pkt)) {
 		free(corrected);
 		return 1000;
@@ -803,7 +854,8 @@ int fhs(int clock, btbb_packet* pkt)
 
 	/* try all 32 possible X-input values instead */
 	for (clock = 32; clock < 64; clock++) {
-		unwhiten(corrected, pkt->payload, clock, pkt->payload_length * 8, 18, pkt);
+		unwhiten(corrected, pkt->payload, clock,
+			 pkt->payload_length * 8, HEADER_WHITENING_BITS, pkt);
 		if (payload_crc(pkt)) {
 			free(corrected);
 			return 1000;
@@ -815,23 +867,36 @@ int fhs(int clock, btbb_packet* pkt)
 	return 0;
 }
 
-/* decode payload header, return value indicates success */
-static int decode_payload_header(char *stream, int clock, int header_bytes, int size, int fec, btbb_packet* pkt)
+/*
+ * Decode the payload header, return value indicates success.
+ *
+ * skip is how many whitening bits the packet has already used up. The
+ * whitening generator runs once over the header and the payload with no
+ * reinitialization in between (Bluetooth Core v5.4, Vol 2, Part B, Section
+ * 7.2), so for most packets the payload starts 18 bits in, after the header,
+ * and for a DV packet it starts after the voice field as well.
+ */
+static int decode_payload_header(char *stream, int clock, int header_bytes, int size, int fec, int skip, btbb_packet* pkt)
 {
+	/* nothing is decoded yet, so a caller that goes on to report a
+	 * payload after this fails does not report a length from whatever the
+	 * packet held before */
+	pkt->payload_length = 0;
+
 	if(header_bytes == 2)
 	{
 		if(size < 16)
 			return 0; //FIXME should throw exception
 		if(fec) {
-			if(size < 30)
+			if(size < fec23_symbols(16))
 				return 0; //FIXME should throw exception
 			char *corrected = unfec23(stream, 16);
 			if (!corrected)
 				return 0;
-			unwhiten(corrected, pkt->payload_header, clock, 16, 18, pkt);
+			unwhiten(corrected, pkt->payload_header, clock, 16, skip, pkt);
 			free(corrected);
 		} else {
-			unwhiten(stream, pkt->payload_header, clock, 16, 18, pkt);
+			unwhiten(stream, pkt->payload_header, clock, 16, skip, pkt);
 		}
 		/* payload length is payload body length + 2 bytes payload header + 2 bytes CRC */
 		pkt->payload_length = air_to_host16(&pkt->payload_header[3], 10) + 4;
@@ -839,18 +904,22 @@ static int decode_payload_header(char *stream, int clock, int header_bytes, int 
 		if(size < 8)
 			return 0; //FIXME should throw exception
 		if(fec) {
-			if(size < 15)
+			if(size < fec23_symbols(8))
 				return 0; //FIXME should throw exception
 			char *corrected = unfec23(stream, 8);
 			if (!corrected)
 				return 0;
-			unwhiten(corrected, pkt->payload_header, clock, 8, 18, pkt);
+			unwhiten(corrected, pkt->payload_header, clock, 8, skip, pkt);
 			free(corrected);
 		} else {
-			unwhiten(stream, pkt->payload_header, clock, 8, 18, pkt);
+			unwhiten(stream, pkt->payload_header, clock, 8, skip, pkt);
 		}
-		/* payload length is payload body length + 1 byte payload header + 2 bytes CRC */
-		pkt->payload_length = air_to_host8(&pkt->payload_header[3], 5) + 3;
+		/* payload length is payload body length + 1 byte payload
+		 * header + 2 bytes CRC, except for the AUX1 packet, which has
+		 * no CRC (Vol 2, Part B, Section 6.5.4.7) */
+		pkt->payload_length = air_to_host8(&pkt->payload_header[3], 5) + 1;
+		if (pkt->packet_type != PACKET_TYPE_AUX1)
+			pkt->payload_length += 2;
 	}
 	/* Try to set the max payload length to a sensible value,
 	 * especially when using strange data
@@ -867,6 +936,10 @@ static int decode_payload_header(char *stream, int clock, int header_bytes, int 
 		case PACKET_TYPE_DV:
 			/* assuming DV but could be 3-DH1 (87) */
 			max_length = 12; /* + 10bytes of voice data */
+			break;
+		case PACKET_TYPE_AUX1:
+			/* 30 bytes of payload header and body, no CRC */
+			max_length = 30;
 			break;
 		case PACKET_TYPE_DM3:
 			/* assuming DM3 but could be 2-DH3 (371) */
@@ -905,14 +978,19 @@ int DM(int clock, btbb_packet* pkt)
 	char *stream = pkt->symbols + 122;
 	/* number of symbols remaining after access code and packet header */
 	int size = pkt->length - 122;
+	/* whitening bits the packet header has already used up */
+	int skip = HEADER_WHITENING_BITS;
 
 	switch(pkt->packet_type)
 	{
 		case PACKET_TYPE_DV:
-			/* skip 80 voice bits, then treat the rest like a DM1 */
-			stream += 80;
-			size -= 80;
+			/* skip the voice bits, then treat the rest like a DM1 */
+			stream += DV_VOICE_BITS;
+			size -= DV_VOICE_BITS;
 			header_bytes = 1;
+			/* the voice field is whitened too, so the data field
+			 * continues that much further into the sequence */
+			skip += DV_VOICE_BITS;
 			/* I don't think the length of the voice field ("synchronous data
 			 * field") is included in the length indicated by the payload
 			 * header in the data field ("asynchronous data field"), but I
@@ -933,20 +1011,29 @@ int DM(int clock, btbb_packet* pkt)
 		default: /* not a DM1/3/5 or DV */
 			return 0;
 	}
-	if(!decode_payload_header(stream, clock, header_bytes, size, 1, pkt))
+	if(!decode_payload_header(stream, clock, header_bytes, size, 1, skip, pkt))
 		return 0;
 	/* check that the length indicated in the payload header is within spec */
 	if(pkt->payload_length > max_length)
 		/* could be encrypted */
 		return 1;
 	bitlength = pkt->payload_length*8;
-	if(bitlength > size)
+	if(fec23_symbols(bitlength) > size) {
+		/* the capture ends before the payload does: the rate 2/3 FEC
+		 * this type carries needs half again as many symbols as the
+		 * payload has bits */
+		pkt->payload_length = 0;
 		return 1; //FIXME should throw exception
+	}
 
 	char *corrected = unfec23(stream, bitlength);
-	if (!corrected)
+	if (!corrected) {
+		/* a block the error correction could not put right, so
+		 * nothing is decoded to report */
+		pkt->payload_length = 0;
 		return 0;
-	unwhiten(corrected, pkt->payload, clock, bitlength, 18, pkt);
+	}
+	unwhiten(corrected, pkt->payload, clock, bitlength, skip, pkt);
 	free(corrected);
 
 	if (payload_crc(pkt))
@@ -986,20 +1073,26 @@ int DH(int clock, btbb_packet* pkt)
 		default: /* not a DH1/3/5 */
 			return 0;
 	}
-	if(!decode_payload_header(stream, clock, header_bytes, size, 0, pkt))
+	if(!decode_payload_header(stream, clock, header_bytes, size, 0,
+				  HEADER_WHITENING_BITS, pkt))
 		return 0;
 	/* check that the length indicated in the payload header is within spec */
 	if(pkt->payload_length > max_length)
 		/* could be encrypted */
 		return 1;
 	bitlength = pkt->payload_length*8;
-	if(bitlength > size)
+	if(bitlength > size) {
+		/* the capture ends before the payload does, so there is
+		 * nothing decoded to report */
+		pkt->payload_length = 0;
 		return 1; //FIXME should throw exception
+	}
 
-	unwhiten(stream, pkt->payload, clock, bitlength, 18, pkt);
+	unwhiten(stream, pkt->payload, clock, bitlength,
+		 HEADER_WHITENING_BITS, pkt);
 
 	/* AUX1 has no CRC */
-	if (pkt->packet_type == 9)
+	if (pkt->packet_type == PACKET_TYPE_AUX1)
 		return 2;
 
 	if (payload_crc(pkt))
@@ -1009,7 +1102,20 @@ int DH(int clock, btbb_packet* pkt)
 	return 2;
 }
 
-int EV3(int clock, btbb_packet* pkt)
+/*
+ * Find the length of an eSCO payload that carries no FEC, and decode it.
+ *
+ * The length is agreed when the link is set up and is not carried in the
+ * packet (Vol 2, Part B, Section 6.5.3), so the only way to find it is to
+ * unwhiten one byte at a time and see which length the CRC agrees with. A
+ * length is worth trying as soon as that many bytes have been decoded, so the
+ * byte decoded in each pass is the last one its length needs.
+ *
+ * maxlength is the longest payload the packet type allows, in bytes including
+ * the CRC. The shortest is one information byte and the two byte CRC, which
+ * payload_crc() enforces, so no length below three is tried here either.
+ */
+static int esco_payload(int clock, btbb_packet* pkt, int maxlength)
 {
 	/* skip the access code and packet header */
 	char *stream = pkt->symbols + 122;
@@ -1017,27 +1123,47 @@ int EV3(int clock, btbb_packet* pkt)
 	/* number of symbols remaining after access code and packet header */
 	int size = pkt->length - 122;
 
-	/* maximum payload length is 30 bytes + 2 bytes CRC */
-	int maxlength = 32;
-
 	/* number of bits we have decoded */
 	int bits;
 
-	/* check CRC for any integer byte length up to maxlength */
-	for (pkt->payload_length = 0;
-			pkt->payload_length < maxlength; pkt->payload_length++) {
+	for (pkt->payload_length = 1;
+			pkt->payload_length <= maxlength; pkt->payload_length++) {
 
-		bits = pkt->payload_length * 8;
+		bits = (pkt->payload_length - 1) * 8;
 
 		/* unwhiten next byte */
-		if ((bits + 8) > size)
+		if ((bits + 8) > size) {
+			/*
+			 * The capture ran out, so the bytes decoded so far are
+			 * all the payload there is to report. They are
+			 * reported even below the shortest length this type
+			 * carries, unlike a payload given up on: this says
+			 * only that the capture stopped, so the bytes are
+			 * real and the rest of the packet was simply never
+			 * recorded.
+			 */
+			pkt->payload_length = bits / 8;
 			return 1; //FIXME should throw exception
-		unwhiten(stream, pkt->payload + bits, clock, 8, 18 + bits, pkt);
+		}
+		unwhiten(stream + bits, pkt->payload + bits, clock, 8,
+			 HEADER_WHITENING_BITS + bits, pkt);
 
-		if ((pkt->payload_length > 2) && (payload_crc(pkt)))
-				return 10;
+		if (payload_crc(pkt))
+			return 10;
 	}
+	/* no length matched, so report the longest, which is as far as the
+	 * search decoded; the length the loop ended on is one byte past it */
+	pkt->payload_length = maxlength;
 	return 2;
+}
+
+int EV3(int clock, btbb_packet* pkt)
+{
+	/* 30 information bytes and a two byte CRC
+	 * (Vol 2, Part B, Section 6.5.3.1) */
+	int maxbytes = 30 + 2;
+
+	return esco_payload(clock, pkt, maxbytes);
 }
 
 int EV4(int clock, btbb_packet* pkt)
@@ -1050,80 +1176,75 @@ int EV4(int clock, btbb_packet* pkt)
 	/* number of symbols remaining after access code and packet header */
 	int size = pkt->length - 122;
 
-	/*
-	 * maximum payload length is 120 bytes + 2 bytes CRC
-	 * after FEC2/3, this results in a maximum of 1470 symbols
-	 */
-	int maxlength = 1470;
+	/* 120 information bytes and a two byte CRC (Vol 2, Part B, Section
+	 * 6.5.3.2), which rate 2/3 FEC turns into 98 blocks of 15 symbols */
+	int maxbytes = 120 + 2;
+	int maxsymbols = fec23_symbols(maxbytes * 8);
 
-	/*
-	 * minumum payload length is 1 bytes + 2 bytes CRC
-	 * after FEC2/3, this results in a minimum of 45 symbols
-	 */
-	int minlength = 45;
+	/* the shortest payload is one information byte and the two byte CRC,
+	 * which comes to 45 symbols */
+	int minbytes = 3;
+	int minsymbols = fec23_symbols(minbytes * 8);
 
 	int syms = 0; /* number of symbols we have decoded */
 	int bits = 0; /* number of payload bits we have decoded */
 
-	pkt->payload_length = 1;
+	pkt->payload_length = minbytes;
 
-	while (syms < maxlength) {
+	while (syms < maxsymbols) {
 
 		/* unfec/unwhiten next block (15 symbols -> 10 bits) */
-		if (syms + 15 > size)
+		if (syms + 15 > size) {
+			/* the capture ran out partway through a block, so only
+			 * whole bytes before it are a payload to report */
+			pkt->payload_length = bits / 8;
 			return 1; //FIXME should throw exception
+		}
 		corrected = unfec23(stream + syms, 10);
 		if (!corrected) {
-			free(corrected);
-			if (syms < minlength)
+			if (syms < minsymbols) {
+				/* what is here is shorter than the shortest
+				 * payload this type carries, so it is not one
+				 * of these packets and there is no payload to
+				 * report */
+				pkt->payload_length = 0;
 				return 0;
-			else
-				return 1;
+			}
+			/* this block is lost, so the payload ends before it */
+			pkt->payload_length = bits / 8;
+			return 1;
 		}
-		unwhiten(corrected, pkt->payload + bits, clock, 10, 18 + bits, pkt);
+		unwhiten(corrected, pkt->payload + bits, clock, 10,
+			 HEADER_WHITENING_BITS + bits, pkt);
 		free(corrected);
 
-		/* check CRC one byte at a time */
+		syms += 15;
+		bits += 10;
+
+		/*
+		 * Same search as esco_payload(), a block at a time: try the
+		 * CRC at every length the bits decoded so far can hold, this
+		 * block's included.
+		 */
 		while (pkt->payload_length * 8 <= bits) {
 			if (payload_crc(pkt))
 				return 10;
 			pkt->payload_length++;
 		}
-		syms += 15;
-		bits += 10;
 	}
+	/* no length matched, so report the longest, which is as far as the
+	 * search decoded; the length the loop ended on is one byte past it */
+	pkt->payload_length = maxbytes;
 	return 2;
 }
 
 int EV5(int clock, btbb_packet* pkt)
 {
-	/* skip the access code and packet header */
-	char *stream = pkt->symbols + 122;
+	/* 180 information bytes and a two byte CRC
+	 * (Vol 2, Part B, Section 6.5.3.3) */
+	int maxbytes = 180 + 2;
 
-	/* number of symbols remaining after access code and packet header */
-	int size = pkt->length - 122;
-
-	/* maximum payload length is 180 bytes + 2 bytes CRC */
-	int maxlength = 182;
-
-	/* number of bits we have decoded */
-	int bits;
-
-	/* check CRC for any integer byte length up to maxlength */
-	for (pkt->payload_length = 0;
-			pkt->payload_length < maxlength; pkt->payload_length++) {
-
-		bits = pkt->payload_length * 8;
-
-		/* unwhiten next byte */
-		if ((bits + 8) > size)
-			return 1; //FIXME should throw exception
-		unwhiten(stream, pkt->payload + bits, clock, 8, 18 + bits, pkt);
-
-		if ((pkt->payload_length > 2) && (payload_crc(pkt)))
-				return 10;
-	}
-	return 2;
+	return esco_payload(clock, pkt, maxbytes);
 }
 
 /* HV packet type payload parser */
@@ -1135,10 +1256,11 @@ int HV(int clock, btbb_packet* pkt)
 	int size = pkt->length - 122;
 
 	pkt->payload_header_length = 0;
-	if(size < 240) {
-		pkt->payload_length = 0;
+	/* nothing is decoded yet, so each case below sets the length once it
+	 * has decoded a payload and the failure paths report none */
+	pkt->payload_length = 0;
+	if(size < 240)
 		return 1; //FIXME should throw exception
-	}
 
 	switch (pkt->packet_type) {
 		case PACKET_TYPE_HV1:
@@ -1148,7 +1270,9 @@ int HV(int clock, btbb_packet* pkt)
 				return 0;
 			pkt->payload_length = 10;
 			btbb_packet_set_flag(pkt, BTBB_HAS_PAYLOAD, 1);
-			unwhiten(corrected, pkt->payload, clock, pkt->payload_length*8, 18, pkt);
+			unwhiten(corrected, pkt->payload, clock,
+				 pkt->payload_length*8,
+				 HEADER_WHITENING_BITS, pkt);
 			}
 			break;
 		case PACKET_TYPE_HV2:
@@ -1158,14 +1282,18 @@ int HV(int clock, btbb_packet* pkt)
 				return 0;
 			pkt->payload_length = 20;
 			btbb_packet_set_flag(pkt, BTBB_HAS_PAYLOAD, 1);
-			unwhiten(corrected, pkt->payload, clock, pkt->payload_length*8, 18, pkt);
+			unwhiten(corrected, pkt->payload, clock,
+				 pkt->payload_length*8,
+				 HEADER_WHITENING_BITS, pkt);
 			free(corrected);
 			}
 			break;
 		case PACKET_TYPE_HV3:
 			pkt->payload_length = 30;
 			btbb_packet_set_flag(pkt, BTBB_HAS_PAYLOAD, 1);
-			unwhiten(stream, pkt->payload, clock, pkt->payload_length*8, 18, pkt);
+			unwhiten(stream, pkt->payload, clock,
+				 pkt->payload_length*8,
+				 HEADER_WHITENING_BITS, pkt);
 			break;
 	}
 
@@ -1181,6 +1309,10 @@ uint8_t try_clock(int clock, btbb_packet* pkt)
 	/* 18 bit packet header */
 	char header[18];
 	char unwhitened[18];
+
+	/* check that we have enough symbols */
+	if (pkt->length < 122)
+		return 0;
 
 	if (!unfec13(stream, header, 18))
 		return 0;
@@ -1201,6 +1333,10 @@ int btbb_decode_header(btbb_packet* pkt)
 	/* 18 bit packet header */
 	char header[18];
 	uint8_t UAP;
+
+	/* check that we have enough symbols */
+	if (pkt->length < 122)
+		return 0;
 
 	if (btbb_packet_get_flag(pkt, BTBB_CLK6_VALID) && unfec13(stream, header, 18)) {
 		unwhiten(header, pkt->packet_header, pkt->clkn, 18, 0, pkt);

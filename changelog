@@ -40,8 +40,30 @@ libbtbb (2020-12-R1+fork5) unstable; urgency=low
     found and CLK1-27 being found, so a caller reading it in that window got a
     number in the wrong unit; it reads 0 there now. No tool reads it before
     following a piconet.
+  * AUX1 payloads decode. The payload header's length was being thrown away
+    for this packet type, so every AUX1 packet reported a payload of 0 bytes.
+  * EV3, EV4 and EV5 payloads decode. The eSCO types carry no length in the
+    packet, and the search for it re-read the first byte of the payload for
+    every byte of it (EV3 and EV5) or checked the CRC at a length the payload
+    cannot have, reading before the start of the payload (EV4). None of the
+    three could decode a payload at the longest length its type allows either.
+  * A DV packet's data field decodes. It was being dewhitened with the 80 bits
+    of whitening that belong to the packet's voice field, so the payload
+    header's length, the data and the CRC were all wrong.
+  * A payload shorter than the CRC it would carry is no longer reported as
+    having passed a CRC check. There is nothing to check at that length, and
+    the check was reading the CRC from before the payload.
+  * A packet cut short by the end of a capture no longer decodes a payload, or
+    a packet header, out of symbols the capture did not hold.
+  * A packet whose payload was cut short, or lost to noise, now reports the
+    bytes that were decoded, or none at all, instead of the length its payload
+    header claimed.
+  * The access code search no longer reads part of a sync word when it is
+    given no offsets to search. The length its caller has to provide is now
+    documented as the one it actually reads, 63 symbols past the search
+    window rather than 72.
 
- -- Russell Wagner <152923636+SqueakyFloors@users.noreply.github.com>  29 Oct 2026 03:00:00 -0700
+ -- Russell Wagner <152923636+SqueakyFloors@users.noreply.github.com>  27 Oct 2026 21:00:00 -0700
 
 libbtbb (2020-12-R1+fork4) unstable; urgency=low
   * LE packets from Bluetooth 4.2 and later devices keep their whole payload.

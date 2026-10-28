@@ -80,14 +80,21 @@ btbb_packet *btbb_packet_new(void);
 void btbb_packet_ref(btbb_packet *pkt);
 void btbb_packet_unref(btbb_packet *pkt);
 
-/* Search for a packet with specified LAP (or LAP_ANY). The stream
- * must be at least of length serch_length + 72. Limit to
+/* Search for a packet with specified LAP (or LAP_ANY). Limit to
  * 'max_ac_errors' bit errors.
  *
+ * Every one of the first 'search_length' symbols of 'stream' is tried
+ * as the start of the 64 symbol sync word, so 'stream' must hold
+ * search_length + 63 symbols, and nothing at all for a search_length
+ * of zero, which reads none of it. The search reads no further than
+ * that; decoding a packet it finds needs the rest of the packet, which
+ * the caller passes separately to btbb_packet_set_data().
+ *
  * Returns offset into 'stream' at which packet was found. If no
- * packet was found, returns a negative number. If LAP_ANY was
- * specified, fills lap. 'ac_errors' must be set as an input, replaced
- * by actual number of errors on output. */
+ * packet was found, returns a negative number. On a match a packet is
+ * allocated at *pkt if *pkt is NULL, and filled in with the LAP and
+ * the number of access code bit errors, which the caller reads back
+ * with btbb_packet_get_lap() and btbb_packet_get_ac_errors(). */
 int btbb_find_ac(char *stream,
 	       int search_length,
 	       uint32_t lap,
@@ -114,6 +121,11 @@ uint8_t btbb_packet_get_ac_errors(const btbb_packet *pkt);
 uint32_t btbb_packet_get_clkn(const btbb_packet *pkt);
 uint32_t btbb_packet_get_header_packed(const btbb_packet* pkt);
 
+/* Copy the symbols of a packet in. This is the length every decode
+ * works from, so a packet holding fewer symbols than a field needs is
+ * decoded as far as the symbols go and no further. A length below zero
+ * is taken as none, and one above the longest packet, 3125 symbols, as
+ * that. */
 void btbb_packet_set_data(btbb_packet *pkt,
 			  char *syms,      // Symbol data
 			  int length,      // Number of symbols
@@ -128,7 +140,10 @@ int btbb_packet_get_payload_length(const btbb_packet* pkt);
 /* Get a pointer to payload. */
 const char *btbb_get_payload(const btbb_packet* pkt);
 
-/* Pack the payload in to bytes */
+/* Pack the payload in to bytes. 'dst' must hold
+ * btbb_packet_get_payload_length(pkt) bytes, which is never more than
+ * 343, the longest payload any packet type has. Returns the number of
+ * bytes written. */
 int btbb_get_payload_packed(const btbb_packet* pkt, char *dst);
 
 uint8_t btbb_packet_get_type(const btbb_packet* pkt);
@@ -139,10 +154,14 @@ uint8_t btbb_packet_get_hec(const btbb_packet *pkt);
 /* Generate Sync Word from an LAP */
 uint64_t btbb_gen_syncword(const int LAP);
 
-/* decode the packet header */
+/* Decode the packet header. The access code and the header take the
+ * first 122 symbols of a packet, so this returns 0 for a packet given
+ * fewer than that. */
 int btbb_decode_header(btbb_packet* pkt);
 
-/* decode the packet header */
+/* Decode the packet payload. Decodes only what the symbols the packet
+ * was given hold: a payload the capture ended partway through is
+ * reported as the bytes that were decoded, or as none at all. */
 int btbb_decode_payload(btbb_packet* pkt);
 
 /* print packet information */
@@ -229,7 +248,13 @@ int btbb_pcapng_close(btbb_pcapng_handle * h);
 
 /* BLE support */
 typedef struct lell_packet lell_packet;
-/* decode and allocate LE packet */
+/* Decode and allocate an LE packet; *pkt is left NULL if the packet
+ * cannot be allocated. The _n form is the one to call: it takes the
+ * number of bytes 'stream' holds and reads no more than that, keeping
+ * whatever of the packet it was given and no further, and it stores at
+ * most 260 bytes, the longest LE packet. The form without a length
+ * reads 64 bytes, which is what it has always read and what every
+ * caller it has had provides. */
 void lell_allocate_and_decode(const uint8_t *stream, uint16_t phys_channel, uint32_t clk100ns, lell_packet **pkt);
 void lell_allocate_and_decode_n(const uint8_t *stream, size_t stream_len,
                                 uint16_t phys_channel, uint32_t clk100ns,

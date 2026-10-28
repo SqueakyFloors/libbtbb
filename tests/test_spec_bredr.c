@@ -50,39 +50,6 @@ static int failures = 0;
 		}                                                          \
 	} while (0)
 
-/*
- * A vector the library is known to get wrong, with the issue that tracks the
- * bug. It does not count as a failure while it fails, but it does count as
- * one once it starts passing, so that the fix has to come back here and turn
- * the line into a CHECK.
- */
-#define XFAIL(issue, cond)                                                 \
-	do {                                                               \
-		if (cond) {                                                \
-			printf("XPASS %s:%d: %s now passes; issue #%d is "  \
-			       "fixed, so make this a CHECK\n",            \
-			       __FILE__, __LINE__, #cond, (issue));        \
-			++failures;                                        \
-		} else {                                                   \
-			printf("xfail (#%d) %s:%d: %s\n", (issue),         \
-			       __FILE__, __LINE__, #cond);                 \
-		}                                                          \
-	} while (0)
-
-/*
- * Issue #17 is an out of bounds read, which a sanitizer build stops the
- * process on rather than letting it return a wrong answer, so the vector that
- * provokes it only runs where that is not fatal. The fix takes this back out.
- */
-#if defined(__has_feature)
-#  if __has_feature(undefined_behavior_sanitizer)
-#    define BOUNDS_CHECKED 1
-#  endif
-#endif
-#if defined(__SANITIZE_UNDEFINED__)
-#  define BOUNDS_CHECKED 1
-#endif
-
 /* ------------------------------------------------------------------ *
  * The specification's own implementations, used to build test packets
  * ------------------------------------------------------------------ */
@@ -277,6 +244,81 @@ static void test_access_code_search(void)
 			btbb_packet_unref(pkt);
 		}
 	}
+}
+
+/*
+ * btbb.h promises that the search reads search_length + 63 symbols and no
+ * more: each of the first search_length symbols is tried as the start of the
+ * 64 symbol sync word. These streams are allocated at exactly the length the
+ * header promises is enough, so in a sanitizer build a read past it stops the
+ * test.
+ */
+static void test_find_ac_reads_only_what_it_promises(void)
+{
+	uint64_t syncword = reverse64(ACCESS_CODES[2].sync_word); /* GIAC */
+	uint32_t lap = ACCESS_CODES[2].lap;
+	btbb_packet *pkt = NULL;
+	char *stream;
+	int i;
+
+	/* one offset to try: the sync word and nothing else */
+	stream = (char *) malloc(64);
+	CHECK(stream != NULL);
+	if (stream == NULL)
+		return;
+	for (i = 0; i < 64; i++)
+		stream[i] = (char) ((syncword >> i) & 1);
+
+	CHECK(btbb_find_ac(stream, 1, lap, 0, &pkt) == 0);
+	if (pkt != NULL) {
+		btbb_packet_unref(pkt);
+		pkt = NULL;
+	}
+	CHECK(btbb_find_ac(stream, 1, LAP_ANY, 0, &pkt) == 0);
+	if (pkt != NULL) {
+		btbb_packet_unref(pkt);
+		pkt = NULL;
+	}
+	free(stream);
+
+	/*
+	 * Several offsets to try, with the sync word at the last of them,
+	 * which is the offset that reaches the end of the stream.
+	 */
+	stream = (char *) malloc(8 + 63);
+	CHECK(stream != NULL);
+	if (stream == NULL)
+		return;
+	memset(stream, 0, 8 + 63);
+	for (i = 0; i < 64; i++)
+		stream[7 + i] = (char) ((syncword >> i) & 1);
+
+	CHECK(btbb_find_ac(stream, 8, lap, 0, &pkt) == 7);
+	if (pkt != NULL) {
+		btbb_packet_unref(pkt);
+		pkt = NULL;
+	}
+	CHECK(btbb_find_ac(stream, 8, LAP_ANY, 0, &pkt) == 7);
+	if (pkt != NULL) {
+		btbb_packet_unref(pkt);
+		pkt = NULL;
+	}
+	free(stream);
+
+	/*
+	 * No offset to try: there is no sync word to look at, so none of the
+	 * stream may be read, not even the symbols the rough filter on the
+	 * end of the sync word starts from.
+	 */
+	stream = (char *) malloc(1);
+	CHECK(stream != NULL);
+	if (stream == NULL)
+		return;
+	stream[0] = 0;
+	CHECK(btbb_find_ac(stream, 0, lap, 0, &pkt) < 0);
+	CHECK(btbb_find_ac(stream, 0, LAP_ANY, 0, &pkt) < 0);
+	CHECK(pkt == NULL);
+	free(stream);
 }
 
 /* ------------------------------------------------------------------ *
@@ -736,7 +778,10 @@ static const struct {
 	{ "DH3",  PACKET_TYPE_DH3,  2, 183, 1, 0, 187 },
 	{ "DM5",  PACKET_TYPE_DM5,  2, 224, 1, 1, 228 },
 	{ "DH5",  PACKET_TYPE_DH5,  2, 339, 1, 0, 343 },
-	{ "AUX1", PACKET_TYPE_AUX1, 1,  29, 0, 0,  30 }
+	{ "AUX1", PACKET_TYPE_AUX1, 1,  29, 0, 0,  30 },
+	/* a short AUX1 too: at the longest body the clamp would hide a length
+	 * that wrongly counted a CRC this type does not carry */
+	{ "AUX1", PACKET_TYPE_AUX1, 1,   9, 0, 0,  10 }
 };
 
 #define N_ACL_TYPES ((int) (sizeof(ACL_TYPES) / sizeof(ACL_TYPES[0])))
@@ -806,7 +851,7 @@ static void test_acl_payload_lengths(void)
 	for (row = 0; row < N_ACL_TYPES; row++) {
 		char payload[MAX_SYMBOLS];
 		char stream[MAX_SYMBOLS];
-		char packed[343];
+		char packed[MAX_PAYLOAD_LENGTH / 8];
 		uint16_t header_data;
 		uint8_t hec;
 		btbb_packet *pkt;
@@ -839,18 +884,9 @@ static void test_acl_payload_lengths(void)
 		printf("  %s: %d byte body, payload length %d\n",
 		       ACL_TYPES[row].name, ACL_TYPES[row].body,
 		       btbb_packet_get_payload_length(pkt));
-		if (ACL_TYPES[row].type == PACKET_TYPE_AUX1) {
-			/*
-			 * decode_payload_header() has no AUX1 case, so the
-			 * length it just read is clamped to zero.
-			 */
-			XFAIL(18, btbb_packet_get_payload_length(pkt) ==
-				  ACL_TYPES[row].payload_length);
-			btbb_packet_unref(pkt);
-			continue;
-		}
-
-		CHECK(rv == 10);
+		/* 10 is a CRC match; AUX1 has no CRC, so 2 is as good as it
+		 * gets for it */
+		CHECK(rv == (ACL_TYPES[row].has_crc ? 10 : 2));
 		CHECK(btbb_packet_get_payload_length(pkt) ==
 		      ACL_TYPES[row].payload_length);
 		CHECK(btbb_get_payload_packed(pkt, packed) ==
@@ -881,7 +917,8 @@ static void test_acl_payload_length_clamped(void)
 		{ PACKET_TYPE_DM3, 2, 999, 125 },
 		{ PACKET_TYPE_DH3, 2, 999, 187 },
 		{ PACKET_TYPE_DM5, 2, 999, 228 },
-		{ PACKET_TYPE_DH5, 2, 999, 343 }
+		{ PACKET_TYPE_DH5, 2, 999, 343 },
+		{ PACKET_TYPE_AUX1, 1, 31,  30 }
 	};
 	size_t row;
 
@@ -916,6 +953,404 @@ static void test_acl_payload_length_clamped(void)
 		      CASES[row].clamped);
 		btbb_packet_unref(pkt);
 	}
+}
+
+/*
+ * A capture that stops partway through an ACL payload holds no payload the
+ * decoder can read, so it must report none: btbb_decode_payload() marks the
+ * packet as having a payload whatever it returns, so a length left over from
+ * the payload header reaches the dump and the capture files as bytes nothing
+ * decoded.
+ *
+ * The rate 2/3 types are where the bound is easy to get wrong. Their payload
+ * arrives in half again as many symbols as it has bits, so a capture can hold
+ * as many symbols as the payload has bits and still be short of it.
+ */
+static void test_acl_truncated_capture(void)
+{
+	static const struct {
+		const char *name;
+		uint8_t type;
+		int header_bytes;
+		int body;
+		int fec23;
+	} CASES[] = {
+		{ "DM1", PACKET_TYPE_DM1, 1,  17, 1 },
+		{ "DH1", PACKET_TYPE_DH1, 1,  27, 0 },
+		{ "DM3", PACKET_TYPE_DM3, 2, 121, 1 },
+		{ "DH5", PACKET_TYPE_DH5, 2, 339, 0 }
+	};
+	size_t row;
+
+	for (row = 0; row < sizeof(CASES) / sizeof(CASES[0]); row++) {
+		char payload[MAX_SYMBOLS];
+		char stream[MAX_SYMBOLS];
+		uint16_t header_data;
+		int payload_symbols, full_length, cut, header_symbols;
+		const int clock = 0x2a;
+
+		payload_symbols = build_acl_payload(payload,
+						    CASES[row].header_bytes,
+						    CASES[row].body, 1,
+						    CASES[row].fec23, 0x47,
+						    clock);
+		header_data = (uint16_t) (1 | (CASES[row].type << 3) |
+					  (3 << 7));
+		full_length = build_packet(stream, 0x9e8b33, header_data,
+					   spec_hec(header_data, 0x47),
+					   payload, payload_symbols, clock, 1);
+
+		/*
+		 * The payload header itself takes this many symbols, half
+		 * again as many as its bits where the type carries error
+		 * correction. A capture without them is not a decode at all,
+		 * and the decoder has to say so rather than read a length out
+		 * of symbols that are not there.
+		 */
+		header_symbols = CASES[row].fec23
+			? fec23_symbols(CASES[row].header_bytes * 8)
+			: CASES[row].header_bytes * 8;
+
+		/* every length from no payload at all to one symbol short */
+		for (cut = 122; cut < full_length; cut++) {
+			btbb_packet *pkt = packet_for(stream, cut, 0x47,
+						      clock, 1);
+			int rv;
+
+			CHECK(pkt != NULL);
+			if (pkt == NULL)
+				return;
+			CHECK(btbb_decode_header(pkt) == 1);
+
+			rv = btbb_decode_payload(pkt);
+			if (cut - 122 < header_symbols)
+				CHECK(rv == 0);
+			if (rv == 10 ||
+			    btbb_packet_get_payload_length(pkt) != 0) {
+				printf("FAIL %s:%d: %s cut to %d of %d "
+				       "symbols decodes to %d and reports "
+				       "%d bytes\n", __FILE__, __LINE__,
+				       CASES[row].name, cut, full_length, rv,
+				       btbb_packet_get_payload_length(pkt));
+				++failures;
+			}
+			btbb_packet_unref(pkt);
+		}
+	}
+}
+
+/*
+ * Make one rate 2/3 FEC block uncorrectable. Two of a block's check symbols
+ * disagree with its data, which is neither the no-error case nor one of the
+ * single bit errors the code can put right, so unfec23() gives the block up.
+ */
+static void wreck_fec23_block(char *payload, int block)
+{
+	payload[block * 15 + 10] ^= 1;
+	payload[block * 15 + 11] ^= 1;
+}
+
+/*
+ * Leave a payload length behind in the packet, standing in for a previous
+ * decode of the same packet object. A clock sweep calls crc_check() once per
+ * candidate clock, so a decoder that reports a length it did not decode
+ * reports one of these.
+ */
+static void seed_stale_payload_length(btbb_packet *pkt)
+{
+	pkt->payload_length = 99;
+}
+
+/*
+ * A payload block the error correction cannot recover leaves nothing
+ * decoded, and the decoder has to report nothing rather than the length the
+ * payload header claimed. Noise does this far more often than a capture
+ * ending early, and during clock recovery crc_check() is called for each
+ * candidate clock in turn, so what is left in the payload buffer is the
+ * previous candidate's decode.
+ */
+static void test_uncorrectable_payload_fec(void)
+{
+	char payload[MAX_SYMBOLS];
+	char stream[MAX_SYMBOLS];
+	uint16_t header_data;
+	btbb_packet *pkt;
+	int payload_symbols, length, i;
+	const int clock = 0x2a;
+
+	/*
+	 * A DM1, whose payload header and body are both rate 2/3 coded. The
+	 * header is the first block, so wrecking that block and wrecking a
+	 * body block fail in different places.
+	 */
+	for (i = 0; i < 2; i++) {
+		const int block = i == 0 ? 0 : 3;
+
+		payload_symbols = build_acl_payload(payload, 1, 17, 1, 1,
+						    0x47, clock);
+		wreck_fec23_block(payload, block);
+
+		header_data = (uint16_t) (1 | (PACKET_TYPE_DM1 << 3) |
+					  (3 << 7));
+		length = build_packet(stream, 0x9e8b33, header_data,
+				      spec_hec(header_data, 0x47), payload,
+				      payload_symbols, clock, 1);
+		pkt = packet_for(stream, length, 0x47, clock, 1);
+		CHECK(pkt != NULL);
+		if (pkt == NULL)
+			return;
+		seed_stale_payload_length(pkt);
+		CHECK(btbb_decode_header(pkt) == 1);
+		CHECK(btbb_decode_payload(pkt) == 0);
+		CHECK(btbb_packet_get_payload_length(pkt) == 0);
+		btbb_packet_unref(pkt);
+	}
+
+	/* an FHS, 20 bytes under rate 2/3 FEC with no payload header */
+	{
+		char bits[20 * 8 + 10];
+		uint16_t crc;
+		int bit;
+
+		memset(bits, 0, sizeof(bits));
+		crc = crcgen(bits, 18 * 8, 0x47);
+		for (bit = 0; bit < 16; bit++)
+			bits[18 * 8 + bit] = (char) ((crc >> bit) & 1);
+		spec_whiten(bits, 20 * 8, clock, 18);
+		spec_fec23(bits, payload, 160);
+		wreck_fec23_block(payload, 5);
+
+		header_data = (uint16_t) (1 | (PACKET_TYPE_FHS << 3));
+		length = build_packet(stream, 0x9e8b33, header_data,
+				      spec_hec(header_data, 0x47), payload,
+				      240, clock, 1);
+		pkt = packet_for(stream, length, 0x47, clock, 1);
+		CHECK(pkt != NULL);
+		if (pkt == NULL)
+			return;
+		seed_stale_payload_length(pkt);
+		CHECK(btbb_decode_header(pkt) == 1);
+		CHECK(btbb_decode_payload(pkt) == 0);
+		CHECK(btbb_packet_get_payload_length(pkt) == 0);
+		btbb_packet_unref(pkt);
+	}
+
+	/*
+	 * The synchronous types: HV2 under rate 2/3, and HV1 under rate 1/3,
+	 * where the three symbols of a bit have to disagree often enough that
+	 * the decode gives up rather than take the majority.
+	 */
+	{
+		char bits[240];
+		int row;
+
+		for (row = 0; row < 2; row++) {
+			uint8_t type = row == 0 ? PACKET_TYPE_HV2
+						: PACKET_TYPE_HV1;
+			int bytes = row == 0 ? 20 : 10;
+
+			memset(bits, 0, sizeof(bits));
+			spec_whiten(bits, bytes * 8, clock, 18);
+			if (type == PACKET_TYPE_HV2) {
+				spec_fec23(bits, payload, 160);
+				wreck_fec23_block(payload, 5);
+			} else {
+				for (i = 0; i < 80; i++) {
+					payload[i * 3] = bits[i];
+					payload[i * 3 + 1] = bits[i];
+					payload[i * 3 + 2] = bits[i];
+				}
+				/* 20 of the 80 bits is where unfec13() gives
+				 * up, so disagree about 25 of them */
+				for (i = 0; i < 25; i++)
+					payload[i * 3] ^= 1;
+			}
+
+			header_data = (uint16_t) (1 | (type << 3));
+			length = build_packet(stream, 0x9e8b33, header_data,
+					      spec_hec(header_data, 0x47),
+					      payload, 240, clock, 1);
+			pkt = packet_for(stream, length, 0x47, clock, 1);
+			CHECK(pkt != NULL);
+			if (pkt == NULL)
+				return;
+			seed_stale_payload_length(pkt);
+			CHECK(btbb_decode_header(pkt) == 1);
+			CHECK(HV(clock, pkt) == 0);
+			CHECK(btbb_packet_get_payload_length(pkt) == 0);
+			btbb_packet_unref(pkt);
+		}
+	}
+
+	/*
+	 * An EV4 decodes block by block and has no payload header to tell it
+	 * the length, so a lost block ends the payload: the bytes before it
+	 * are decoded and are all there is to report. Lost early enough, what
+	 * is left is shorter than the shortest payload the type carries, so it
+	 * is no payload at all.
+	 */
+	for (i = 0; i < 2; i++) {
+		enum { EV4_BYTES = 122, EV4_BLOCKS = 98 };
+		char bits[EV4_BLOCKS * 10];
+		const int lost = i == 0 ? 3 : 1;
+		int bit;
+
+		memset(bits, 0, sizeof(bits));
+		spec_whiten(bits, EV4_BYTES * 8, clock, 18);
+		for (bit = EV4_BYTES * 8; bit < EV4_BLOCKS * 10; bit++)
+			bits[bit] = 0;
+		spec_fec23(bits, payload, EV4_BLOCKS * 10);
+		wreck_fec23_block(payload, lost);
+
+		header_data = (uint16_t) (1 | (PACKET_TYPE_EV4 << 3));
+		length = build_packet(stream, 0x9e8b33, header_data,
+				      spec_hec(header_data, 0x47), payload,
+				      EV4_BLOCKS * 15, clock, 1);
+		pkt = packet_for(stream, length, 0x47, clock, 1);
+		CHECK(pkt != NULL);
+		if (pkt == NULL)
+			return;
+		seed_stale_payload_length(pkt);
+		CHECK(btbb_decode_header(pkt) == 1);
+		if (lost == 3) {
+			/* three blocks decoded, 30 bits, three whole bytes */
+			CHECK(EV4(clock, pkt) == 1);
+			CHECK(btbb_packet_get_payload_length(pkt) == 3);
+		} else {
+			/* one block is 10 bits, short of the three byte
+			 * minimum, so this is not an EV4 */
+			CHECK(EV4(clock, pkt) == 0);
+			CHECK(btbb_packet_get_payload_length(pkt) == 0);
+		}
+		btbb_packet_unref(pkt);
+	}
+}
+
+/*
+ * When no length agrees with the CRC, an eSCO decoder reports the longest its
+ * type allows, every byte of which it did decode. It must not report the one
+ * more than that its search ended on.
+ */
+static void test_esco_no_length_matches(void)
+{
+	static const struct {
+		uint8_t type;
+		int bytes;
+	} CASES[] = {
+		{ PACKET_TYPE_HV3,  32 },
+		{ PACKET_TYPE_EV4, 122 },
+		{ PACKET_TYPE_EV5, 182 }
+	};
+	size_t row;
+
+	for (row = 0; row < sizeof(CASES) / sizeof(CASES[0]); row++) {
+		char bits[182 * 8 + 10];
+		char payload[MAX_SYMBOLS];
+		char stream[MAX_SYMBOLS];
+		uint16_t header_data;
+		btbb_packet *pkt;
+		int fec23 = CASES[row].type == PACKET_TYPE_EV4;
+		int data_bits = CASES[row].bytes * 8;
+		int payload_symbols, length, i, rv;
+		const int clock = 0x33;
+
+		/* every byte 0xff, so no length's last two bytes are a CRC
+		 * over the bytes before them */
+		memset(bits, 0, sizeof(bits));
+		for (i = 0; i < data_bits; i++)
+			bits[i] = 1;
+		spec_whiten(bits, data_bits, clock, 18);
+
+		if (fec23) {
+			int blocks = (data_bits + 9) / 10;
+
+			for (i = data_bits; i < blocks * 10; i++)
+				bits[i] = 0;
+			spec_fec23(bits, payload, blocks * 10);
+			payload_symbols = blocks * 15;
+		} else {
+			memcpy(payload, bits, (size_t) data_bits);
+			payload_symbols = data_bits;
+		}
+
+		header_data = (uint16_t) (1 | (CASES[row].type << 3));
+		length = build_packet(stream, 0x9e8b33, header_data,
+				      spec_hec(header_data, 0x47), payload,
+				      payload_symbols, clock, 1);
+		pkt = packet_for(stream, length, 0x47, clock, 1);
+		CHECK(pkt != NULL);
+		if (pkt == NULL)
+			return;
+		CHECK(btbb_decode_header(pkt) == 1);
+
+		if (fec23)
+			rv = EV4(clock, pkt);
+		else if (CASES[row].type == PACKET_TYPE_EV5)
+			rv = EV5(clock, pkt);
+		else
+			rv = EV3(clock, pkt);
+
+		CHECK(rv == 2);
+		CHECK(btbb_packet_get_payload_length(pkt) ==
+		      CASES[row].bytes);
+		btbb_packet_unref(pkt);
+	}
+}
+
+/*
+ * The access code and the packet header are the first 122 symbols of a
+ * packet, so a capture that stops inside them holds no header to decode.
+ * Without a length check the decoder reports one anyway: each header bit is
+ * sent three times, and the error correction takes the majority, so two
+ * symbols of the last bit still give the bit the sender set.
+ */
+static void test_header_needs_its_symbols(void)
+{
+	char stream[MAX_SYMBOLS];
+	uint16_t header_data = (uint16_t) (1 | (PACKET_TYPE_DM1 << 3) |
+					   (3 << 7));
+	const int clock = 0x2a;
+	int cut;
+
+	build_packet(stream, 0x9e8b33, header_data,
+		     spec_hec(header_data, 0x47), NULL, 0, clock, 1);
+
+	for (cut = 0; cut < 122; cut++) {
+		btbb_packet *pkt = packet_for(stream, cut, 0x47, clock, 1);
+
+		CHECK(pkt != NULL);
+		if (pkt == NULL)
+			return;
+		CHECK(btbb_header_present(pkt) == 0);
+		CHECK(btbb_decode_header(pkt) == 0);
+		CHECK(try_clock(clock, pkt) == 0);
+		btbb_packet_unref(pkt);
+	}
+}
+
+/*
+ * The number of symbols a packet was given is stored unsigned, so a count
+ * below zero, which a caller reaches by subtracting an offset from a
+ * capture's length, must not come back out as a very large one: every decoder
+ * would then work from symbols the caller never provided.
+ */
+static void test_negative_symbol_count(void)
+{
+	char stream[MAX_SYMBOLS];
+	btbb_packet *pkt = btbb_packet_new();
+
+	CHECK(pkt != NULL);
+	if (pkt == NULL)
+		return;
+
+	memset(stream, 0, sizeof(stream));
+	btbb_packet_set_data(pkt, stream, -1, 0, 0);
+	CHECK(pkt->length == 0);
+	CHECK(btbb_header_present(pkt) == 0);
+	CHECK(btbb_decode_header(pkt) == 0);
+	CHECK(try_clock(0, pkt) == 0);
+
+	btbb_packet_unref(pkt);
 }
 
 /*
@@ -1001,14 +1436,20 @@ static void test_esco_payload_lengths(void)
 		uint8_t type;
 		int body;
 		int fec23;
-		int issue;	/* 0 when the vector is expected to pass */
 	} CASES[] = {
-		{ "EV3",  PACKET_TYPE_HV3,   1, 0, 16 },
-		{ "EV3",  PACKET_TYPE_HV3,  30, 0, 16 },
-		{ "EV4",  PACKET_TYPE_EV4,   1, 1, 17 },
-		{ "EV4",  PACKET_TYPE_EV4, 120, 1, 17 },
-		{ "EV5",  PACKET_TYPE_EV5,   1, 0, 16 },
-		{ "EV5",  PACKET_TYPE_EV5, 180, 0, 16 }
+		{ "EV3",  PACKET_TYPE_HV3,   1, 0 },
+		{ "EV3",  PACKET_TYPE_HV3,  10, 0 },
+		{ "EV3",  PACKET_TYPE_HV3,  30, 0 },
+		{ "EV4",  PACKET_TYPE_EV4,   1, 1 },
+		{ "EV4",  PACKET_TYPE_EV4,   3, 1 },
+		/* 118 bytes plus the CRC is 960 bits, an exact number of FEC
+		 * blocks, so the last length the search tries is the one the
+		 * last block completes */
+		{ "EV4",  PACKET_TYPE_EV4, 118, 1 },
+		{ "EV4",  PACKET_TYPE_EV4, 120, 1 },
+		{ "EV5",  PACKET_TYPE_EV5,   1, 0 },
+		{ "EV5",  PACKET_TYPE_EV5,  60, 0 },
+		{ "EV5",  PACKET_TYPE_EV5, 180, 0 }
 	};
 	size_t row;
 
@@ -1016,6 +1457,7 @@ static void test_esco_payload_lengths(void)
 		char bits[(180 + 2) * 8 + 10];
 		char payload[MAX_SYMBOLS];
 		char stream[MAX_SYMBOLS];
+		char packed[MAX_PAYLOAD_LENGTH / 8];
 		uint16_t header_data;
 		btbb_packet *pkt;
 		int data_bits = (CASES[row].body + 2) * 8;
@@ -1060,29 +1502,122 @@ static void test_esco_payload_lengths(void)
 
 		printf("  %s, %d byte body\n", CASES[row].name,
 		       CASES[row].body);
-		if (CASES[row].type == PACKET_TYPE_EV4) {
-#ifdef BOUNDS_CHECKED
-			printf("    not run: #%d reads out of bounds\n",
-			       CASES[row].issue);
-#else
-			XFAIL(CASES[row].issue,
-			      EV4(clock, pkt) == 10 &&
-			      btbb_packet_get_payload_length(pkt) ==
-			      CASES[row].body + 2);
-#endif
-		} else if (CASES[row].type == PACKET_TYPE_EV5) {
-			XFAIL(CASES[row].issue,
-			      EV5(clock, pkt) == 10 &&
-			      btbb_packet_get_payload_length(pkt) ==
-			      CASES[row].body + 2);
-		} else {
-			XFAIL(CASES[row].issue,
-			      EV3(clock, pkt) == 10 &&
-			      btbb_packet_get_payload_length(pkt) ==
-			      CASES[row].body + 2);
-		}
+		if (CASES[row].type == PACKET_TYPE_EV4)
+			CHECK(EV4(clock, pkt) == 10);
+		else if (CASES[row].type == PACKET_TYPE_EV5)
+			CHECK(EV5(clock, pkt) == 10);
+		else
+			CHECK(EV3(clock, pkt) == 10);
+		CHECK(btbb_packet_get_payload_length(pkt) ==
+		      CASES[row].body + 2);
+		CHECK(btbb_get_payload_packed(pkt, packed) ==
+		      CASES[row].body + 2);
+		for (i = 0; i < CASES[row].body; i++)
+			CHECK((uint8_t) packed[i] == (uint8_t) (0x10 + i));
 
 		btbb_packet_unref(pkt);
+	}
+}
+
+/*
+ * A capture that stops partway through an eSCO payload has no length the CRC
+ * agrees with, so the decoder reports what it managed to decode. It must not
+ * report a byte the capture did not hold: btbb_decode_payload() marks the
+ * packet as having a payload whatever the result, so a length past the
+ * decoded bytes reaches the dump and the capture files.
+ */
+static void test_esco_truncated_capture(void)
+{
+	static const struct {
+		const char *name;
+		uint8_t type;
+	} CASES[] = {
+		{ "EV3", PACKET_TYPE_HV3 },
+		{ "EV4", PACKET_TYPE_EV4 },
+		{ "EV5", PACKET_TYPE_EV5 }
+	};
+	size_t row;
+
+	for (row = 0; row < sizeof(CASES) / sizeof(CASES[0]); row++) {
+		/*
+		 * This body length was chosen because no shorter length of it
+		 * happens to agree with the CRC, so every truncation below
+		 * really has no length to find. Another body may not, and the
+		 * check that nothing claims a CRC match would then fail for a
+		 * reason that is not a bug.
+		 */
+		enum { BODY = 24 };
+		char bits[(BODY + 2) * 8 + 10];
+		char payload[MAX_SYMBOLS];
+		char stream[MAX_SYMBOLS];
+		uint16_t header_data;
+		int fec23 = CASES[row].type == PACKET_TYPE_EV4;
+		int data_bits = (BODY + 2) * 8;
+		int payload_symbols, full_length, cut, i, bit;
+		uint16_t crc;
+		const int clock = 0x2d;
+
+		memset(bits, 0, sizeof(bits));
+		for (i = 0; i < BODY; i++)
+			for (bit = 0; bit < 8; bit++)
+				bits[i * 8 + bit] =
+					(char) (((0x10 + i) >> bit) & 1);
+		crc = crcgen(bits, BODY * 8, 0x47);
+		for (bit = 0; bit < 16; bit++)
+			bits[BODY * 8 + bit] = (char) ((crc >> bit) & 1);
+		spec_whiten(bits, data_bits, clock, 18);
+
+		if (fec23) {
+			int blocks = (data_bits + 9) / 10;
+
+			spec_fec23(bits, payload, blocks * 10);
+			payload_symbols = blocks * 15;
+		} else {
+			memcpy(payload, bits, (size_t) data_bits);
+			payload_symbols = data_bits;
+		}
+
+		header_data = (uint16_t) (1 | (CASES[row].type << 3));
+		full_length = build_packet(stream, 0x9e8b33, header_data,
+					   spec_hec(header_data, 0x47),
+					   payload, payload_symbols, clock, 1);
+
+		/* every length from no payload at all to one symbol short */
+		for (cut = 122; cut < full_length; cut++) {
+			btbb_packet *pkt = packet_for(stream, cut, 0x47,
+						      clock, 1);
+			int available = cut - 122;
+			int rv;
+
+			CHECK(pkt != NULL);
+			if (pkt == NULL)
+				return;
+			CHECK(btbb_decode_header(pkt) == 1);
+
+			if (fec23) {
+				rv = EV4(clock, pkt);
+				/* whole FEC blocks, 15 symbols for 10 bits */
+				available = (available / 15) * 10;
+			} else if (CASES[row].type == PACKET_TYPE_EV5) {
+				rv = EV5(clock, pkt);
+			} else {
+				rv = EV3(clock, pkt);
+			}
+
+			/* no length can match, so nothing may claim one */
+			CHECK(rv != 10);
+			if (btbb_packet_get_payload_length(pkt) * 8 >
+			    available) {
+				printf("FAIL %s:%d: %s cut to %d symbols "
+				       "reports %d bytes, %d bits decoded\n",
+				       __FILE__, __LINE__, CASES[row].name,
+				       cut,
+				       btbb_packet_get_payload_length(pkt),
+				       available);
+				++failures;
+			}
+			btbb_packet_unref(pkt);
+		}
 	}
 }
 
@@ -1092,35 +1627,33 @@ static void test_esco_payload_lengths(void)
  * the whole payload in one run without reinitializing the register, so the
  * data field continues from bit 98: 18 header bits and 80 voice bits.
  */
-static void test_dv_payload(void)
+#define DV_BODY 9
+
+static int build_dv_packet(char *stream, int clock)
 {
-	char bits[12 * 8 + 10];
+	char bits[(1 + DV_BODY + 2) * 8 + 10];
 	char payload[80 + 15 * 10];
-	char stream[MAX_SYMBOLS];
 	uint16_t header_data;
-	btbb_packet *pkt;
-	const int body = 9;
-	int data_bits = (1 + body + 2) * 8;
+	int data_bits = (1 + DV_BODY + 2) * 8;
 	int blocks = (data_bits + 9) / 10;
-	int length, i, bit;
+	int i, bit;
 	uint16_t crc;
-	const int clock = 0x07;
 
 	memset(bits, 0, sizeof(bits));
 	/* a one byte payload header: logical channel 10, flow 1, length 9 */
 	bits[1] = 1;
 	bits[2] = 1;
 	for (bit = 0; bit < 5; bit++)
-		bits[3 + bit] = (char) ((body >> bit) & 1);
-	for (i = 0; i < body; i++) {
+		bits[3 + bit] = (char) ((DV_BODY >> bit) & 1);
+	for (i = 0; i < DV_BODY; i++) {
 		uint8_t value = (uint8_t) (0x50 + i);
 
 		for (bit = 0; bit < 8; bit++)
 			bits[(1 + i) * 8 + bit] = (char) ((value >> bit) & 1);
 	}
-	crc = crcgen(bits, (1 + body) * 8, 0x47);
+	crc = crcgen(bits, (1 + DV_BODY) * 8, 0x47);
 	for (bit = 0; bit < 16; bit++)
-		bits[(1 + body) * 8 + bit] = (char) ((crc >> bit) & 1);
+		bits[(1 + DV_BODY) * 8 + bit] = (char) ((crc >> bit) & 1);
 
 	/* the voice field comes first and is whitened too, so it is 80 bits of
 	 * whitening the data field must not reuse */
@@ -1131,9 +1664,18 @@ static void test_dv_payload(void)
 	spec_fec23(bits, payload + 80, blocks * 10);
 
 	header_data = (uint16_t) (1 | (PACKET_TYPE_DV << 3) | (3 << 7));
-	length = build_packet(stream, 0x9e8b33, header_data,
-			      spec_hec(header_data, 0x47), payload,
-			      80 + blocks * 15, clock, 1);
+	return build_packet(stream, 0x9e8b33, header_data,
+			    spec_hec(header_data, 0x47), payload,
+			    80 + blocks * 15, clock, 1);
+}
+
+static void test_dv_payload_at_clock(int clock)
+{
+	char stream[MAX_SYMBOLS];
+	char packed[MAX_PAYLOAD_LENGTH / 8];
+	btbb_packet *pkt;
+	int length = build_dv_packet(stream, clock);
+	int i;
 
 	pkt = packet_for(stream, length, 0x47, clock, 1);
 	CHECK(pkt != NULL);
@@ -1142,15 +1684,67 @@ static void test_dv_payload(void)
 
 	CHECK(btbb_decode_header(pkt) == 1);
 	CHECK(btbb_packet_get_type(pkt) == PACKET_TYPE_DV);
-	XFAIL(24, btbb_decode_payload(pkt) == 10 &&
-		  btbb_packet_get_payload_length(pkt) == 1 + body + 2);
+	CHECK(btbb_decode_payload(pkt) == 10);
+	CHECK(btbb_packet_get_payload_length(pkt) == 1 + DV_BODY + 2);
+	CHECK(btbb_get_payload_packed(pkt, packed) == 1 + DV_BODY + 2);
+	CHECK((uint8_t) packed[0] == 0x4e);
+	for (i = 0; i < DV_BODY; i++)
+		CHECK((uint8_t) packed[1 + i] == (uint8_t) (0x50 + i));
 
 	btbb_packet_unref(pkt);
 }
 
 /*
+ * A DV packet's data field sits 80 symbols further in than every other type's
+ * payload, so the symbols its decode needs are 80 more than the data field
+ * alone, and a capture that stops inside the voice field or the data field
+ * holds no payload to report.
+ */
+static void test_dv_truncated_capture(void)
+{
+	char stream[MAX_SYMBOLS];
+	const int clock = 0x11;
+	int length = build_dv_packet(stream, clock);
+	int cut;
+
+	for (cut = 122; cut < length; cut++) {
+		btbb_packet *pkt = packet_for(stream, cut, 0x47, clock, 1);
+		int rv;
+
+		CHECK(pkt != NULL);
+		if (pkt == NULL)
+			return;
+		seed_stale_payload_length(pkt);
+		CHECK(btbb_decode_header(pkt) == 1);
+
+		rv = btbb_decode_payload(pkt);
+		if (rv == 10 || btbb_packet_get_payload_length(pkt) != 0) {
+			printf("FAIL %s:%d: DV cut to %d of %d symbols "
+			       "decodes to %d and reports %d bytes\n",
+			       __FILE__, __LINE__, cut, length, rv,
+			       btbb_packet_get_payload_length(pkt));
+			++failures;
+		}
+		btbb_packet_unref(pkt);
+	}
+}
+
+/*
+ * Whether the data field is dewhitened from the right place shows at some
+ * clock values and not others, because at the rest the length field happens to
+ * come out the same either way, so every clock is tried.
+ */
+static void test_dv_payload(void)
+{
+	int clock;
+
+	for (clock = 0; clock < 64; clock++)
+		test_dv_payload_at_clock(clock);
+}
+
+/*
  * The FHS payload is 144 information bits and a CRC, rate 2/3 encoded into 240
- * symbols (Vol 2, Part B, Section 6.5.1.2), and carries the sender's address
+ * symbols (Vol 2, Part B, Section 6.5.1.4), and carries the sender's address
  * and clock, which the library reads back out.
  */
 static void test_fhs_payload(void)
@@ -1164,7 +1758,7 @@ static void test_fhs_payload(void)
 	const uint8_t uap = 0x89;
 	const uint16_t nap = 0xabcd;
 	const uint32_t clk2_27 = 0x2345678;
-	int length, bit;
+	int length, bit, cut;
 	uint16_t crc;
 	const int clock = 0x11;
 
@@ -1202,6 +1796,62 @@ static void test_fhs_payload(void)
 	CHECK(uap_from_fhs(pkt) == uap);
 	CHECK(nap_from_fhs(pkt) == nap);
 	CHECK(clock_from_fhs(pkt) == clk2_27);
+
+	btbb_packet_unref(pkt);
+
+	/*
+	 * The FHS length is fixed, so the decoder sets it before checking
+	 * that the capture holds the payload: a capture that stops short must
+	 * not leave that length behind as a payload it never decoded.
+	 */
+	for (cut = 122; cut < length; cut++) {
+		int rv;
+
+		pkt = packet_for(stream, cut, 0x47, clock, 1);
+		CHECK(pkt != NULL);
+		if (pkt == NULL)
+			return;
+		seed_stale_payload_length(pkt);
+		CHECK(btbb_decode_header(pkt) == 1);
+
+		rv = btbb_decode_payload(pkt);
+		if (rv > 1 || btbb_packet_get_payload_length(pkt) != 0) {
+			printf("FAIL %s:%d: FHS cut to %d of %d symbols "
+			       "decodes to %d and reports %d bytes\n",
+			       __FILE__, __LINE__, cut, length, rv,
+			       btbb_packet_get_payload_length(pkt));
+			++failures;
+		}
+		btbb_packet_unref(pkt);
+	}
+}
+
+/*
+ * A payload cannot be shorter than the two byte CRC it carries plus the byte
+ * that CRC covers, so there is no CRC to check below three bytes. Checking one
+ * there reads from before the payload, which is how the eSCO length search
+ * used to accept a packet it had not checked.
+ */
+static void test_payload_crc_needs_a_payload(void)
+{
+	btbb_packet *pkt = btbb_packet_new();
+
+	CHECK(pkt != NULL);
+	if (pkt == NULL)
+		return;
+	/*
+	 * A UAP of zero is the default check initialization of Section 1.2.1,
+	 * and it is also the case a length check has to catch: the CRC of no
+	 * data is then zero, and so is everything the check would be read
+	 * from, so without the length check the two match and the packet is
+	 * accepted having been checked against nothing.
+	 */
+	pkt->UAP = 0x00;
+	memset(pkt->payload, 0, sizeof(pkt->payload));
+
+	for (pkt->payload_length = 0; pkt->payload_length < 3;
+	     pkt->payload_length++)
+		CHECK(payload_crc(pkt) == 0);
 
 	btbb_packet_unref(pkt);
 }
@@ -1320,6 +1970,7 @@ int main(void)
 {
 	test_access_code_sample_data();
 	test_access_code_search();
+	test_find_ac_reads_only_what_it_promises();
 	test_hec_sample_data();
 	test_crc_sample_data();
 	test_whitening_sample_data();
@@ -1329,9 +1980,17 @@ int main(void)
 	test_dm1_sample_packet();
 	test_acl_payload_lengths();
 	test_acl_payload_length_clamped();
+	test_acl_truncated_capture();
+	test_uncorrectable_payload_fec();
+	test_esco_no_length_matches();
+	test_header_needs_its_symbols();
+	test_negative_symbol_count();
 	test_sco_payload_lengths();
 	test_esco_payload_lengths();
+	test_esco_truncated_capture();
 	test_dv_payload();
+	test_dv_truncated_capture();
+	test_payload_crc_needs_a_payload();
 	test_fhs_payload();
 	test_packets_without_payload();
 	test_uap_and_clock_recovery();

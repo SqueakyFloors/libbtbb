@@ -127,7 +127,11 @@ int crc_check(int clock, btbb_packet* p);
 char *tun_format(btbb_packet* p);
 
 /* try a clock value (CLK1-6) to unwhiten packet header,
- * sets resultant d_packet_type and d_UAP, returns UAP.
+ * sets resultant packet_type and UAP, returns UAP.
+ *
+ * A packet of fewer than 122 symbols holds no header to read, so for one of
+ * those this sets nothing and returns 0, which a caller cannot tell from a
+ * header that decoded to a UAP of 0x00.
  */
 uint8_t try_clock(int clock, btbb_packet* p);
 
