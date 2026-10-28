@@ -986,7 +986,7 @@ static void test_acl_truncated_capture(void)
 		char payload[MAX_SYMBOLS];
 		char stream[MAX_SYMBOLS];
 		uint16_t header_data;
-		int payload_symbols, full_length, cut;
+		int payload_symbols, full_length, cut, header_symbols;
 		const int clock = 0x2a;
 
 		payload_symbols = build_acl_payload(payload,
@@ -1000,6 +1000,17 @@ static void test_acl_truncated_capture(void)
 					   spec_hec(header_data, 0x47),
 					   payload, payload_symbols, clock, 1);
 
+		/*
+		 * The payload header itself takes this many symbols, half
+		 * again as many as its bits where the type carries error
+		 * correction. A capture without them is not a decode at all,
+		 * and the decoder has to say so rather than read a length out
+		 * of symbols that are not there.
+		 */
+		header_symbols = CASES[row].fec23
+			? fec23_symbols(CASES[row].header_bytes * 8)
+			: CASES[row].header_bytes * 8;
+
 		/* every length from no payload at all to one symbol short */
 		for (cut = 122; cut < full_length; cut++) {
 			btbb_packet *pkt = packet_for(stream, cut, 0x47,
@@ -1012,6 +1023,8 @@ static void test_acl_truncated_capture(void)
 			CHECK(btbb_decode_header(pkt) == 1);
 
 			rv = btbb_decode_payload(pkt);
+			if (cut - 122 < header_symbols)
+				CHECK(rv == 0);
 			if (rv == 10 ||
 			    btbb_packet_get_payload_length(pkt) != 0) {
 				printf("FAIL %s:%d: %s cut to %d of %d "

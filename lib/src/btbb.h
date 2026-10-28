@@ -85,9 +85,10 @@ void btbb_packet_unref(btbb_packet *pkt);
  *
  * Every one of the first 'search_length' symbols of 'stream' is tried
  * as the start of the 64 symbol sync word, so 'stream' must hold
- * search_length + 63 symbols. The search reads no further than that;
- * decoding a packet it finds needs the rest of the packet, which the
- * caller passes separately to btbb_packet_set_data().
+ * search_length + 63 symbols, and nothing at all for a search_length
+ * of zero, which reads none of it. The search reads no further than
+ * that; decoding a packet it finds needs the rest of the packet, which
+ * the caller passes separately to btbb_packet_set_data().
  *
  * Returns offset into 'stream' at which packet was found. If no
  * packet was found, returns a negative number. On a match a packet is
@@ -247,12 +248,13 @@ int btbb_pcapng_close(btbb_pcapng_handle * h);
 
 /* BLE support */
 typedef struct lell_packet lell_packet;
-/* Decode and allocate an LE packet. The _n form takes the number of
- * bytes 'stream' holds and reads no more than that, keeping whatever
- * of the packet it was given and no further; it stores at most 260
- * bytes, the longest LE packet. The form without a length reads 64
- * bytes, which is what it has always read and what every caller it
- * has had provides. */
+/* Decode and allocate an LE packet; *pkt is left NULL if the packet
+ * cannot be allocated. The _n form is the one to call: it takes the
+ * number of bytes 'stream' holds and reads no more than that, keeping
+ * whatever of the packet it was given and no further, and it stores at
+ * most 260 bytes, the longest LE packet. The form without a length
+ * reads 64 bytes, which is what it has always read and what every
+ * caller it has had provides. */
 void lell_allocate_and_decode(const uint8_t *stream, uint16_t phys_channel, uint32_t clk100ns, lell_packet **pkt);
 void lell_allocate_and_decode_n(const uint8_t *stream, size_t stream_len,
                                 uint16_t phys_channel, uint32_t clk100ns,

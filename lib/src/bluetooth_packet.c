@@ -1133,8 +1133,15 @@ static int esco_payload(int clock, btbb_packet* pkt, int maxlength)
 
 		/* unwhiten next byte */
 		if ((bits + 8) > size) {
-			/* the capture ran out, so the bytes decoded so far are
-			 * all the payload there is to report */
+			/*
+			 * The capture ran out, so the bytes decoded so far are
+			 * all the payload there is to report. They are
+			 * reported even below the shortest length this type
+			 * carries, unlike a payload given up on: this says
+			 * only that the capture stopped, so the bytes are
+			 * real and the rest of the packet was simply never
+			 * recorded.
+			 */
 			pkt->payload_length = bits / 8;
 			return 1; //FIXME should throw exception
 		}
@@ -1144,7 +1151,8 @@ static int esco_payload(int clock, btbb_packet* pkt, int maxlength)
 		if (payload_crc(pkt))
 			return 10;
 	}
-	/* no length matched, so the one left over is not a decoded length */
+	/* no length matched, so report the longest, which is as far as the
+	 * search decoded; the length the loop ended on is one byte past it */
 	pkt->payload_length = maxlength;
 	return 2;
 }
@@ -1224,7 +1232,8 @@ int EV4(int clock, btbb_packet* pkt)
 			pkt->payload_length++;
 		}
 	}
-	/* no length matched, so the one left over is not a decoded length */
+	/* no length matched, so report the longest, which is as far as the
+	 * search decoded; the length the loop ended on is one byte past it */
 	pkt->payload_length = maxbytes;
 	return 2;
 }
