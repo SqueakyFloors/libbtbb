@@ -56,6 +56,15 @@ libbtbb (2020-12-R1+fork5) unstable; urgency=low
   * An eSCO packet cut short by the end of a capture, or by a block the error
     correction could not recover, no longer reports trailing bytes that were
     never decoded.
+  * A packet cut short by the end of a capture no longer decodes a payload, or
+    a packet header, out of symbols the capture did not hold, and reports no
+    payload rather than the length the payload header claimed. The types that
+    carry error correction were the ones affected, because their payload
+    arrives in half again as many symbols as it has bits.
+  * The access code search no longer reads part of a sync word when it is
+    given no offsets to search. The length its caller has to provide is now
+    documented as the one it actually reads, 63 symbols past the search
+    window rather than 72.
 
  -- Russell Wagner <152923636+SqueakyFloors@users.noreply.github.com>  27 Oct 2026 19:00:00 -0700
 
