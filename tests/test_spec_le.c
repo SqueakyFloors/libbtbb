@@ -231,37 +231,41 @@ static void test_advertising_pdu_length_is_eight_bits(void)
 	}
 
 	/*
-	 * The field reaches 255, which is 264 bytes of packet, more than the
-	 * 260-byte symbol buffer holds. Such a PDU comes back as the 251
-	 * payload bytes the buffer does hold. (Both the explicit cap and the
-	 * bound on what was captured give that answer, since the buffer is
-	 * what the captured length is counted from.)
+	 * The top of the range: a Length of 255 is 264 bytes of packet, which
+	 * is as long as an advertising channel PDU gets. Every payload octet
+	 * has to come back, and the three bytes after them have to be the CRC
+	 * and not payload. AUX_ADV_IND and AUX_CHAIN_IND reach these lengths,
+	 * so this is not a synthetic corner.
 	 */
 	{
 		uint8_t stream[MAX_LE_SYMBOLS];
+		uint8_t payload[MAX_BUILT_PAYLOAD];
 		lell_packet *pkt = NULL;
-		int i;
+		int length, i;
 
-		memset(stream, 0, sizeof(stream));
-		stream[0] = 0xd6;
-		stream[1] = 0xbe;
-		stream[2] = 0x89;
-		stream[3] = 0x8e;
-		stream[4] = 0x07;
-		stream[5] = 255;
-		for (i = 6; i < MAX_LE_SYMBOLS; i++)
-			stream[i] = (uint8_t) i;
+		CHECK(MAX_BUILT_PAYLOAD == 255);
+		for (i = 0; i < 255; i++)
+			payload[i] = (uint8_t) (0x40 + i);
+		/* AUX_ADV_IND is carried in an ADV_EXT_IND, PDU type 0b0111 */
+		length = build_le_packet(stream, LE_ADV_AA, 0x07, 255,
+					 payload);
+		CHECK(length == 264);
 
-		lell_allocate_and_decode_n(stream, sizeof(stream), 2402, 0,
+		lell_allocate_and_decode_n(stream, (size_t) length, 2402, 0,
 					   &pkt);
 		CHECK(pkt != NULL);
 		if (pkt == NULL)
 			return;
-		CHECK(lell_get_payload_length(pkt) == MAX_BUILT_PAYLOAD);
-		CHECK(MAX_BUILT_PAYLOAD == 251);
+		CHECK(lell_get_payload_length(pkt) == 255);
+		for (i = 0; i < 255; i++)
+			CHECK(pkt->symbols[6 + i] == (uint8_t) (0x40 + i));
+		/* build_le_packet writes the CRC as c0 c1 c2 */
+		for (i = 0; i < 3; i++)
+			CHECK(pkt->symbols[6 + 255 + i] ==
+			      (uint8_t) (0xc0 + i));
 		lell_packet_unref(pkt);
 
-		/* and a claim of 255 where only 37 octets arrived still
+		/* a claim of 255 where only 37 octets arrived still
 		 * reports the 37 */
 		pkt = NULL;
 		lell_allocate_and_decode_n(stream, 9 + 37, 2402, 0, &pkt);
@@ -345,7 +349,10 @@ static void test_data_pdu_header_and_length(void)
 
 /*
  * A length field beyond the 251 octets Section 2.4 allows is not a length the
- * decoder can honour, and neither is one longer than what was captured.
+ * decoder can honor, and neither is one longer than what was captured. The
+ * symbol buffer is long enough for the 255 an advertising PDU may claim, so
+ * the 251 here is the specification's limit for this kind of PDU and not the
+ * buffer running out.
  */
 static void test_data_pdu_length_bounds(void)
 {
@@ -364,7 +371,7 @@ static void test_data_pdu_length_bounds(void)
 	CHECK(pkt != NULL);
 	if (pkt == NULL)
 		return;
-	CHECK(lell_get_payload_length(pkt) <= 251);
+	CHECK(lell_get_payload_length(pkt) == 251);
 	lell_packet_unref(pkt);
 
 	/* only 20 bytes captured, so only 11 of them can be payload */

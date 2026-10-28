@@ -49,9 +49,16 @@ libbtbb (2020-12-R1+fork5) unstable; urgency=low
     which was the 4.x header, so an extended advertising PDU on a primary
     channel - past 63 octets, where a legacy one stops at 37 - was reported
     as its length modulo 64: a 64-octet PDU came out as 0 bytes, and both
-    lell_print() and the capture files held none of its payload. A claim
-    longer than the symbol buffer holds is capped at the 251 payload bytes it
-    does hold.
+    lell_print() and the capture files held none of its payload. The whole
+    range of the field now fits: the symbol buffer is 264 bytes, which is the
+    access address, the header, the 255 payload octets Section 2.3 allows and
+    the CRC. It was 260, sized for a data PDU at its Data Length Extension
+    maximum, so an advertising PDU of 252 to 255 octets - the lengths
+    extended advertising uses AUX_ADV_IND and AUX_CHAIN_IND for - lost its
+    last octets and had three of them reported as its CRC, with the real CRC
+    gone. A data PDU's own maximum is 251 octets, and a claim beyond that is
+    still capped there. LE capture files declare a snapshot length four bytes
+    longer to match, 274 for the plain writer and 288 for the PPI one.
   * An LE capture file's reference access address flag now follows the
     address the caller gave rather than the channel the packet arrived on.
     The published layout defines that field as the access address configured

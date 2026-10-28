@@ -1,11 +1,13 @@
 /*
- * Full-length LE packets: decoding a data PDU's length from all eight bits of
- * the field, and writing the whole packet to PCAP and PCAPNG.
+ * Full-length LE packets: decoding a PDU's length from all eight bits of the
+ * field, and writing the whole packet to PCAP and PCAPNG.
  *
  * The decoder used to read only five bits of the length and keep only 64
  * bytes, so a Bluetooth 4.2 Data Length Extension payload came out short. The
  * writers recorded the wrong lengths and could copy more than the record
- * held. Both halves are checked here by reading the files back.
+ * held. Later the symbol buffer was four bytes short of the 255-octet payload
+ * an advertising PDU may carry, so the last four were lost. All of it is
+ * checked here by reading the files back.
  */
 #include <stdint.h>
 #include <stdio.h>
@@ -21,20 +23,22 @@
  * right length with the wrong bytes is still caught. */
 #define TAIL_BYTE 0xa5
 
-/* A data-channel packet whose header declares `payload_len` bytes, with the
- * last payload byte marked. */
-static size_t make_frame(uint8_t *frame, unsigned payload_len)
+/* A packet whose header declares `payload_len` bytes, with the last payload
+ * byte marked. `header0` is the first header octet: 0x01 for a data channel
+ * PDU, or an advertising PDU type. */
+static size_t make_frame(uint8_t *frame, unsigned payload_len, uint8_t header0)
 {
 	memset(frame, 0, MAX_LE_SYMBOLS);
-	/* The access address only has to be readable here: what makes the
-	 * decoder treat this as a data PDU, and so read the length as a full
-	 * octet, is the 2404 MHz the callers below pass, which is data channel
-	 * index 0. */
+	/* This is the advertising channel access address, which an
+	 * advertising PDU must carry. On a data channel it only has to be
+	 * readable: what makes the decoder treat a packet as a data PDU is
+	 * the 2404 MHz the callers below pass, which is data channel index
+	 * 0. */
 	frame[0] = 0xd6;
 	frame[1] = 0xbe;
 	frame[2] = 0x89;
 	frame[3] = 0x8e;
-	frame[4] = 0x01;
+	frame[4] = header0;
 	frame[5] = (uint8_t) payload_len;
 	if (payload_len)
 		frame[6 + payload_len - 1] = TAIL_BYTE;
@@ -45,7 +49,7 @@ static int check_data_length(unsigned payload_len)
 {
 	uint8_t frame[MAX_LE_SYMBOLS];
 	lell_packet *pkt = NULL;
-	size_t frame_len = make_frame(frame, payload_len);
+	size_t frame_len = make_frame(frame, payload_len, 0x01);
 
 	lell_allocate_and_decode_n(frame, frame_len, 2404, 0, &pkt);
 	if (!pkt || pkt->length != (int) payload_len) {
@@ -72,7 +76,7 @@ static int check_short_capture_is_not_overread(void)
 	lell_packet *pkt = NULL;
 
 	/* A header claiming 251 bytes in a capture that holds 50. */
-	make_frame(frame, 251);
+	make_frame(frame, 251, 0x01);
 	lell_allocate_and_decode_n(frame, 50, 2404, 0, &pkt);
 	if (!pkt || pkt->length != 50 - 9) {
 		fprintf(stderr, "FAIL: a 50-byte capture decoded as %d payload bytes,"
@@ -144,7 +148,9 @@ static int check_pcap_record(const char *path, uint32_t expected_len)
 		bad = 1;
 	} else {
 		const uint8_t *packet = buf + file_header + record_header + pseudo;
-		if (packet[6 + 251 - 1] != TAIL_BYTE) {
+		/* the frame is the payload plus the access address, the
+		   header and the CRC, so the last payload byte is here */
+		if (packet[6 + (expected_len - 9) - 1] != TAIL_BYTE) {
 			fprintf(stderr, "FAIL: %s lost the last payload byte\n", path);
 			bad = 1;
 		}
@@ -187,8 +193,8 @@ static int check_pcapng_record(const char *path, uint32_t expected_len)
 				        packet_len, pseudo + expected_len);
 				bad = 1;
 			}
-			if (packet + 6 + 251 - 1 >= buf + size ||
-			    packet[6 + 251 - 1] != TAIL_BYTE) {
+			if (packet + 6 + (expected_len - 9) - 1 >= buf + size ||
+			    packet[6 + (expected_len - 9) - 1] != TAIL_BYTE) {
 				fprintf(stderr, "FAIL: %s lost the last payload byte\n", path);
 				bad = 1;
 			}
@@ -204,8 +210,11 @@ static int check_pcapng_record(const char *path, uint32_t expected_len)
 	return bad;
 }
 
-/* The longest valid packet written to both formats, read back. */
-static int check_capture_writers(void)
+/* The longest valid packet of one kind written to both formats, read back.
+ * `payload_len` is its declared payload, `header0` the first header octet and
+ * `mhz` the channel, which is what decides which kind of PDU it is. */
+static int check_capture_writers(unsigned payload_len, uint8_t header0,
+                                 uint16_t mhz)
 {
 	uint8_t frame[MAX_LE_SYMBOLS];
 	lell_packet *pkt = NULL;
@@ -214,14 +223,15 @@ static int check_capture_writers(void)
 	char pcap_path[] = "/tmp/libbtbb-le-pcap-XXXXXX";
 	char pcapng_path[] = "/tmp/libbtbb-le-pcapng-XXXXXX";
 	/* The whole packet: access address, header, payload and CRC. */
-	const uint32_t expected = 4 + 2 + 251 + 3;
+	const uint32_t expected = 4 + 2 + payload_len + 3;
 	int bad = 0;
 	int fd;
 
-	make_frame(frame, 251);
-	lell_allocate_and_decode_n(frame, sizeof(frame), 2404, 0, &pkt);
-	if (!pkt || pkt->length != 251) {
-		fprintf(stderr, "FAIL: the longest packet did not decode\n");
+	make_frame(frame, payload_len, header0);
+	lell_allocate_and_decode_n(frame, sizeof(frame), mhz, 0, &pkt);
+	if (!pkt || pkt->length != (int) payload_len) {
+		fprintf(stderr, "FAIL: a %u-octet packet decoded as %d\n",
+		        payload_len, pkt ? pkt->length : -1);
 		if (pkt) lell_packet_unref(pkt);
 		return 1;
 	}
@@ -271,10 +281,16 @@ int main(void)
 			return 1;
 	if (check_short_capture_is_not_overread())
 		return 1;
-	if (check_capture_writers())
+	/* a data channel PDU at its Data Length Extension maximum */
+	if (check_capture_writers(251, 0x01, 2404))
+		return 1;
+	/* and an advertising channel PDU at the top of its Length range,
+	   which is four bytes of frame longer. ADV_EXT_IND is PDU type
+	   0b0111, the one extended advertising uses. */
+	if (check_capture_writers(255, 0x07, 2402))
 		return 1;
 
-	puts("PASS: LE lengths 0..251 preserved; the longest packet is recorded"
-	     " whole in PCAP and PCAPNG");
+	puts("PASS: LE lengths 0..251 preserved; the longest data and"
+	     " advertising packets are recorded whole in PCAP and PCAPNG");
 	return 0;
 }

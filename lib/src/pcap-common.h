@@ -22,6 +22,7 @@
 #ifndef PCAP_COMMON_DOT_H
 #define PCAP_COMMON_DOT_H
 
+#include "bluetooth_le_packet.h"
 #include "bluetooth_packet.h"
 #include "btbb.h"
 
@@ -187,7 +188,10 @@ typedef struct __attribute__((packed)) _pcap_bluetooth_le_ll_header {
  * Vol 6, Part B, Section 2.1.2 forbid four equal octets. */
 #define LE_REF_AA_FLAG(aa)   ((aa) != 0 ? LE_REF_AA_VALID : 0)
 
-/* Full captured LE frame: access address (4) + header (2) + payload (251) + CRC (3). */
-#define LE_MAX_PAYLOAD       260
+/* Full captured LE frame: access address (4) + header (2) + the longest
+ * payload a PDU may carry (255) + CRC (3). The writers copy that many bytes
+ * out of a decoded packet's symbol buffer, so this has to be the size of that
+ * buffer, not a second opinion about it. */
+#define LE_MAX_PAYLOAD       MAX_LE_SYMBOLS
 
 #endif /* PCAP_COMMON_DOT_H */

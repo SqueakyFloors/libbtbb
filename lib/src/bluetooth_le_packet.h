@@ -27,13 +27,22 @@
 #include <stdio.h>
 #include <stdlib.h>
 
-/* Access address (4) + PDU header (2) + max DLE payload (251) + CRC (3). */
-#define MAX_LE_SYMBOLS 260
+/* The longest payload each kind of PDU may carry. Core v5.4, Vol 6, Part B,
+ * Section 2.3 gives an advertising physical channel PDU a Length of 1 to 255
+ * octets; Section 2.4 gives a data physical channel PDU 0 to 251, which is
+ * where Data Length Extension stopped. */
+#define LE_ADV_MAX_PAYLOAD_LENGTH  255
+#define LE_DATA_MAX_PAYLOAD_LENGTH 251
+
+/* Access address (4) + PDU header (2) + the longest payload any PDU may
+ * carry (255) + CRC (3). An advertising PDU is what needs the full 264: the
+ * extended advertising PDUs AUX_ADV_IND and AUX_CHAIN_IND reach the 255 the
+ * Length field allows. */
+#define MAX_LE_SYMBOLS 264
 
 /* The longest payload the symbol buffer can hold, since the access address,
- * the PDU header and the CRC take 9 of its bytes. It is also the longest
- * payload a data channel PDU may carry. Not to be confused with
- * pcap-common.h's LE_MAX_PAYLOAD, which is the whole 260-byte frame a
+ * the PDU header and the CRC take 9 of its bytes. Not to be confused with
+ * pcap-common.h's LE_MAX_PAYLOAD, which is the whole 264-byte frame a
  * capture record holds. */
 #define MAX_LE_PAYLOAD_LENGTH (MAX_LE_SYMBOLS - 9)
 
