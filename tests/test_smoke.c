@@ -111,11 +111,11 @@ static void test_le_advertising_packet(void)
  * the 2 MHz steps between them; k counts those steps up from 2402 MHz, and a
  * PCAP reader turns it back into a frequency as 2402 + 2k.
  *
- * Every frequency the band covers is decoded here, including the two below
- * the lowest LE channel. An index outside 0 to 39 is not a channel, and
- * because the index is kept in a byte and anything below 37 is a data
- * channel, a frequency that computes a negative one has its packet decoded
- * as the wrong kind.
+ * Every frequency the band covers is decoded here, with the two below the
+ * lowest LE channel and two above the highest. An index outside 0 to 39 is
+ * no channel at all, and because it is kept in a byte, a frequency outside
+ * the band computes one that wraps: far enough below, into the 0 to 36 that
+ * lell_packet_is_data() reads as a data channel.
  */
 static void test_le_channel_index(void)
 {
@@ -133,6 +133,8 @@ static void test_le_channel_index(void)
 		{ 2428, 11, 13 },
 		{ 2478, 36, 38 },
 		{ 2480, 39, 39 },
+		{ 2482, 39, 39 },	/* above it: the highest channel */
+		{ 3000, 39, 39 },
 	};
 	char seen[40];
 	size_t i;

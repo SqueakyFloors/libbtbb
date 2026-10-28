@@ -391,6 +391,10 @@ static int capture_get_hop_pattern(btbb_piconet *pn,
 	out_capture = tmpfile();
 	err_capture = tmpfile();
 	if (out_capture == NULL || err_capture == NULL) {
+		if (out_capture != NULL)
+			fclose(out_capture);
+		if (err_capture != NULL)
+			fclose(err_capture);
 		printf("FAIL: could not open a capture file\n");
 		++failures;
 		return -1;
@@ -423,8 +427,14 @@ static int capture_get_hop_pattern(btbb_piconet *pn,
 	fflush(stdout);
 	fflush(stderr);
 
-	dup2(saved_out, fileno(stdout));
-	dup2(saved_err, fileno(stderr));
+	/* A failed restore sends the rest of the test's output into a capture
+	 * file, where nobody reads it, so it counts as a failure rather than
+	 * passing quietly. */
+	if (dup2(saved_out, fileno(stdout)) < 0 ||
+	    dup2(saved_err, fileno(stderr)) < 0) {
+		fprintf(stderr, "FAIL: could not restore the output\n");
+		++failures;
+	}
 	close(saved_out);
 	close(saved_err);
 
@@ -466,7 +476,9 @@ static void test_get_hop_pattern_writes_nothing_to_stdout(void)
 	CHECK(strstr(err, "Calculating complete hopping sequence.") != NULL);
 	CHECK(strstr(err, "Hopping sequence calculated.") != NULL);
 
-	/* The second call reuses the buffer, so nothing was built again. */
+	/* The second call reuses what the first built: it says nothing on
+	 * either stream, and hands back the same buffer rather than a newly
+	 * allocated one. */
 	if (capture_get_hop_pattern(pn, out, sizeof(out),
 				    err, sizeof(err)) != 0)
 		return;
