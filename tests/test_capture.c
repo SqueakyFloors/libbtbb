@@ -1931,9 +1931,15 @@ static void test_write_errors(void)
 			if (ph != NULL) {
 				(void) btbb_pcap_close(ph);
 			}
-			/* nothing of the record that failed is in the file:
-			   the length is the file header and the records that
-			   were written whole */
+			/* Nothing of the record that failed is in the file:
+			   the length is the 24-byte file header and the
+			   46-byte records that were written whole. The size
+			   is checked as well as the record walk, so a
+			   platform that refused the over-limit write whole
+			   rather than part way through could not pass this
+			   without the rollback. */
+			CHECK(stat(small, &after) == 0);
+			CHECK(after.st_size == (off_t) (24 + written * 46));
 			CHECK(read_capture(small));
 			CHECK(count_pcap_records() == written);
 			unlink_quietly(small);

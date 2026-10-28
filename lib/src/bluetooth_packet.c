@@ -501,6 +501,19 @@ void btbb_packet_set_data(btbb_packet *pkt, char *data, int length,
 	pkt->length = length;
 	pkt->channel = channel;
 	pkt->clkn = clkn >> 1; // really CLK1
+
+	/* Nothing is known about these symbols yet, so drop what the decoder
+	 * worked out about the last ones. A caller hands one packet object a
+	 * frame after another - btbb_find_ac() gives out the same object
+	 * again - and not every route into the decoder starts by clearing
+	 * this: the search for a piconet's address part goes through
+	 * try_clock() and crc_check(), neither of which does. Whatever is
+	 * left here is then reported for a frame it does not describe. */
+	btbb_packet_set_flag(pkt, BTBB_HAS_PAYLOAD, 0);
+	pkt->payload_length = 0;
+	pkt->payload_header_length = 0;
+	pkt->corrected_header_bits = 0;
+	pkt->corrected_payload_bits = 0;
 }
 
 void btbb_packet_set_flag(btbb_packet *pkt, int flag, int val)
@@ -1250,7 +1263,14 @@ int EV3(int clock, btbb_packet* pkt)
 	return esco_payload(clock, pkt, maxbytes);
 }
 
-int EV4(int clock, btbb_packet* pkt)
+/*
+ * The body of EV4(), which decodes a block at a time and so counts the bits
+ * the error correction put right a block at a time. The running total goes in
+ * corrected_total rather than on the packet: crc_check() calls this decoder
+ * straight, once per candidate clock, and a count added to the packet's each
+ * time would come out as the sum over every clock tried.
+ */
+static int ev4_payload(int clock, btbb_packet* pkt, int *corrected_total)
 {
 	char *corrected;
 
@@ -1274,6 +1294,8 @@ int EV4(int clock, btbb_packet* pkt)
 	int bits = 0; /* number of payload bits we have decoded */
 	int fec_corrections = 0;
 
+	*corrected_total = 0;
+
 	pkt->payload_length = minbytes;
 
 	while (syms < maxsymbols) {
@@ -1293,9 +1315,17 @@ int EV4(int clock, btbb_packet* pkt)
 				 * of these packets and there is no payload to
 				 * report */
 				pkt->payload_length = 0;
+				*corrected_total = 0;
 				return 0;
 			}
-			/* this block is lost, so the payload ends before it */
+			/*
+			 * This block is lost, so the payload ends before it.
+			 * The count stays positive: the published record
+			 * layout gives a negative count the meaning "this
+			 * many corrected and uncorrectable bits together",
+			 * and the block that could not be put right is not
+			 * part of the payload being reported.
+			 */
 			pkt->payload_length = bits / 8;
 			return 1;
 		}
@@ -1303,11 +1333,7 @@ int EV4(int clock, btbb_packet* pkt)
 			 HEADER_WHITENING_BITS + bits, pkt);
 		free(corrected);
 
-		/* one block at a time, so the count builds up over the
-		 * payload */
-		pkt->corrected_payload_bits =
-			(int16_t) (pkt->corrected_payload_bits +
-				   fec_corrections);
+		*corrected_total += fec_corrections;
 
 		syms += 15;
 		bits += 10;
@@ -1327,6 +1353,15 @@ int EV4(int clock, btbb_packet* pkt)
 	 * search decoded; the length the loop ended on is one byte past it */
 	pkt->payload_length = maxbytes;
 	return 2;
+}
+
+int EV4(int clock, btbb_packet* pkt)
+{
+	int corrected = 0;
+	int rv = ev4_payload(clock, pkt, &corrected);
+
+	pkt->corrected_payload_bits = (int16_t) corrected;
+	return rv;
 }
 
 int EV5(int clock, btbb_packet* pkt)

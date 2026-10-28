@@ -50,14 +50,18 @@ static void *counted_malloc(size_t size);
 
 static size_t largest_request;	/* bytes, since it was last reset */
 static size_t last_request;	/* bytes asked for by the most recent call */
+static int allocation_calls;	/* calls, since it was last reset */
 static int refuse_allocations;
+static int refuse_from;		/* refuse this call onward, 0 to refuse none */
 
 static void *counted_malloc(size_t size)
 {
 	if (size > largest_request)
 		largest_request = size;
 	last_request = size;
-	if (refuse_allocations)
+	allocation_calls++;
+	if (refuse_allocations ||
+	    ((refuse_from != 0) && (allocation_calls >= refuse_from)))
 		return NULL;
 	return malloc(size);
 }
@@ -545,6 +549,31 @@ static void test_an_allocation_failure_leaves_no_candidates(void)
 }
 
 /*
+ * The candidate list grows several times over for an adaptive piconet, so an
+ * allocation can fail with a list already in hand.  That list is let go of,
+ * and the piconet is left with no candidates, as it is when the first
+ * allocation fails.
+ */
+static void test_an_allocation_failure_partway_through_the_list(void)
+{
+	btbb_piconet *pn = discovered(MAP_20, 1);
+
+	first_hop(pn, channel_at(pn, 0));
+	allocation_calls = 0;
+	/* the list has been allocated and grown once by the third call */
+	refuse_from = 3;
+	CHECK_EQ(0, btbb_init_hop_reversal(0, pn));
+	refuse_from = 0;
+	CHECK_EQ(3, allocation_calls);
+	CHECK_EQ(0, pn->num_candidates);
+	CHECK(pn->clock_candidates == NULL);
+	CHECK(!btbb_piconet_get_flag(pn, BTBB_CLK27_VALID));
+	CHECK_EQ(0, btbb_winnow(pn));
+	CHECK(!btbb_piconet_get_flag(pn, BTBB_HOP_REVERSAL_INIT));
+	btbb_piconet_unref(pn);
+}
+
+/*
  * With one candidate left, the clock is accepted only once that many further
  * hops have agreed with it.  Here the piconet predicts its own hops, so the
  * candidate that survives is the right one and the only question is when it
@@ -650,6 +679,7 @@ int main(void)
 	test_set_afh_map_allocates_nothing();
 	test_a_uap_with_its_top_bit_set();
 	test_an_allocation_failure_leaves_no_candidates();
+	test_an_allocation_failure_partway_through_the_list();
 	test_the_clock_is_confirmed_before_it_is_accepted();
 	test_a_wrong_clock_is_not_accepted_on_a_short_map();
 

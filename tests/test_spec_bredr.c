@@ -36,6 +36,7 @@
  */
 
 #include <string.h>
+#include <unistd.h>
 
 #include "bluetooth_packet.c"
 
@@ -1954,6 +1955,111 @@ static void test_payload_crc_needs_a_payload(void)
 	btbb_packet_unref(pkt);
 }
 
+/* Run btbb_print_packet() with stdout redirected into out. */
+static int capture_print(const btbb_packet *pkt, char *out, size_t outlen)
+{
+	FILE *capture = tmpfile();
+	int saved;
+	size_t read;
+
+	out[0] = '\0';
+	if (capture == NULL)
+		return -1;
+	fflush(stdout);
+	saved = dup(fileno(stdout));
+	if (saved < 0 || dup2(fileno(capture), fileno(stdout)) < 0) {
+		if (saved >= 0) {
+			dup2(saved, fileno(stdout));
+			close(saved);
+		}
+		fclose(capture);
+		return -1;
+	}
+
+	btbb_print_packet(pkt);
+	fflush(stdout);
+	dup2(saved, fileno(stdout));
+	close(saved);
+
+	rewind(capture);
+	read = fread(out, 1, outlen - 1, capture);
+	out[read] = '\0';
+	fclose(capture);
+	return 0;
+}
+
+/*
+ * What btbb_print_packet() prints, which is what ubertooth-rx shows for a
+ * decoded packet. The type comes from the packet header and the data from the
+ * payload, so a packet whose payload did not decode has its type printed and
+ * no data: the flag that says a payload was decoded used to gate both.
+ */
+static void test_printing_a_packet(void)
+{
+	char payload[MAX_SYMBOLS];
+	char stream[MAX_SYMBOLS];
+	char out[4096];
+	uint16_t header_data;
+	btbb_packet *pkt;
+	int payload_symbols, length;
+
+	/* the specification's DH1, whole */
+	payload_symbols = symbols_from_string(
+		"01110100"
+		"10000000" "01000000" "11000000" "00100000" "10100000"
+		"1110110000110110", payload);
+	length = build_packet(stream, 0x9e8b33, 0x123, 0x06, payload,
+			      payload_symbols, 0, 0);
+	pkt = packet_for(stream, length, 0x47, 0, 0);
+	CHECK(pkt != NULL);
+	if (pkt == NULL)
+		return;
+	CHECK(btbb_decode_header(pkt) == 1);
+	CHECK(btbb_decode_payload(pkt) == 10);
+	CHECK(capture_print(pkt, out, sizeof(out)) == 0);
+	CHECK(strstr(out, "Type: DH1") != NULL);
+	CHECK(strstr(out, "payload length: 8") != NULL);
+	CHECK(strstr(out, "Data:  2e 01 02 03 04 05") != NULL);
+
+	/* the same packet object, a capture that ends inside the payload */
+	btbb_packet_set_data(pkt, stream, 122 + 16, 0, 0);
+	CHECK(btbb_decode_header(pkt) == 1);
+	CHECK(btbb_decode_payload(pkt) == 1);
+	CHECK(capture_print(pkt, out, sizeof(out)) == 0);
+	CHECK(strstr(out, "Type: DH1") != NULL);
+	CHECK(strstr(out, "payload length: 0") != NULL);
+	/* no data line, and above all none of the first decode's bytes */
+	CHECK(strstr(out, "Data:") == NULL);
+	CHECK(strstr(out, "2e 01 02") == NULL);
+	btbb_packet_unref(pkt);
+
+	/* a POLL, which has no payload to decode and still has a type */
+	header_data = (uint16_t) (1 | (PACKET_TYPE_POLL << 3));
+	memset(stream, 0, sizeof(stream));
+	(void) build_packet(stream, 0x9e8b33, header_data,
+			    spec_hec(header_data, 0x47), NULL, 0, 0, 0);
+	pkt = packet_for(stream, 122, 0x47, 0, 0);
+	CHECK(pkt != NULL);
+	if (pkt == NULL)
+		return;
+	CHECK(btbb_decode_header(pkt) == 1);
+	CHECK(btbb_decode_payload(pkt) == 1);
+	CHECK(capture_print(pkt, out, sizeof(out)) == 0);
+	CHECK(strstr(out, "Type: POLL") != NULL);
+	CHECK(strstr(out, "Data:") == NULL);
+	btbb_packet_unref(pkt);
+
+	/* a packet whose header did not decode has nothing to say at all */
+	pkt = packet_for(stream, 121, 0x47, 0, 0);
+	CHECK(pkt != NULL);
+	if (pkt == NULL)
+		return;
+	CHECK(btbb_decode_header(pkt) == 0);
+	CHECK(capture_print(pkt, out, sizeof(out)) == 0);
+	CHECK(out[0] == '\0');
+	btbb_packet_unref(pkt);
+}
+
 /*
  * NULL and POLL packets have no payload at all, and an ID packet has no header
  * either, which btbb_header_present() is what tells apart.
@@ -2094,6 +2200,7 @@ int main(void)
 	test_dv_truncated_capture();
 	test_payload_crc_needs_a_payload();
 	test_fhs_payload();
+	test_printing_a_packet();
 	test_packets_without_payload();
 	test_uap_and_clock_recovery();
 

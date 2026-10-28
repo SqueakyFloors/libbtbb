@@ -70,8 +70,15 @@ FILE *btbb_pcap_open(const char *filename, uint32_t dlt, uint32_t snaplen) {
 	   there is no way to discard a buffer without flushing it - which
 	   would put those bytes in the middle of the file after the
 	   truncation. Each record is flushed as it is written in any case, so
-	   writing straight through costs one more write per record. */
-	(void) setvbuf(pcap_file, NULL, _IONBF, 0);
+	   writing straight through costs one more write per record.
+
+	   A stream that cannot be given up its buffer is no good for writing
+	   records that have to be whole, so give up on it here rather than
+	   write a capture that cannot be rolled back. */
+	if (setvbuf(pcap_file, NULL, _IONBF, 0) != 0) {
+		(void) fclose(pcap_file);
+		return NULL;
+	}
 
 	/* A file whose header did not reach it is no capture file, so say so
 	   now rather than leaving the caller with a handle to it. */
@@ -138,21 +145,25 @@ typedef struct {
    so what reached the file is all there was of the record.
 
    This is the best that can be done rather than a guarantee: a capture going
-   to something that cannot be truncated or sought, a named pipe for
-   instance, keeps the part of the record that reached it, as every capture
-   did before. The caller is told the write failed either way, and a caller
-   that stops capturing there - which is the only sensible answer to a full
-   disk - ends up with a file no worse than it would have had. */
-static void discard_partial_record(FILE *file, long start_of_record)
+   to something whose position cannot be found, or that cannot be truncated
+   or sought - a named pipe, say - keeps the part of the record that reached
+   it, as every capture did before. The stream's error is left set in that
+   case, so a caller that keeps writing keeps being told. The caller is told
+   the write failed either way, and a caller that stops capturing there -
+   which is the only sensible answer to a full disk - ends up with a file no
+   worse than it would have had. */
+static void discard_partial_record(FILE *file, off_t start_of_record)
 {
-	clearerr(file);
 	if (start_of_record < 0) {
 		return;
 	}
-	if (ftruncate(fileno(file), (off_t) start_of_record) != 0) {
+	if (ftruncate(fileno(file), start_of_record) != 0) {
 		return;
 	}
-	(void) fseek(file, start_of_record, SEEK_SET);
+	/* The record is out of the file, so the stream can be used again:
+	   clearing the error is what lets the seek below be accepted. */
+	clearerr(file);
+	(void) fseeko(file, start_of_record, SEEK_SET);
 }
 
 /* Write one record. Returns 0, or -PCAP_FILE_WRITE_ERROR if any of it did not
@@ -161,7 +172,10 @@ static void discard_partial_record(FILE *file, long start_of_record)
    could not be written whole is taken back out, as the pcapng writer does
    with a block, leaving the file parsable to its end. */
 static int btbb_pcap_dump(FILE *file, pcaprec_hdr_t *pcap_header, u_char *data) {
-	long start_of_record = ftell(file);
+	/* ftello() rather than ftell(): a capture can pass the 2 GB a long
+	   holds on a 32-bit host, and a position that came back as -1 there
+	   would leave the failed record in the file. */
+	off_t start_of_record = ftello(file);
 
 	if ((fwrite(pcap_header, sizeof(*pcap_header), 1, file) == 1) &&
 	    (fwrite(data, pcap_header->incl_len, 1, file) == 1) &&
@@ -291,8 +305,9 @@ btbb_pcap_close(btbb_pcap_handle * h)
 {
 	int retval = 0;
 
-	/* Closing flushes, so this is the last chance to notice that part of
-	   the capture never reached the file. */
+	/* The stream is unbuffered, so every record has already reached the
+	   file or been reported as not reaching it; this catches a failure of
+	   the close itself. */
 	if (h && h->pcap_file && (fclose(h->pcap_file) != 0)) {
 		retval = -PCAP_FILE_WRITE_ERROR;
 	}
@@ -513,8 +528,9 @@ lell_pcap_close(lell_pcap_handle *h)
 {
 	int retval = 0;
 
-	/* Closing flushes, so this is the last chance to notice that part of
-	   the capture never reached the file. */
+	/* The stream is unbuffered, so every record has already reached the
+	   file or been reported as not reaching it; this catches a failure of
+	   the close itself. */
 	if (h && h->pcap_file && (fclose(h->pcap_file) != 0)) {
 		retval = -PCAP_FILE_WRITE_ERROR;
 	}

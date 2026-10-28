@@ -103,19 +103,23 @@ struct btbb_packet {
 	uint8_t ac_errors; /* Number of bit errors in the AC */
 
 	/* How many bits the forward error correction had to put right, which
-	* the capture file writers record. The header's count is over its 18
-	* bits, so 0 to 18. The payload's is over the payload that was
-	* decoded, and is only meaningful where the type carries FEC: 0 to 80
-	* bits for the rate 1/3 code, and one bit per 15-symbol block for the
-	* rate 2/3 code. Both are 0 until something is decoded.
+	* the capture file writers record. Both are 0 until something is
+	* decoded, and only a type that carries FEC can report more.
 	*
-	* The published record layout describes the payload field as running
-	* to +180 for the rate 2/3 code. The longest payload that code
-	* carries is a DM5's 228 bytes, which is 183 blocks, so a reception
-	* marginal enough to need a correction in every one of them reports
-	* 183. The count the decoder made is reported either way: a reader is
-	* better served by the real number than by one capped to the
-	* description, and the field is signed 16-bit, so it fits.
+	* The rate 1/3 decode gives up when a quarter or more of the bits
+	* needed putting right, so its counts stop well below the whole: 0 to
+	* 3 of the header's 18 bits, and 0 to 19 of an HV1 payload's 80. A
+	* noisier one than that is no payload at all rather than a payload
+	* with a high count.
+	*
+	* The rate 2/3 code puts right one symbol per 15-symbol block, so its
+	* count is one per block corrected. The published record layout
+	* describes the payload field as running to +180; the longest payload
+	* this code carries is a DM5's 228 bytes, which is 183 blocks, so a
+	* reception marginal enough to need a correction in every one of them
+	* reports 183. The count the decoder made is reported either way: a
+	* reader is better served by the real number than by one capped to
+	* the description, and a signed 16-bit field holds it.
 	*/
 	uint8_t corrected_header_bits;
 	int16_t corrected_payload_bits;
