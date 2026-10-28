@@ -66,6 +66,16 @@ if(BUILD_TESTING)
     # values, which a sanitizer build takes a few seconds over.
     set_tests_properties(piconet PROPERTIES TIMEOUT 60)
 
+    # The two clock-recovery measurements the issues quote. Internal, so it
+    # compiles the translation units it reaches into.
+    add_executable(test_clock_sweep test_clock_sweep.c)
+    target_include_directories(test_clock_sweep PRIVATE ${PROJECT_SOURCE_DIR}/lib/src)
+    target_compile_options(test_clock_sweep PRIVATE -std=gnu90)
+    add_test(NAME clock_sweep COMMAND test_clock_sweep)
+    # Each trial walks 2^21 clock values, and the default is two dozen of
+    # them twice over; a sanitizer build takes several times as long.
+    set_tests_properties(clock_sweep PROPERTIES TIMEOUT 300)
+
     add_executable(test_hop test_hop.c)
     target_include_directories(test_hop PRIVATE ${PROJECT_SOURCE_DIR}/lib/src)
     if(BUILD_SHARED_LIB)

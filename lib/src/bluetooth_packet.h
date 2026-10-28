@@ -99,7 +99,10 @@ struct btbb_packet {
 	char payload[MAX_PAYLOAD_LENGTH];
 
 	uint16_t crc;
-	uint32_t clkn;     /* CLK1-27 of the packet */
+	/* The packet's clock as CLK1-27, a count of 625 us slots, which is
+	   half the 312.5 us value btbb_packet_set_data() is given. The name
+	   is historic: nothing here holds CLKN. */
+	uint32_t clkn;
 	uint8_t ac_errors; /* Number of bit errors in the AC */
 
 	/* How many bits the forward error correction had to put right, which

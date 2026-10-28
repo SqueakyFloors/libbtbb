@@ -51,6 +51,43 @@
  */
 #define CLK27_CONFIRM_HOPS 4
 
+/*
+ * How many packet headers in a row have to fail their HEC while following a
+ * piconet before the clock the library recovered is given up.
+ *
+ * Following starts once a clock is accepted, and from then on nothing
+ * winnows: a clock that was wrong is used for every packet that follows.
+ * Every candidate shares the CLK1-6 that discovery found, so what a wrong
+ * candidate gets wrong is which channel to listen on, not the dewhitening.
+ * The clock bits a header does depend on are CLK1-6 and the UAP, and those
+ * can be wrong, accepted by elimination rather than by a CRC.  Then every
+ * header fails and, until now, there was no way back.
+ *
+ * Only the HEC counts, not any failure to decode: it is checked against the
+ * piconet's UAP over a header dewhitened with CLK1-6, so it is evidence about
+ * exactly the two things being given up here.  A payload that will not decode
+ * says nothing about either, and counting those would throw away a good clock
+ * on a link with bit errors in it.
+ *
+ * The run still has to be long enough that bit errors in the headers
+ * themselves do not cross it on a clock that is right.  What protects it
+ * there is the access code search the packet came through, which allows a
+ * couple of bit errors in 64: a packet noisy enough to break its own
+ * majority-voted header hardly ever gets that far.  Measured over a run of
+ * noisy packets (tests/test_clock_sweep.c), of the headers that reach the HEC
+ * check under the right clock and UAP, 0.15% fail it at a bit error rate of
+ * 0.5% and 24% fail at 10%, where the access code already rejects 96 packets
+ * in 100.  Twenty in a row is 4e-57 and 5e-13 of a chance in those two
+ * cases.  Against a wrong CLK1-6 or UAP it costs almost nothing: the HEC is 8
+ * bits, so about one header in 256 passes by chance and twenty failures in a
+ * row arrive in about twenty packets.
+ *
+ * The run is counted in packets, not in seconds, so on a link quiet enough
+ * that twenty headers take hours it is twenty headers all the same.  The
+ * rates above are what makes that safe rather than any time bound.
+ */
+#define FOLLOW_HEADER_FAILURES 20
+
 struct btbb_piconet {
 
 	uint32_t refcount;
@@ -119,6 +156,16 @@ struct btbb_piconet {
 	 * hops that confirm it, counted against CLK27_CONFIRM_HOPS above. */
 	int clk27_confirmations;
 
+	/* True once hop reversal has accepted a clock for this piconet, which
+	 * is the clock that can be given up again.  A caller that set the
+	 * clock itself, from an adapter say, owns it: the library has no
+	 * better one to fall back on, so it does not take that one away. */
+	uint8_t clock_recovered;
+
+	/* Packet headers in a row that failed their HEC while following,
+	 * counted against FOLLOW_HEADER_FAILURES above. */
+	int follow_header_failures;
+
 	/* CLK1-6 candidates */
 	int clock6_candidates[64];
 
@@ -137,7 +184,12 @@ struct btbb_piconet {
 	 * masking clk_offset's CLKN ticks to 6 bits would not give slots. */
 	int clk6_offset;
 
-	/* local clock (CLK1-27) at time of first packet */
+	/* The observer's own clock when the first packet arrived, as CLK1-27:
+	 * a count of 625 us slots, the same unit as btbb_packet's clkn, which
+	 * is where it comes from.  Candidate clocks, the hop differences in
+	 * pattern_indices and clk6_offset are all in those slots too; the
+	 * only clock here in 312.5 us CLKN ticks is clk_offset above, which
+	 * is what a receiver is told to hop on. */
 	uint32_t first_pkt_time;
 
 	/* queue of packets to be decoded */

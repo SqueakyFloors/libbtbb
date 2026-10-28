@@ -505,6 +505,10 @@ int btbb_init_hop_reversal(int aliased, btbb_piconet *pn)
 	btbb_piconet_set_flag(pn, BTBB_CLK27_VALID, 0);
 	btbb_piconet_set_flag(pn, BTBB_IS_ALIASED, aliased);
 
+	/* The piconet's CLK1-6 when the first packet arrived: the observer's
+	 * own CLK1-27 at that moment, whose low 6 bits are its CLK1-6, plus
+	 * the offset between the two clocks in the same 625 us slots. Every
+	 * candidate CLK1-27 below has these low bits. */
 	clock = (pn->clk6_offset + pn->first_pkt_time) & 0x3f;
 	count = init_candidates(pn->pattern_channels[0], (int) clock, pn,
 				&pn->clock_candidates);
@@ -539,6 +543,9 @@ void try_hop(btbb_packet *pkt, btbb_piconet *pn)
 			reset(pn);
 			return;
 		}
+		/* Both clocks are CLK1-27, so the difference is a count of
+		 * 625 us slots, which is what channel_winnow() adds to a
+		 * CLK1-27 candidate. */
 		pn->pattern_indices[pn->packets_observed] =
 			pkt->clkn - pn->first_pkt_time;
 		pn->pattern_channels[pn->packets_observed] = pkt->channel;
@@ -589,7 +596,20 @@ static void reset(btbb_piconet *pn)
 	btbb_piconet_set_flag(pn, BTBB_UAP_VALID, 0);
 	btbb_piconet_set_flag(pn, BTBB_CLK6_VALID, 0);
 	btbb_piconet_set_flag(pn, BTBB_CLK27_VALID, 0);
+	/* Discovery starting over means there is no clock to follow and
+	 * nothing recovered to give up. */
+	btbb_piconet_set_flag(pn, BTBB_FOLLOWING, 0);
+	pn->clock_recovered = 0;
+	pn->follow_header_failures = 0;
 	pn->packets_observed = 0;
+	/* The candidate list has just been freed, so nothing may still read a
+	 * count of it, and the offset it produced is no longer a clock the
+	 * caller can hop on: btbb_piconet_get_clk_offset() reads 0 until
+	 * BTBB_CLK27_VALID is set again. */
+	pn->num_candidates = 0;
+	pn->winnowed = 0;
+	pn->clk27_confirmations = 0;
+	pn->clk_offset = 0;
 
 	/*
 	 * If we have recently observed two packets in a row on the same
@@ -633,6 +653,10 @@ static int channel_winnow(int offset, char channel, btbb_piconet *pn)
 						(pn->first_pkt_time << 1));
 			printf("\nAcquired CLK1-27 = 0x%07x\n", pn->clock_candidates[0]);
 			btbb_piconet_set_flag(pn, BTBB_CLK27_VALID, 1);
+			/* The library's own, so the library may give it up
+			 * again if following it does not work out. */
+			pn->clock_recovered = 1;
+			pn->follow_header_failures = 0;
 		}
 	}
 	else if (new_count == 0) {
@@ -740,16 +764,22 @@ int btbb_uap_from_header(btbb_packet *pkt, btbb_piconet *pn)
 	int count, crc_chk, first_clock = 0;
 
 	int remaining = 0;
-	uint32_t clkn = pkt->clkn;
+	/* The packet's clock as CLK1-27, the 625 us slot count. Its name on
+	 * the packet is clkn, but btbb_packet_set_data() shifts the 312.5 us
+	 * value it is given down by one, and every clock below is in slots:
+	 * first_pkt_time, the differences remembered in pattern_indices, and
+	 * the CLK1-6 the low 6 bits give. */
+	uint32_t clk1_27 = pkt->clkn;
 
 	if (!btbb_piconet_get_flag(pn, BTBB_GOT_FIRST_PACKET))
-		pn->first_pkt_time = clkn;
+		pn->first_pkt_time = clk1_27;
 
 	// Set afh channel map
 	btbb_piconet_set_channel_seen(pn, pkt->channel);
 
 	if (pn->packets_observed < MAX_PATTERN_LENGTH) {
-		pn->pattern_indices[pn->packets_observed] = clkn - pn->first_pkt_time;
+		pn->pattern_indices[pn->packets_observed] =
+			clk1_27 - pn->first_pkt_time;
 		pn->pattern_channels[pn->packets_observed] = pkt->channel;
 	} else {
 		printf("Oops. More hops than we can remember.\n");
@@ -765,7 +795,7 @@ int btbb_uap_from_header(btbb_packet *pkt, btbb_piconet *pn)
 		if (pn->clock6_candidates[count] > -1
 			|| !btbb_piconet_get_flag(pn, BTBB_GOT_FIRST_PACKET)) {
 			/* clock value for the current packet assuming count was the clock of the first packet */
-			int clock = (count + clkn - pn->first_pkt_time) % 64;
+			int clock = (count + clk1_27 - pn->first_pkt_time) % 64;
 			UAP = try_clock(clock, pkt);
 			crc_chk = -1;
 
@@ -963,6 +993,48 @@ int btbb_process_packet(btbb_packet *pkt, btbb_piconet *pn) {
 				btbb_print_packet(pkt);
 			else
 				printf("Failed to decode packet\n");
+
+			/*
+			 * The header's HEC is the only thing here that says
+			 * anything about the clock: it is checked against the
+			 * piconet's UAP, over a header dewhitened with CLK1-6,
+			 * so a header that checks out confirms both whatever
+			 * the payload goes on to do. A payload that will not
+			 * decode is a packet lost to bit errors and no
+			 * evidence at all, and a header the rate 1/3 code
+			 * could not recover is none either.
+			 */
+			if (btbb_packet_get_flag(pkt, BTBB_HEC_CHECKED)) {
+				if (btbb_packet_get_flag(pkt, BTBB_HEC_VALID)) {
+					pn->follow_header_failures = 0;
+				} else if (pn->clock_recovered) {
+					pn->follow_header_failures++;
+					/* Header after header of this piconet
+					 * failing under the clock and UAP
+					 * being followed means they are not
+					 * the piconet's. Nothing winnows
+					 * while following, so start discovery
+					 * over and tell the caller: it put
+					 * the receiver on the offset the
+					 * library gave it, and has to take it
+					 * off again. */
+					if (pn->follow_header_failures >=
+					    FOLLOW_HEADER_FAILURES) {
+						fprintf(stderr, "note: %d packet headers in a row failed their HEC; "
+							"giving up this clock and UAP and starting discovery again\n",
+							pn->follow_header_failures);
+						/* The UAP goes with the
+						 * clock. Discovery cannot find
+						 * another while try_hop() is
+						 * still filtering on this one,
+						 * which it does for as long as
+						 * the piconet has one. */
+						pn->UAP = 0;
+						reset(pn);
+						return BTBB_PROCESS_LOCK_LOST;
+					}
+				}
+			}
 		}
 
 		/* Have LAP/UAP, need clocks. */

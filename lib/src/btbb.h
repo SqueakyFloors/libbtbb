@@ -125,6 +125,8 @@ uint8_t btbb_packet_get_transport(const btbb_packet *pkt);
 
 uint8_t btbb_packet_get_channel(const btbb_packet *pkt);
 uint8_t btbb_packet_get_ac_errors(const btbb_packet *pkt);
+/* The packet's clock as CLK1-27, the 625 us slot count: the 312.5 us value
+   given to btbb_packet_set_data() below, shifted down by one. */
 uint32_t btbb_packet_get_clkn(const btbb_packet *pkt);
 uint32_t btbb_packet_get_header_packed(const btbb_packet* pkt);
 
@@ -200,6 +202,10 @@ uint32_t btbb_piconet_get_lap(const btbb_piconet *pn);
 uint16_t btbb_piconet_get_nap(const btbb_piconet *pn);
 uint64_t btbb_piconet_get_bdaddr(const btbb_piconet *pn);
 
+/* The offset between the local clock and the piconet's, in 312.5 us CLKN
+   ticks, which is what a receiver is told to hop on. It means something only
+   while BTBB_CLK27_VALID is set: before a clock is recovered, and again after
+   one is given up, it reads 0. */
 int btbb_piconet_get_clk_offset(const btbb_piconet *pn);
 void btbb_piconet_set_clk_offset(btbb_piconet *pn, int clk_offset);
 
@@ -212,7 +218,24 @@ uint8_t btbb_piconet_get_channel_seen(btbb_piconet *pn, uint8_t channel);
 void btbb_piconet_set_afh_map(btbb_piconet *pn, uint8_t *afh_map);
 uint8_t *btbb_piconet_get_afh_map(btbb_piconet *pn);
 
-/* Extract as much information (LAP/UAP/CLK) as possible from received packet */
+/* btbb_process_packet() returns this when the clock and UAP it recovered turn
+   out not to be the piconet's: header after header of this piconet arrived
+   while following it and none of them passed its HEC. The piconet has started
+   discovery again, so BTBB_FOLLOWING, the clock and the UAP are gone and new
+   ones will be reported in time. A receiver put on the old offset has to be
+   taken off it: a capture tool is expected to warn once and follow the
+   piconet again when the library has a clock for it.
+
+   It is a return value and not one of the BTBB_* flags above, so it is no use
+   to btbb_piconet_get_flag(). It is positive, where the one other thing this
+   function reports is negative, so a caller that only looks for that is
+   unaffected. */
+#define BTBB_PROCESS_LOCK_LOST 1
+
+/* Extract as much information (LAP/UAP/CLK) as possible from received packet.
+   Returns BTBB_PROCESS_LOCK_LOST (above), -1 when the piconet's clock has
+   just been recovered and the caller should follow it on
+   btbb_piconet_get_clk_offset(), and 0 otherwise. */
 int btbb_process_packet(btbb_packet *pkt, btbb_piconet *pn);
 
 /* use packet headers to determine UAP */
@@ -281,6 +304,19 @@ void lell_print(const lell_packet *pkt);
 typedef struct lell_pcapng_handle lell_pcapng_handle;
 /* create a PCAPNG file for LE captures */
 int lell_pcapng_create_file(const char *filename, const char *interface_desc, lell_pcapng_handle ** ph);
+
+/* lell_pcapng_append_packet() returns this when the packet reached the file
+   but the connection parameters it carried did not. A CONNECT_IND's
+   parameters are recorded as an option of the interface description block,
+   whose room for them is set aside when the file is created, and a long
+   capture can fill it. A capture tool is expected to warn once and carry on.
+
+   It is positive because the packet was written; a failed write is negative,
+   as every error from these writers is. So a caller has to test a write for
+   "< 0" and not for "non-zero", or it will take a capture that is still
+   being written for a broken one. */
+#define LELL_PCAPNG_CONNECT_INFO_NOT_RECORDED 1
+
 /* save an LE packet to PCAPNG capture file */
 int lell_pcapng_append_packet(lell_pcapng_handle * h, const uint64_t ns,
                               const int8_t sigdbm, const int8_t noisedbm,

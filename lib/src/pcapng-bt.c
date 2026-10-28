@@ -521,7 +521,19 @@ lell_pcapng_append_packet(lell_pcapng_handle * h, const uint64_t ns,
 		/* The option records the PDU's 34 payload bytes, InitA through
 		   HopSCA. In the capture those start after the 4-byte access
 		   address and the 2-byte PDU header. */
-		(void) lell_pcapng_record_connect_req(h, ns, &pkt->symbols[6]);
+		if (lell_pcapng_record_connect_req(h, ns,
+						   &pkt->symbols[6]) != 0) {
+			/* The room for these options is set aside when the
+			   file is created and each one takes 48 bytes of it,
+			   so a long capture can fill it, and with the packet
+			   above just written to this handle that is the only
+			   way to get here. Say so, rather than carry on
+			   recording packets and silently stop recording the
+			   parameters a reader needs to follow the connections
+			   in them. The packet itself is in the file, which is
+			   why this is not an error. */
+			retval = LELL_PCAPNG_CONNECT_INFO_NOT_RECORDED;
+		}
 	}
 	return retval;
 }

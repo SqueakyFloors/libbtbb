@@ -242,8 +242,12 @@ static int check_capture_writers(void)
 	fd = mkstemp(pcapng_path);
 	close(fd);
 	unlink(pcapng_path);
+	/* A write failure is negative. A positive answer from the append is
+	   LELL_PCAPNG_CONNECT_INFO_NOT_RECORDED, which says the packet was
+	   written and only a recorded option was not, so it is not a failure
+	   of this write. */
 	if (lell_pcapng_create_file(pcapng_path, "test", &pcapng) ||
-	    lell_pcapng_append_packet(pcapng, 0, -40, -90, 0, pkt)) {
+	    lell_pcapng_append_packet(pcapng, 0, -40, -90, 0, pkt) < 0) {
 		fprintf(stderr, "FAIL: the PCAPNG write failed\n");
 		bad = 1;
 	} else {
