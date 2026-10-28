@@ -1482,6 +1482,40 @@ static void test_write_errors(void)
 		unlink_quietly(full);
 	}
 
+	/* the plain pcap writer reports it too, through the buffered writes
+	   stdio makes on its behalf */
+	if (getrlimit(RLIMIT_FSIZE, &saved) == 0) {
+		const char *small = "test_capture_small.pcap";
+
+		limited = saved;
+		/* room for the 24-byte file header and one record, not more */
+		limited.rlim_cur = 100;
+		if (setrlimit(RLIMIT_FSIZE, &limited) == 0) {
+			void (*old_xfsz)(int) = signal(SIGXFSZ, SIG_IGN);
+			btbb_pcap_handle *ph = NULL;
+			int i, failed = 0;
+
+			unlink_quietly(small);
+			CHECK(btbb_pcap_create_file(small, &ph) == 0);
+			for (i = 0; (ph != NULL) && (i < 100); i++) {
+				if (btbb_pcap_append_packet(ph, 1ull, -20, -80,
+							    SPEC_DH1_LAP,
+							    SPEC_DH1_UAP,
+							    pkt) != 0) {
+					failed = 1;
+					break;
+				}
+			}
+			CHECK(failed);
+			if (ph != NULL) {
+				(void) btbb_pcap_close(ph);
+			}
+			unlink_quietly(small);
+			CHECK(setrlimit(RLIMIT_FSIZE, &saved) == 0);
+			(void) signal(SIGXFSZ, old_xfsz);
+		}
+	}
+
 	btbb_packet_unref(pkt);
 
 	/* the LE writer reports the same way */
