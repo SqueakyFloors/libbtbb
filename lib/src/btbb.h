@@ -39,6 +39,8 @@
 #define BTBB_GOT_FIRST_PACKET  10
 #define BTBB_IS_AFH            11
 #define BTBB_LOOKS_LIKE_AFH    12
+/* BTBB_IS_ALIASED is vestigial: aliased hop reversal is not
+   implemented, and btbb_init_hop_reversal() clears this flag. */
 #define BTBB_IS_ALIASED        13
 #define BTBB_FOLLOWING         14
 
@@ -288,7 +290,10 @@ int btbb_uap_from_header(btbb_packet *pkt, btbb_piconet *pn);
 /* Print hexadecimal representation of the derived AFH map */
 void btbb_print_afh_map(btbb_piconet *pn);
 
-/* decode a whole packet from the given piconet */
+/* Decode a whole packet from the given piconet: the header, and the
+ * payload if the header decoded. Returns what btbb_decode_payload()
+ * returned, or 0 where the header did not decode. Prints nothing;
+ * btbb_print_packet() is what reports a decoded packet. */
 int btbb_decode(btbb_packet* pkt);
 
 
@@ -297,10 +302,10 @@ int btbb_decode(btbb_packet* pkt);
  * nothing to work with.
  *
  * Hops as an aliased receiver observes them, folded from 79 channels
- * into 25, are not reversed: a nonzero 'aliased' is refused, with a
- * note on stderr and no candidates. It used to be accepted and then
- * reversed as if unaliased, against channels such a receiver never
- * reports. */
+ * into 25, are not reversed: a nonzero 'aliased' chooses no
+ * candidates, returns zero and leaves the piconet as it was, with a
+ * note on stderr. It used to be accepted and then reversed as if
+ * unaliased, against channels such a receiver never reports. */
 int btbb_init_hop_reversal(int aliased, btbb_piconet *pn);
 
 /* narrow a list of candidate clock values based on all observed hops */

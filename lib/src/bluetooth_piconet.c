@@ -502,6 +502,9 @@ int btbb_init_hop_reversal(int aliased, btbb_piconet *pn)
 	 * channels. That is not implemented, and asking for it used to be
 	 * accepted and then quietly reversed as if unaliased, which chooses
 	 * the candidates against channels the receiver never reports.
+	 *
+	 * A refused request changes nothing, so a piconet already recovering
+	 * its clock the ordinary way carries on doing that.
 	 */
 	if (aliased) {
 		piconet_note("aliased hop reversal is not implemented\n");
@@ -680,7 +683,10 @@ static int channel_winnow(int offset, char channel, btbb_piconet *pn)
 			 * shift both CLK1-27 values up by one. */
 			pn->clk_offset = (int) ((pn->clock_candidates[0] << 1) -
 						(pn->first_pkt_time << 1));
-			piconet_note("\nAcquired CLK1-27 = 0x%07x\n",
+			/* The leading newline this line used to carry broke it
+			 * out of the dump it landed in the middle of; on
+			 * stderr it is a blank line and nothing more. */
+			piconet_note("Acquired CLK1-27 = 0x%07x\n",
 				     pn->clock_candidates[0]);
 			btbb_piconet_set_flag(pn, BTBB_CLK27_VALID, 1);
 			/* The library's own, so the library may give it up

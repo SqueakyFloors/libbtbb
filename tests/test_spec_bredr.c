@@ -40,6 +40,8 @@
 
 #include "bluetooth_packet.c"
 
+#include "stream_capture.h"
+
 static int failures = 0;
 
 #define CHECK(cond)                                                        \
@@ -622,17 +624,18 @@ static int symbols_from_string(const char *text, char *out)
  * the payload is a one byte payload header (logical channel 10, flow 1,
  * length 5), five data bytes 01 to 05, and the CRC.
  */
+static const char DH1_HEADER[] =
+	"111111000" "000000111000" "000111000"
+	"000111111000000000000000";
+static const char DH1_PAYLOAD[] =
+	"01110100"	/* payload header */
+	"10000000" "01000000" "11000000" "00100000" "10100000"
+	"1110110000110110";	/* CRC */
+
 static void test_dh1_sample_packet(void)
 {
-	static const char HEADER[] =
-		"111111000" "000000111000" "000111000"
-		"000111111000000000000000";
-	static const char PAYLOAD[] =
-		"01110100"	/* payload header */
-		"10000000" "01000000" "11000000" "00100000" "10100000"
-		"1110110000110110";	/* CRC */
-	char payload[sizeof(PAYLOAD)];
-	char header_symbols[sizeof(HEADER)];
+	char payload[sizeof(DH1_PAYLOAD)];
+	char header_symbols[sizeof(DH1_HEADER)];
 	char stream[MAX_SYMBOLS];
 	char packed[8];
 	btbb_packet *pkt;
@@ -640,7 +643,7 @@ static void test_dh1_sample_packet(void)
 
 	/* the published header is the rate 1/3 encoding of 0x123 and HEC 0x06,
 	 * which is one of the Section 4 rows for a UAP of 0x47 */
-	symbols_from_string(HEADER, header_symbols);
+	symbols_from_string(DH1_HEADER, header_symbols);
 	{
 		char decoded[18];
 
@@ -650,7 +653,7 @@ static void test_dh1_sample_packet(void)
 		CHECK(spec_hec(0x123, 0x47) == 0x06);
 	}
 
-	payload_symbols = symbols_from_string(PAYLOAD, payload);
+	payload_symbols = symbols_from_string(DH1_PAYLOAD, payload);
 	CHECK(payload_symbols == 8 * 8);
 	length = build_packet(stream, 0x9e8b33, 0x123, 0x06, payload,
 			      payload_symbols, 0, 0);
@@ -682,6 +685,53 @@ static void test_dh1_sample_packet(void)
 	CHECK((uint8_t) packed[6] == 0x37);
 	CHECK((uint8_t) packed[7] == 0x6c);
 
+	btbb_packet_unref(pkt);
+}
+
+/*
+ * Decoding a packet prints nothing. btbb_decode() used to print "Packet
+ * decoded with clock 0x.. (rv=..)" and then dump the packet, both to stdout,
+ * so a tool dumping its capture there had the library's output in the dump,
+ * and a packet the library was asked to print was printed twice. Reporting a
+ * packet is btbb_print_packet()'s job, and it still does it.
+ */
+static void test_decode_prints_nothing(void)
+{
+	char payload[sizeof(DH1_PAYLOAD)];
+	char stream[MAX_SYMBOLS];
+	char out[4096], err[4096];
+	btbb_packet *pkt;
+	int payload_symbols, length;
+
+	payload_symbols = symbols_from_string(DH1_PAYLOAD, payload);
+	length = build_packet(stream, 0x9e8b33, 0x123, 0x06, payload,
+			      payload_symbols, 0, 0);
+	pkt = packet_for(stream, length, 0x47, 0, 0);
+	CHECK(pkt != NULL);
+	if (pkt == NULL)
+		return;
+
+	if (capture_start() != 0) {
+		printf("FAIL: could not capture the output\n");
+		++failures;
+		btbb_packet_unref(pkt);
+		return;
+	}
+	/* 10 is a CRC match: the packet decoded, which is when it used to be
+	 * printed */
+	if (btbb_decode(pkt) != 10)
+		++failures;
+	btbb_print_packet(pkt);
+	capture_stop(out, sizeof(out), err, sizeof(err));
+
+	CHECK(strstr(out, "Packet decoded with clock") == NULL);
+	CHECK(strstr(err, "Packet decoded with clock") == NULL);
+	/* the one dump btbb_print_packet() was asked for, and no second one */
+	CHECK(strncmp(out, "  Type: DH1", 11) == 0);
+	CHECK(strstr(out + 1, "  Type: ") == NULL);
+	CHECK(strlen(err) == 0);
+	if (failures != 0)
+		printf("stdout was: %s\nstderr was: %s\n", out, err);
 	btbb_packet_unref(pkt);
 }
 
@@ -2184,6 +2234,7 @@ int main(void)
 	test_fec23_sample_data();
 	test_fec13_single_symbol_correction();
 	test_dh1_sample_packet();
+	test_decode_prints_nothing();
 	test_dm1_sample_packet();
 	test_acl_payload_lengths();
 	test_acl_payload_length_clamped();

@@ -403,10 +403,10 @@ int promiscuous_packet_search(char *stream, int search_length, uint32_t *lap,
 	for (count = 0; count < search_length; count++) {
 		symbols = &stream[count];
 		barker >>= 1;
-		barker |= (symbols[63] << 6);
+		barker |= (symbols[SYNCWORD_SYMBOLS - 1] << 6);
 		if (BARKER_DISTANCE[barker] <= MAX_BARKER_ERRORS) {
 			// Error correction
-			syncword = air_to_host64(symbols, 64);
+			syncword = air_to_host64(symbols, SYNCWORD_SYMBOLS);
 
 			/* correct the barker code with a simple comparison */
 			corrected_barker = barker_correct[(uint8_t)(syncword >> 57)];
@@ -452,7 +452,7 @@ int find_known_lap(char *stream, int search_length, uint32_t lap,
 	ac = btbb_gen_syncword(lap);
 	for (count = 0; count < search_length; count++) {
 		symbols = &stream[count];
-		syncword = air_to_host64(symbols, 64);
+		syncword = air_to_host64(symbols, SYNCWORD_SYMBOLS);
 		*ac_errors = count_bits(syncword ^ ac);
 
 		if (*ac_errors <= max_ac_errors) {
@@ -1894,12 +1894,12 @@ int btbb_decode(btbb_packet* pkt)
 		rv =  btbb_decode_payload(pkt);
 	}
 
-	/* If we were successful, print the packet */
-	if(rv > 0) {
-		printf("Packet decoded with clock 0x%02x (rv=%d)\n", pkt->clkn & 0x3f, rv);
-		btbb_print_packet(pkt);
-	}
-
+	/* Decoding prints nothing. A caller that wants the packet reported
+	 * calls btbb_print_packet(), which btbb_process_packet() does for a
+	 * packet of a piconet it is following. This used to print the packet
+	 * itself, so a followed packet was printed twice, and every packet
+	 * decoded while a clock was being recovered was printed to stdout
+	 * without anyone asking for it. */
 	return rv;
 }
 
