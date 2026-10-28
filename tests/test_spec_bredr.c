@@ -50,39 +50,6 @@ static int failures = 0;
 		}                                                          \
 	} while (0)
 
-/*
- * A vector the library is known to get wrong, with the issue that tracks the
- * bug. It does not count as a failure while it fails, but it does count as
- * one once it starts passing, so that the fix has to come back here and turn
- * the line into a CHECK.
- */
-#define XFAIL(issue, cond)                                                 \
-	do {                                                               \
-		if (cond) {                                                \
-			printf("XPASS %s:%d: %s now passes; issue #%d is "  \
-			       "fixed, so make this a CHECK\n",            \
-			       __FILE__, __LINE__, #cond, (issue));        \
-			++failures;                                        \
-		} else {                                                   \
-			printf("xfail (#%d) %s:%d: %s\n", (issue),         \
-			       __FILE__, __LINE__, #cond);                 \
-		}                                                          \
-	} while (0)
-
-/*
- * Issue #17 is an out of bounds read, which a sanitizer build stops the
- * process on rather than letting it return a wrong answer, so the vector that
- * provokes it only runs where that is not fatal. The fix takes this back out.
- */
-#if defined(__has_feature)
-#  if __has_feature(undefined_behavior_sanitizer)
-#    define BOUNDS_CHECKED 1
-#  endif
-#endif
-#if defined(__SANITIZE_UNDEFINED__)
-#  define BOUNDS_CHECKED 1
-#endif
-
 /* ------------------------------------------------------------------ *
  * The specification's own implementations, used to build test packets
  * ------------------------------------------------------------------ */
@@ -839,18 +806,9 @@ static void test_acl_payload_lengths(void)
 		printf("  %s: %d byte body, payload length %d\n",
 		       ACL_TYPES[row].name, ACL_TYPES[row].body,
 		       btbb_packet_get_payload_length(pkt));
-		if (ACL_TYPES[row].type == PACKET_TYPE_AUX1) {
-			/*
-			 * decode_payload_header() has no AUX1 case, so the
-			 * length it just read is clamped to zero.
-			 */
-			XFAIL(18, btbb_packet_get_payload_length(pkt) ==
-				  ACL_TYPES[row].payload_length);
-			btbb_packet_unref(pkt);
-			continue;
-		}
-
-		CHECK(rv == 10);
+		/* 10 is a CRC match; AUX1 has no CRC, so 2 is as good as it
+		 * gets for it */
+		CHECK(rv == (ACL_TYPES[row].has_crc ? 10 : 2));
 		CHECK(btbb_packet_get_payload_length(pkt) ==
 		      ACL_TYPES[row].payload_length);
 		CHECK(btbb_get_payload_packed(pkt, packed) ==
@@ -1001,14 +959,13 @@ static void test_esco_payload_lengths(void)
 		uint8_t type;
 		int body;
 		int fec23;
-		int issue;	/* 0 when the vector is expected to pass */
 	} CASES[] = {
-		{ "EV3",  PACKET_TYPE_HV3,   1, 0, 16 },
-		{ "EV3",  PACKET_TYPE_HV3,  30, 0, 16 },
-		{ "EV4",  PACKET_TYPE_EV4,   1, 1, 17 },
-		{ "EV4",  PACKET_TYPE_EV4, 120, 1, 17 },
-		{ "EV5",  PACKET_TYPE_EV5,   1, 0, 16 },
-		{ "EV5",  PACKET_TYPE_EV5, 180, 0, 16 }
+		{ "EV3",  PACKET_TYPE_HV3,   1, 0 },
+		{ "EV3",  PACKET_TYPE_HV3,  30, 0 },
+		{ "EV4",  PACKET_TYPE_EV4,   1, 1 },
+		{ "EV4",  PACKET_TYPE_EV4, 120, 1 },
+		{ "EV5",  PACKET_TYPE_EV5,   1, 0 },
+		{ "EV5",  PACKET_TYPE_EV5, 180, 0 }
 	};
 	size_t row;
 
@@ -1016,6 +973,7 @@ static void test_esco_payload_lengths(void)
 		char bits[(180 + 2) * 8 + 10];
 		char payload[MAX_SYMBOLS];
 		char stream[MAX_SYMBOLS];
+		char packed[182];
 		uint16_t header_data;
 		btbb_packet *pkt;
 		int data_bits = (CASES[row].body + 2) * 8;
@@ -1060,27 +1018,18 @@ static void test_esco_payload_lengths(void)
 
 		printf("  %s, %d byte body\n", CASES[row].name,
 		       CASES[row].body);
-		if (CASES[row].type == PACKET_TYPE_EV4) {
-#ifdef BOUNDS_CHECKED
-			printf("    not run: #%d reads out of bounds\n",
-			       CASES[row].issue);
-#else
-			XFAIL(CASES[row].issue,
-			      EV4(clock, pkt) == 10 &&
-			      btbb_packet_get_payload_length(pkt) ==
-			      CASES[row].body + 2);
-#endif
-		} else if (CASES[row].type == PACKET_TYPE_EV5) {
-			XFAIL(CASES[row].issue,
-			      EV5(clock, pkt) == 10 &&
-			      btbb_packet_get_payload_length(pkt) ==
-			      CASES[row].body + 2);
-		} else {
-			XFAIL(CASES[row].issue,
-			      EV3(clock, pkt) == 10 &&
-			      btbb_packet_get_payload_length(pkt) ==
-			      CASES[row].body + 2);
-		}
+		if (CASES[row].type == PACKET_TYPE_EV4)
+			CHECK(EV4(clock, pkt) == 10);
+		else if (CASES[row].type == PACKET_TYPE_EV5)
+			CHECK(EV5(clock, pkt) == 10);
+		else
+			CHECK(EV3(clock, pkt) == 10);
+		CHECK(btbb_packet_get_payload_length(pkt) ==
+		      CASES[row].body + 2);
+		CHECK(btbb_get_payload_packed(pkt, packed) ==
+		      CASES[row].body + 2);
+		for (i = 0; i < CASES[row].body; i++)
+			CHECK((uint8_t) packed[i] == (uint8_t) (0x10 + i));
 
 		btbb_packet_unref(pkt);
 	}
@@ -1097,6 +1046,7 @@ static void test_dv_payload(void)
 	char bits[12 * 8 + 10];
 	char payload[80 + 15 * 10];
 	char stream[MAX_SYMBOLS];
+	char packed[12];
 	uint16_t header_data;
 	btbb_packet *pkt;
 	const int body = 9;
@@ -1142,8 +1092,12 @@ static void test_dv_payload(void)
 
 	CHECK(btbb_decode_header(pkt) == 1);
 	CHECK(btbb_packet_get_type(pkt) == PACKET_TYPE_DV);
-	XFAIL(24, btbb_decode_payload(pkt) == 10 &&
-		  btbb_packet_get_payload_length(pkt) == 1 + body + 2);
+	CHECK(btbb_decode_payload(pkt) == 10);
+	CHECK(btbb_packet_get_payload_length(pkt) == 1 + body + 2);
+	CHECK(btbb_get_payload_packed(pkt, packed) == 1 + body + 2);
+	CHECK((uint8_t) packed[0] == 0x4e);
+	for (i = 0; i < body; i++)
+		CHECK((uint8_t) packed[1 + i] == (uint8_t) (0x50 + i));
 
 	btbb_packet_unref(pkt);
 }

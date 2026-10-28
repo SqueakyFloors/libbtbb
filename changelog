@@ -40,8 +40,18 @@ libbtbb (2020-12-R1+fork5) unstable; urgency=low
     found and CLK1-27 being found, so a caller reading it in that window got a
     number in the wrong unit; it reads 0 there now. No tool reads it before
     following a piconet.
+  * AUX1 payloads decode. The payload header's length was being thrown away
+    for this packet type, so every AUX1 packet reported a payload of 0 bytes.
+  * EV3, EV4 and EV5 payloads decode. The eSCO types carry no length in the
+    packet, and the search for it re-read the first byte of the payload for
+    every byte of it (EV3 and EV5) or checked the CRC at a length the payload
+    cannot have, reading before the start of the payload (EV4). None of the
+    three could decode a payload at the longest length its type allows either.
+  * A DV packet's data field decodes. It was being dewhitened with the 80 bits
+    of whitening that belong to the packet's voice field, so the payload
+    header's length, the data and the CRC were all wrong.
 
- -- Russell Wagner <152923636+SqueakyFloors@users.noreply.github.com>  29 Oct 2026 03:00:00 -0700
+ -- Russell Wagner <152923636+SqueakyFloors@users.noreply.github.com>  27 Oct 2026 19:00:00 -0700
 
 libbtbb (2020-12-R1+fork4) unstable; urgency=low
   * LE packets from Bluetooth 4.2 and later devices keep their whole payload.
