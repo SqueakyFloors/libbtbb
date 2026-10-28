@@ -1,4 +1,30 @@
 libbtbb (2020-12-R1+fork5) unstable; urgency=low
+  * btaptap decodes keystrokes again. It read every byte of a capture through
+    ord(), which python 3 raises a TypeError for, and the read loop treated
+    any TypeError as the end of the capture, so the tool printed nothing and
+    exited 0 on every capture it was given, and the -e Ellisys path refused
+    its own example export because text mode had turned the line endings it
+    compares against into something else. The three parsers now index the
+    bytes they are given, the Ellisys export is read as python 3 reads a file
+    and its hex converted with bytes.fromhex(), and the loop ends on what the
+    reader returns at the end of a capture. The recorded Ellisys export in
+    the repository, 864 keyboard reports, now gives up the paragraph that
+    was typed into it. Anything that stops the
+    capture being read through - a file that is not a capture, a record header
+    that does not describe a packet, a data link layer btaptap does not read -
+    is now one "error:" line on standard error and a non-zero exit, where the
+    tool used to exit 0 or stop with a traceback. The pcapdump module the
+    README offers writes a capture file again, where joining the bytes of its
+    header raised a TypeError, and a capture's timestamps come out as the
+    seconds and microseconds it holds: 5 microseconds past the second read as
+    half a second.
+  * A build asking for no library is refused while configuring. The check for
+    it named an option that does not exist, so "cmake -DBUILD_SHARED_LIB=OFF"
+    - the obvious way to ask for a static build, which also has to set
+    BUILD_STATIC_LIB=ON - configured a tree with no library in it and failed
+    at the link of the first test program with "library 'btbb-static' not
+    found". The refusal now names both options, and the test programs link
+    whichever library the configuration built.
   * An advertising PDU's length is read from the whole header octet, as the
     Bluetooth Core specification has defined it since 5.0. Six bits were read,
     which was the 4.x header, so an extended advertising PDU on a primary

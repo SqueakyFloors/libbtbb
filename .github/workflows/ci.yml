@@ -25,10 +25,19 @@ jobs:
           - name: ubuntu-24.04 gcc
             os: ubuntu-24.04
             cc: gcc
+            options: -DENABLE_PYTHON=ON -DBUILD_SHARED_LIB=ON
           # Apple silicon runner.
           - name: macos-15 clang
             os: macos-15
             cc: clang
+            options: -DENABLE_PYTHON=ON -DBUILD_SHARED_LIB=ON
+          # The static library on its own, which is how a statically linked
+          # Ubertooth build takes libbtbb. Nothing in the python tools depends
+          # on which library is built, so this job leaves them out.
+          - name: ubuntu-24.04 gcc static only
+            os: ubuntu-24.04
+            cc: gcc
+            options: -DENABLE_PYTHON=OFF -DBUILD_SHARED_LIB=OFF -DBUILD_STATIC_LIB=ON
     steps:
       - uses: actions/checkout@v5
 
@@ -54,7 +63,7 @@ jobs:
         run: >
           cmake -S . -B build
           -DCMAKE_BUILD_TYPE=RelWithDebInfo
-          -DENABLE_PYTHON=ON
+          ${{ matrix.options }}
           -DCMAKE_C_FLAGS="-Wall -Wextra -Werror -Wno-error=implicit-fallthrough"
         env:
           CC: ${{ matrix.cc }}
@@ -71,8 +80,14 @@ jobs:
       # The install rule has to put the pcapdump module where the installed
       # btaptap finds it, which is not where the interpreter looks.
       - name: Run the installed tool
+        if: contains(matrix.options, 'ENABLE_PYTHON=ON')
         run: |
           "$RUNNER_TEMP/prefix/bin/btaptap" -h
+          # The keystrokes the recorded Ellisys export holds, from the copy
+          # that is installed.
+          "$RUNNER_TEMP/prefix/bin/btaptap" -e python/pcaptools/tests/ellysis-keyboard.csv \
+              | tee /tmp/keystrokes
+          grep -q "Return" /tmp/keystrokes
 
   sanitizers:
     name: ubuntu-24.04 clang asan+ubsan

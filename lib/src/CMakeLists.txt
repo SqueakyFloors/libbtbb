@@ -34,9 +34,12 @@ set(c_sources ${CMAKE_CURRENT_SOURCE_DIR}/bluetooth_packet.c
 set(c_headers ${CMAKE_CURRENT_SOURCE_DIR}/btbb.h
 			  CACHE INTERNAL "List of C headers")
 
-if( NOT ${BUILD_SHARED_LIB} AND NOT ${BUILD_STATIC} )
-	message( FATAL_ERROR "Not building static or shared library - at least one must be built")
-endif( NOT ${BUILD_SHARED_LIB} AND NOT ${BUILD_STATIC} )
+# A configuration that builds neither library leaves nothing for anything to
+# link against, so it is refused here rather than at the link of the first
+# program. The two options are BUILD_SHARED_LIB and BUILD_STATIC_LIB.
+if( NOT BUILD_SHARED_LIB AND NOT BUILD_STATIC_LIB )
+	message( FATAL_ERROR "Not building static or shared library - at least one must be built: set BUILD_SHARED_LIB or BUILD_STATIC_LIB to ON")
+endif()
 
 set(CMAKE_MACOSX_RPATH 1)
 

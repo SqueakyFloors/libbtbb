@@ -70,6 +70,16 @@ file(WRITE ${BTAPTAP_INSTALLED} "${btaptap_text}")
 add_custom_target(btaptap ALL DEPENDS ${BTAPTAP_INSTALLED})
 install(PROGRAMS ${BTAPTAP_INSTALLED} DESTINATION ${INSTALL_DEFAULT_BINDIR})
 
+# What the tool gets out of a capture, and what it says when it cannot. It
+# runs on the script in the source tree, where the pcapdump module beside it
+# is the one it reads captures with; the installed copy, which has to find
+# that module elsewhere, is covered by btaptap_install_prefix below.
+if(BUILD_TESTING)
+	add_test(NAME btaptap COMMAND ${Python3_EXECUTABLE}
+	         ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_btaptap.py)
+	set_tests_properties(btaptap PROPERTIES TIMEOUT 60)
+endif()
+
 # setup.py install is gone from current setuptools, so the pcapdump module is
 # built into a wheel with pip and the wheel is installed.
 execute_process(COMMAND ${Python3_EXECUTABLE} -m pip --version

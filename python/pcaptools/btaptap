@@ -373,6 +373,20 @@ USBHID_SHIFT_MAP = {
 # global variable to track currently depressed keys
 active_keys = []
 
+# Whether the keystrokes written so far have left a line unfinished. The
+# keystrokes are written as they are found, and some of them, Return among
+# them, end a line themselves, so this says whether one newline is owed at
+# the end.
+line_open = False
+
+def error(message):
+    print("error: %s" % message, file=sys.stderr)
+
+def emit(text):
+    global line_open
+    sys.stdout.write(text)
+    line_open = not text.endswith("\n")
+
 def hid2ascii(scancode, shift):
     '''
     Convert the specified scancode value to the ASCII equivalent using the
@@ -390,9 +404,9 @@ def hid2ascii(scancode, shift):
         return "[Reserved]" 
     return code
 
-def usage():
-    print("Usage: btaptap [-r pcapfile.pcap | -e ellisysfile.csv] [-c count] [-h]\n", file=sys.stderr)
-    sys.exit(0)
+def usage(stream=sys.stdout):
+    print("Usage: btaptap [-r pcapfile.pcap | -e ellisysfile.csv] [-c count] [-h]",
+          file=stream)
 
 def parse_l2cap_keydata(l2cappkt):
     global active_keys
@@ -404,13 +418,21 @@ def parse_l2cap_keydata(l2cappkt):
     ALT = 4
     GUI = 8
 
+    # Every field below is in the first 11 bytes. A packet shorter than that
+    # carries no keystroke, and the length field says nothing about how much
+    # of it a capture holds: a frame that was cut short, by the snapshot
+    # length or by a capture that stopped mid-packet, claims the full length.
+    KEYSTROKE_FIELDS_END = 11
+    if len(l2cappkt) < KEYSTROKE_FIELDS_END:
+        return
+
     # Keyboard keystrokes are only seen in L2CAP packets at least 10 bytes long
-    l2clen = (ord(l2cappkt[1]) << 8) | ord(l2cappkt[0])
+    l2clen = (l2cappkt[1] << 8) | l2cappkt[0]
     if l2clen < 10:
         return
 
     # Keyboard keystrokes are only carried by Channel ID >= 0x40
-    cid = (ord(l2cappkt[3]) << 8) | ord(l2cappkt[2])
+    cid = (l2cappkt[3] << 8) | l2cappkt[2]
     if cid < 0x40:
         return
     # Ideally we would check for the particular CID for the HID_INTERRUPT
@@ -418,17 +440,17 @@ def parse_l2cap_keydata(l2cappkt):
     # seen it).
 
     # Transaction Header should indicate input data
-    thdr = ord(l2cappkt[4])
+    thdr = l2cappkt[4]
     if thdr != TRANS_HDR_IN_DATA:
         return
 
     # Report ID should indicate this is a keyboard
-    rid = ord(l2cappkt[5])
+    rid = l2cappkt[5]
     if rid != REPORT_ID_KEYBOARD:
         return
 
     # This byte describes modifier key status (one bit per key)
-    mod = ord(l2cappkt[6])
+    mod = l2cappkt[6]
 
     # We don't care whether left or right modifier keys are pressed, so we
     # combine the status bits.
@@ -439,8 +461,8 @@ def parse_l2cap_keydata(l2cappkt):
     # up to six keys can be reported at once
     keycodes = []
     #for byte in range(8,14):
-    for byte in range(8,11):
-        keystroke = ord(l2cappkt[byte])
+    for byte in range(8,KEYSTROKE_FIELDS_END):
+        keystroke = l2cappkt[byte]
         if keystroke != 0x00:
             keycodes.append(keystroke)
     
@@ -449,50 +471,65 @@ def parse_l2cap_keydata(l2cappkt):
         if active_keys.count(keystroke) == 0:
 
             if (mod & CTRL):
-                sys.stdout.write("CTRL^")
+                emit("CTRL^")
             if (mod & ALT):
-                sys.stdout.write("ALT^")
+                emit("ALT^")
             if (mod & GUI): # e.g. Windows key
-                sys.stdout.write("GUI^")
+                emit("GUI^")
 
-            sys.stdout.write(hid2ascii(keystroke, mod & SHIFT))
+            emit(hid2ascii(keystroke, mod & SHIFT))
 
     active_keys = keycodes
 
 def parse_ellisys_export(exportfile):
+    '''
+    Read an Ellisys CSV export. Returns an exit status.
+    '''
     try:
-        cap = open(exportfile, "r")
+        # newline="" so the line endings reach the header comparison below as
+        # the file holds them: an Ellisys export ends every line CR LF, and
+        # text mode would otherwise hand over a bare LF, which the header the
+        # comparison expects does not have.
+        cap = open(exportfile, "r", newline="")
     except (OSError, IOError) as e:
-        print("Unable to open Ellisys capture file.", file=sys.stderr)
-        return
+        error("cannot read %s: %s" % (exportfile, e.strerror))
+        return 1
 
-    # Check to make sure the CSV file header matches out expectations
-    hdr=cap.readline()
-    if (hdr != ELLISYS_CSV_HDR):
-        print("Invalid CSV file (does not match Ellisys export format)", file=sys.stderr)
-        return
+    with cap:
+        # Check to make sure the CSV file header matches out expectations
+        hdr=cap.readline()
+        if (hdr != ELLISYS_CSV_HDR):
+            error("%s does not match the Ellisys export format" % exportfile)
+            return 1
 
-    for packetline in cap.xreadlines():
-        try:
-            (edepth, etime, ename, edata) = packetline.replace('"', '').strip().split(",")
-        except ValueError:
-            continue
+        for packetline in cap:
+            try:
+                (edepth, etime, ename, edata) = packetline.replace('"', '').strip().split(",")
+            except ValueError:
+                continue
 
-        # We are only interedted in HID Input data
-        if (ename != ELLISYS_HID_INPUT): continue
+            # We are only interedted in HID Input data
+            if (ename != ELLISYS_HID_INPUT): continue
 
-        parse_ellisys_keydata(edata)
+            parse_ellisys_keydata(edata)
+
+    return 0
 
 def parse_ellisys_keydata(payload):
-    TRANS_HDR_IN_DATA = "\xA1"
-    DEST_CHANNEL_ID = "\x06\x03"
+    TRANS_HDR_IN_DATA = b"\xA1"
+    DEST_CHANNEL_ID = b"\x06\x03"
 
-    # Convert space-separated hex into string
-    payload = payload.replace(' ','').decode("hex")
+    # The data column holds the report as space-separated hex, which
+    # bytes.fromhex() takes as it stands.
+    try:
+        payload = bytes.fromhex(payload)
+    except ValueError:
+        return
 
     # The Ellisys CSV file format doesn't give us the L2CAP data, so we fake it here by adding
     # a 2-byte length field, destination CID, and transaction header
-    packet = chr(len(payload)+1) + "\x00" + DEST_CHANNEL_ID + TRANS_HDR_IN_DATA + payload
+    packet = (struct.pack("<H", len(payload) + 1) + DEST_CHANNEL_ID
+              + TRANS_HDR_IN_DATA + payload)
     parse_l2cap_keydata(packet)
 
 def parse_bb_keydata(packet):
@@ -511,13 +548,12 @@ def parse_bb_keydata(packet):
         return
 
     # Keyboard keystrokes are only seen in DM1 frames
-    btbbhdr = packet[20:23]
-    type = (ord(btbbhdr[0]) & BTBBHDR_TYPE_MASK) >> BTBBHDR_TYPE_SHIFT
+    type = (packet[20] & BTBBHDR_TYPE_MASK) >> BTBBHDR_TYPE_SHIFT
     if type != BTBBHDR_TYPE_DM1:
         return
 
     # Keyboard keystrokes are only seen in L2CAP packets 14 bytes long
-    btbbpayloadhdr = ord(packet[23])
+    btbbpayloadhdr = packet[23]
     llid = btbbpayloadhdr & (BTBBPAYLOADHDR_LLID_MASK) >> BTBBPAYLOADHDR_LLID_SHIFT
     l2clen = (btbbpayloadhdr & BTBBPAYLOADHDR_LEN_MASK) >> BTBBPAYLOADHDR_LEN_SHIFT
     #print("Debug btbbpayloadhdr 0x%02x, llid %d, l2clen %d"%(btbbpayloadhdr, llid, l2clen))
@@ -535,57 +571,127 @@ def parse_hci_keydata(packet):
         return
 
     # Keyboard keystrokes are only seen in ACL Data frames
-    type = ord(packet[0])
+    type = packet[0]
     if type != HCI_TYPE_ACL_DATA:
         return
 
     parse_l2cap_keydata(packet[5:])
 
+def read_pcap_file(pcapfile, count):
+    '''
+    Decode keystrokes from a libpcap capture. Returns an exit status.
+    '''
+    try:
+        cap = PcapReader(pcapfile)
+    except (OSError, IOError) as e:
+        error("cannot read %s: %s" % (pcapfile, e.strerror))
+        return 1
+    except ValueError as e:
+        error("%s: %s" % (pcapfile, e))
+        return 1
+
+    # Which parser the frames go to is settled once, by the capture's data
+    # link layer: it applies to the whole file, and a capture this tool cannot
+    # read is worth saying once rather than per packet.
+    datalink = cap.datalink()
+    if datalink == DLT_EN10MB:
+        parse_keydata = parse_bb_keydata
+    elif datalink == DLT_BLUETOOTH_HCI_H4:
+        parse_keydata = parse_hci_keydata
+    else:
+        error("%s: unsupported libpcap data link layer: %d" % (pcapfile, datalink))
+        cap.close()
+        return 1
+
+    packetcount = 0
+    status = 0
+    while count is None or packetcount < count:
+        try:
+            (_, packet) = cap.pnext()
+        except ValueError as e:
+            # A header that does not describe a packet: what follows it in the
+            # file cannot be read, so the keystrokes found so far are all there
+            # are, and the capture was not read to its end.
+            error("%s: %s" % (pcapfile, e))
+            status = 1
+            break
+
+        # What pcap_next() returns at the end of the capture. Anything else
+        # that goes wrong in a parser below is a fault in this tool, and is
+        # left to reach the user as a traceback rather than read as the end of
+        # the capture.
+        if packet is None:
+            break
+
+        packetcount += 1
+        parse_keydata(packet)
+
+    cap.close()
+    return status
+
 if __name__ == '__main__':
 
     arg_pcapfile = None
     arg_ellisysfile = None
-    arg_count = -1
-    packetcount = 0
+    # No -c: every packet in the capture.
+    arg_count = None
+
+    # A command with nothing on it is the one case the usage text answers.
+    if len(sys.argv) < 2:
+        usage(sys.stderr)
+        sys.exit(1)
+
+    def next_value(op, already):
+        if already is not None:
+            error("%s given twice" % op)
+            sys.exit(1)
+        if len(sys.argv) < 2:
+            error("%s needs a value" % op)
+            sys.exit(1)
+        return sys.argv.pop(1)
 
     while len(sys.argv) > 1:
         op = sys.argv.pop(1)
         if op == '-r':
-            arg_pcapfile = sys.argv.pop(1)
-        if op == '-c':
-            arg_count = int(sys.argv.pop(1))
-        if op == '-e':
-            arg_ellisysfile = sys.argv.pop(1)
-        if op == '-h':
+            arg_pcapfile = next_value(op, arg_pcapfile)
+        elif op == '-e':
+            arg_ellisysfile = next_value(op, arg_ellisysfile)
+        elif op == '-c':
+            count = next_value(op, arg_count)
+            try:
+                arg_count = int(count)
+            except ValueError:
+                error("-c needs a number, not '%s'" % count)
+                sys.exit(1)
+            if arg_count < 0:
+                error("-c needs a count of 0 or more")
+                sys.exit(1)
+        elif op == '-h':
             usage()
             sys.exit(0)
+        else:
+            error("unknown option '%s'" % op)
+            sys.exit(1)
 
     if (arg_ellisysfile == None and arg_pcapfile == None):
-        print("Must specify a libpcap capture or an Ellisys CSV file", file=sys.stderr)
-        usage()
-        sys.exit(0)
+        error("must specify a libpcap capture or an Ellisys CSV file")
+        sys.exit(1)
+
+    # Two captures are two jobs: which one the keystrokes came from would not
+    # be in the output.
+    if arg_ellisysfile != None and arg_pcapfile != None:
+        error("-r and -e name two captures: give one")
+        sys.exit(1)
+
+    status = 0
 
     if arg_pcapfile != None:
-        cap = PcapReader(arg_pcapfile)
-    
-        while arg_count != packetcount:
-            try:
-                (pheader, packet) = cap.pnext()
-                pkttime = pheader[0]
-                packetcount+=1
-        
-                if cap.datalink() == DLT_EN10MB:
-                    parse_bb_keydata(packet)
-                elif cap.datalink() == DLT_BLUETOOTH_HCI_H4:
-                    parse_hci_keydata(packet)
-                else:
-                    print("Unsupported libpcap data link layer: %d\n" % cap.datalink(), file=sys.stderr)
-            except TypeError: # raised when pnext returns Null (end of capture)
-                break
-    
-        cap.close()
+        status |= read_pcap_file(arg_pcapfile, arg_count)
 
     if arg_ellisysfile != None:
-        parse_ellisys_export(arg_ellisysfile)
+        status |= parse_ellisys_export(arg_ellisysfile)
 
-    print
+    if line_open:
+        print()
+
+    sys.exit(status)
