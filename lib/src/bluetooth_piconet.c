@@ -561,6 +561,14 @@ static int afh_in_use(btbb_piconet *pn)
 		pn->used_channels >= AFH_MIN_USED_CHANNELS;
 }
 
+/* The AFH map as hop selection reads it: bit 79 is reserved, there being no
+ * channel 79, so two maps differing only there are the same map. */
+static void channel_map(const btbb_piconet *pn, uint8_t *out)
+{
+	memcpy(out, pn->afh_map, sizeof(pn->afh_map));
+	out[9] &= 0x7f;
+}
+
 /* initialize the hop reversal process */
 int btbb_init_hop_reversal(int aliased, btbb_piconet *pn)
 {
@@ -589,8 +597,7 @@ int btbb_init_hop_reversal(int aliased, btbb_piconet *pn)
 	pn->num_candidates = 0;
 	pn->winnowed = 0;
 	pn->candidates_afh = (uint8_t) afh_in_use(pn);
-	memcpy(pn->candidates_afh_map, pn->afh_map,
-	       sizeof(pn->candidates_afh_map));
+	channel_map(pn, pn->candidates_afh_map);
 	btbb_piconet_set_flag(pn, BTBB_HOP_REVERSAL_INIT, 1);
 	btbb_piconet_set_flag(pn, BTBB_CLK27_VALID, 0);
 	btbb_piconet_set_flag(pn, BTBB_IS_ALIASED, aliased);
@@ -738,12 +745,14 @@ static int channel_winnow(int offset, char channel, btbb_piconet *pn)
  * candidates were chosen from? */
 static int candidates_superseded(btbb_piconet *pn)
 {
-	int afh = afh_in_use(pn);
+	uint8_t map[10];
 
-	if (pn->candidates_afh != (uint8_t) afh)
+	if (pn->candidates_afh != (uint8_t) afh_in_use(pn))
 		return 1;
-	return afh && memcmp(pn->candidates_afh_map, pn->afh_map,
-			     sizeof(pn->candidates_afh_map)) != 0;
+	if (!pn->candidates_afh)
+		return 0;	/* the basic sequence, whatever the map says */
+	channel_map(pn, map);
+	return memcmp(pn->candidates_afh_map, map, sizeof(map)) != 0;
 }
 
 /* narrow a list of candidate clock values based on all observed hops */

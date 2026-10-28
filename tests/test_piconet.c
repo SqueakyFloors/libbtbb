@@ -297,6 +297,17 @@ static void test_candidates_rechosen_only_for_a_new_sequence(void)
 	CHECK_EQ(AFH_MIN_USED_CHANNELS, pn->used_channels);
 	CHECK(candidates_superseded(pn));
 	btbb_piconet_unref(pn);
+
+	/* An adapted sequence, and a map differing only in the reserved bit
+	 * 79, which there is no channel for. */
+	pn = discovered(MAP_20, 1);
+	first_hop(pn, channel_at(pn, 0));
+	CHECK(btbb_init_hop_reversal(0, pn) > 1);
+	pn->afh_map[9] |= 0x80;
+	precalc(pn);
+	CHECK_EQ(AFH_MIN_USED_CHANNELS, pn->used_channels);
+	CHECK(!candidates_superseded(pn));
+	btbb_piconet_unref(pn);
 }
 
 /*
