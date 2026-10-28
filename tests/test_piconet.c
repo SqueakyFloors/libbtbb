@@ -49,15 +49,57 @@ static void *counted_malloc(size_t size);
 #undef malloc
 
 static size_t largest_request;	/* bytes, since it was last reset */
+static int allocation_calls;	/* calls, since it was last reset */
 static int refuse_allocations;
+static int refuse_from;		/* refuse this call onward, 0 to refuse none */
+
+/*
+ * The size each live allocation was asked for, so a test can ask how long the
+ * block a function handed back really is rather than guess from the order the
+ * allocations were made in.
+ */
+#define REMEMBERED_ALLOCATIONS 64
+static struct {
+	void *address;
+	size_t size;
+} remembered[REMEMBERED_ALLOCATIONS];
+static int remembered_next;
+
+static size_t size_allocated(const void *address)
+{
+	int i, at;
+
+	if (address == NULL)
+		return 0;
+	/* newest first, so a freed block whose address was handed out again
+	 * answers with the size it was asked for the second time */
+	for (i = 1; i <= REMEMBERED_ALLOCATIONS; i++) {
+		at = (remembered_next - i + REMEMBERED_ALLOCATIONS) %
+			REMEMBERED_ALLOCATIONS;
+		if (remembered[at].address == address)
+			return remembered[at].size;
+	}
+	return 0;
+}
 
 static void *counted_malloc(size_t size)
 {
+	void *block;
+
 	if (size > largest_request)
 		largest_request = size;
-	if (refuse_allocations)
+	allocation_calls++;
+	if (refuse_allocations ||
+	    ((refuse_from != 0) && (allocation_calls >= refuse_from)))
 		return NULL;
-	return malloc(size);
+	block = malloc(size);
+	if (block != NULL) {
+		remembered[remembered_next].address = block;
+		remembered[remembered_next].size = size;
+		remembered_next = (remembered_next + 1) %
+			REMEMBERED_ALLOCATIONS;
+	}
+	return block;
 }
 
 static int failures = 0;
@@ -166,6 +208,10 @@ static void test_afh_candidates_fit_their_list(void)
 	count = btbb_init_hop_reversal(0, pn);
 	CHECK_EQ(count, pn->num_candidates);
 	CHECK(count > old_size);
+	/* The list handed back is exactly as long as the count beside it,
+	 * whatever the sizes it grew through on the way. */
+	CHECK_EQ(sizeof(uint32_t) * (size_t) count,
+		 size_allocated(pn->clock_candidates));
 	/* Every candidate really does hop to the observed channel, so the list
 	 * was filled and not merely allocated large enough. */
 	for (i = 0; i < pn->num_candidates; i++)
@@ -336,26 +382,80 @@ static void test_candidates_rechosen_only_for_a_new_sequence(void)
 }
 
 /*
- * Filling the candidate list stops at the size it was given. The count the
- * size comes from is exact, so this cap is only the backstop that keeps a
- * future miscount from writing past the end.
+ * How the candidate list used to be chosen: one walk over the clock values to
+ * count the matches, then a second to write them into a list of exactly that
+ * size.  The library now makes a single walk, growing the list as it goes,
+ * and this is here to say that the candidates it ends up with are the same
+ * ones, in the same order.
  */
-static void test_candidate_fill_stops_at_the_size_given(void)
+static int reference_candidates(btbb_piconet *pn, char channel,
+				int known_clock_bits, uint32_t **out)
 {
-	btbb_piconet *pn = discovered(NULL, 0);
-	uint32_t room_for_eight[8];
-	int i, count;
+	uint32_t clk1_27;
+	int count = 0;
 
-	first_hop(pn, channel_at(pn, 0));
-	count = init_candidates(pn->pattern_channels[0], 0, pn, NULL, 0);
-	CHECK(count > 8);
-	memset(room_for_eight, 0, sizeof(room_for_eight));
-	CHECK_EQ(8, init_candidates(pn->pattern_channels[0], 0, pn,
-				    room_for_eight, 8));
-	for (i = 0; i < 8; i++)
-		CHECK_EQ(pn->pattern_channels[0],
-			 channel_at(pn, room_for_eight[i]));
-	btbb_piconet_unref(pn);
+	*out = NULL;
+	for (clk1_27 = (uint32_t) known_clock_bits; clk1_27 < SEQUENCE_LENGTH;
+	     clk1_27 += 0x40) {
+		if (observed_channel(clk1_27, pn) == channel)
+			count++;
+	}
+	if (count == 0)
+		return 0;
+	*out = (uint32_t *) malloc(sizeof(uint32_t) * (size_t) count);
+	if (*out == NULL)
+		return -1;
+	count = 0;
+	for (clk1_27 = (uint32_t) known_clock_bits; clk1_27 < SEQUENCE_LENGTH;
+	     clk1_27 += 0x40) {
+		if (observed_channel(clk1_27, pn) == channel)
+			(*out)[count++] = clk1_27;
+	}
+	return count;
+}
+
+/*
+ * The single walk finds exactly the candidates the two walks did, for the
+ * basic hopping sequence and for an adaptive one, where a single channel
+ * accounts for one in 20 of the clock values rather than one in 79 and the
+ * list grows several times over.
+ */
+static void test_one_walk_finds_the_same_candidates(void)
+{
+	static const int WITH_AFH[] = { 0, 1 };
+	size_t row;
+
+	for (row = 0; row < sizeof(WITH_AFH) / sizeof(WITH_AFH[0]); row++) {
+		int afh = WITH_AFH[row];
+		btbb_piconet *pn = discovered(afh ? MAP_20 : NULL, afh);
+		uint32_t *expected = NULL;
+		int expected_count;
+		int i;
+
+		first_hop(pn, channel_at(pn, 0));
+		expected_count = reference_candidates(pn,
+						      (char) pn->pattern_channels[0],
+						      0, &expected);
+		CHECK(expected_count > 0);
+		CHECK_EQ(expected_count, btbb_init_hop_reversal(0, pn));
+		CHECK_EQ(expected_count, pn->num_candidates);
+		if (expected == NULL || pn->clock_candidates == NULL) {
+			free(expected);
+			btbb_piconet_unref(pn);
+			continue;
+		}
+		for (i = 0; i < expected_count; i++) {
+			if (pn->clock_candidates[i] != expected[i]) {
+				printf("FAIL candidate %d is 0x%07x, "
+				       "expected 0x%07x\n", i,
+				       pn->clock_candidates[i], expected[i]);
+				++failures;
+				break;
+			}
+		}
+		free(expected);
+		btbb_piconet_unref(pn);
+	}
 }
 
 /*
@@ -485,6 +585,31 @@ static void test_an_allocation_failure_leaves_no_candidates(void)
 }
 
 /*
+ * The candidate list grows several times over for an adaptive piconet, so an
+ * allocation can fail with a list already in hand.  That list is let go of,
+ * and the piconet is left with no candidates, as it is when the first
+ * allocation fails.
+ */
+static void test_an_allocation_failure_partway_through_the_list(void)
+{
+	btbb_piconet *pn = discovered(MAP_20, 1);
+
+	first_hop(pn, channel_at(pn, 0));
+	allocation_calls = 0;
+	/* the list has been allocated and grown at least once by then */
+	refuse_from = 3;
+	CHECK_EQ(0, btbb_init_hop_reversal(0, pn));
+	refuse_from = 0;
+	CHECK(allocation_calls >= 3);
+	CHECK_EQ(0, pn->num_candidates);
+	CHECK(pn->clock_candidates == NULL);
+	CHECK(!btbb_piconet_get_flag(pn, BTBB_CLK27_VALID));
+	CHECK_EQ(0, btbb_winnow(pn));
+	CHECK(!btbb_piconet_get_flag(pn, BTBB_HOP_REVERSAL_INIT));
+	btbb_piconet_unref(pn);
+}
+
+/*
  * With one candidate left, the clock is accepted only once that many further
  * hops have agreed with it.  Here the piconet predicts its own hops, so the
  * candidate that survives is the right one and the only question is when it
@@ -584,12 +709,13 @@ int main(void)
 	test_two_hops_on_one_channel_look_like_afh();
 	test_candidates_follow_the_map_as_it_is_learned();
 	test_candidates_rechosen_only_for_a_new_sequence();
-	test_candidate_fill_stops_at_the_size_given();
+	test_one_walk_finds_the_same_candidates();
 	test_clk6_offset_fixes_the_known_clock_bits();
 	test_remembered_pattern_is_bounded();
 	test_set_afh_map_allocates_nothing();
 	test_a_uap_with_its_top_bit_set();
 	test_an_allocation_failure_leaves_no_candidates();
+	test_an_allocation_failure_partway_through_the_list();
 	test_the_clock_is_confirmed_before_it_is_accepted();
 	test_a_wrong_clock_is_not_accepted_on_a_short_map();
 

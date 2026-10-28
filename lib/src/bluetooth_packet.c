@@ -22,6 +22,7 @@
 
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 
 #include "bluetooth_packet.h"
 #include "uthash.h"
@@ -500,6 +501,37 @@ void btbb_packet_set_data(btbb_packet *pkt, char *data, int length,
 	pkt->length = length;
 	pkt->channel = channel;
 	pkt->clkn = clkn >> 1; // really CLK1
+
+	/* Nothing is known about these symbols yet, so drop everything the
+	 * decoder worked out about the last ones: what it checked, the header
+	 * it read, the payload header, and the payload. A caller hands one
+	 * packet object a frame after another - btbb_find_ac() gives out the
+	 * same object again - and not every route into the decoder starts by
+	 * clearing this: the search for a piconet's address part goes through
+	 * try_clock() and crc_check(), neither of which reads the header. So
+	 * whatever is left here is reported for a frame it does not describe,
+	 * which for a capture file means a record saying another frame's HEC
+	 * was checked and holding another frame's header bits.
+	 *
+	 * What the caller set - the address part, the clock, whether the
+	 * symbols are whitened, the modulation - is the caller's and stays. */
+	btbb_packet_set_flag(pkt, BTBB_HAS_PAYLOAD, 0);
+	btbb_packet_set_flag(pkt, BTBB_HEC_CHECKED, 0);
+	btbb_packet_set_flag(pkt, BTBB_HEC_VALID, 0);
+	btbb_packet_set_flag(pkt, BTBB_CRC_CHECKED, 0);
+	btbb_packet_set_flag(pkt, BTBB_CRC_CORRECT, 0);
+	memset(pkt->packet_header, 0, sizeof(pkt->packet_header));
+	pkt->packet_lt_addr = 0;
+	pkt->packet_type = 0;
+	pkt->packet_flags = 0;
+	pkt->packet_hec = 0;
+	memset(pkt->payload_header, 0, sizeof(pkt->payload_header));
+	pkt->payload_llid = 0;
+	pkt->payload_flow = 0;
+	pkt->payload_length = 0;
+	pkt->payload_header_length = 0;
+	pkt->corrected_header_bits = 0;
+	pkt->corrected_payload_bits = 0;
 }
 
 void btbb_packet_set_flag(btbb_packet *pkt, int flag, int val)
@@ -571,8 +603,15 @@ static uint8_t reverse(char byte)
 }
 
 
-/* Decode 1/3 rate FEC, three like symbols in a row */
-static int unfec13(char *input, char *output, int length)
+/*
+ * Decode 1/3 rate FEC, three like symbols in a row.
+ *
+ * corrected, when it is not NULL, is set to the number of output bits the
+ * majority vote had to put right: the bits whose three symbols did not all
+ * agree. The capture file writers record that count, so a reader can see how
+ * marginal the reception was.
+ */
+static int unfec13(char *input, char *output, int length, int *corrected)
 {
 	int a, b, c, i;
 	int be = 0; /* bit errors */
@@ -586,6 +625,9 @@ static int unfec13(char *input, char *output, int length)
 		be += ((input[a] ^ input[b]) | (input[b] ^ input[c]) |
 				(input[c] ^ input[a]));
 	}
+
+	if (corrected != NULL)
+		*corrected = be;
 
 	return (be < (length / 4));
 }
@@ -604,16 +646,28 @@ static uint16_t fec23(uint16_t data)
 	return codeword;
 }
 
-/* Decode 2/3 rate FEC, a (15,10) shortened Hamming code */
-static char *unfec23(char *input, int length)
+/*
+ * Decode 2/3 rate FEC, a (15,10) shortened Hamming code.
+ *
+ * corrected, when it is not NULL, is set to the number of bits the code had
+ * to deal with: one for each 15-symbol block whose check symbols disagreed
+ * with its data, since the code puts right one wrong symbol per block. A
+ * block it cannot put right ends the decode, so a count only ever covers
+ * blocks that came out. The capture file writers record it.
+ */
+static char *unfec23(char *input, int length, int *corrected)
 {
 	/* input points to the input data
 	 * length is length in bits of the data
 	 * before it was encoded with fec2/3 */
 	int iptr, optr, count;
+	int errors = 0;
 	char* output;
 	uint8_t diff, check;
 	uint16_t data, codeword;
+
+	if (corrected != NULL)
+		*corrected = 0;
 
 	diff = length % 10;
 	// padding at end of data
@@ -667,7 +721,18 @@ static char *unfec23(char *input, int length)
 				default: free(output); return 0;
 			}
 		}
+
+		/* A check that agrees with the data is a block that arrived
+		 * intact. Anything else is one wrong symbol the code dealt
+		 * with: a check symbol, which leaves the data alone, or a
+		 * data bit the switch above has just flipped back. */
+		if (diff != 0)
+			errors++;
 	}
+
+	if (corrected != NULL)
+		*corrected = errors;
+
 	return output;
 }
 
@@ -816,6 +881,13 @@ int crc_check(int clock, btbb_packet* pkt)
 		btbb_packet_set_flag(pkt, BTBB_HEC_VALID, 0);
 		btbb_packet_set_flag(pkt, BTBB_CRC_CHECKED, 0);
 		btbb_packet_set_flag(pkt, BTBB_CRC_CORRECT, 0);
+		/* The payload is the trial's too, so it is no longer a
+		 * payload this packet decoded. A caller that decoded the
+		 * packet before starting the search would otherwise have the
+		 * last trial clock's bytes reported as the packet's. */
+		btbb_packet_set_flag(pkt, BTBB_HAS_PAYLOAD, 0);
+		pkt->payload_length = 0;
+		pkt->corrected_payload_bits = 0;
 	}
 
 	return retval;
@@ -853,6 +925,7 @@ int fhs(int clock, btbb_packet* pkt)
 	char *stream = pkt->symbols + 122;
 	/* number of symbols remaining after access code and packet header */
 	int size = pkt->length - 122;
+	int fec_corrections = 0;
 
 	pkt->payload_length = 20;
 
@@ -863,13 +936,15 @@ int fhs(int clock, btbb_packet* pkt)
 		return 1; //FIXME should throw exception
 	}
 
-	char *corrected = unfec23(stream, pkt->payload_length * 8);
+	char *corrected = unfec23(stream, pkt->payload_length * 8,
+				  &fec_corrections);
 	if (!corrected) {
 		/* a block the error correction could not put right, so
 		 * nothing is decoded to report */
 		pkt->payload_length = 0;
 		return 0;
 	}
+	pkt->corrected_payload_bits = (int16_t) fec_corrections;
 
 	/* try to unwhiten with known clock bits */
 	unwhiten(corrected, pkt->payload, clock, pkt->payload_length * 8,
@@ -891,8 +966,10 @@ int fhs(int clock, btbb_packet* pkt)
 
 	/* No whitening input made the CRC come out, so what is left in the
 	 * payload is the last one tried and known to be wrong: report none,
-	 * as the two give-up paths above do. */
+	 * as the two give-up paths above do, and nothing corrected in it
+	 * either. */
 	pkt->payload_length = 0;
+	pkt->corrected_payload_bits = 0;
 	free(corrected);
 	return 0;
 }
@@ -920,7 +997,10 @@ static int decode_payload_header(char *stream, int clock, int header_bytes, int 
 		if(fec) {
 			if(size < fec23_symbols(16))
 				return 0; //FIXME should throw exception
-			char *corrected = unfec23(stream, 16);
+			/* The corrections here are not counted: the caller
+			 * goes on to decode the whole payload, this header
+			 * included, and counts them there. */
+			char *corrected = unfec23(stream, 16, NULL);
 			if (!corrected)
 				return 0;
 			unwhiten(corrected, pkt->payload_header, clock, 16, skip, pkt);
@@ -936,7 +1016,9 @@ static int decode_payload_header(char *stream, int clock, int header_bytes, int 
 		if(fec) {
 			if(size < fec23_symbols(8))
 				return 0; //FIXME should throw exception
-			char *corrected = unfec23(stream, 8);
+			/* as above, counted by the decode of the whole
+			 * payload */
+			char *corrected = unfec23(stream, 8, NULL);
 			if (!corrected)
 				return 0;
 			unwhiten(corrected, pkt->payload_header, clock, 8, skip, pkt);
@@ -1010,6 +1092,7 @@ int DM(int clock, btbb_packet* pkt)
 	int size = pkt->length - 122;
 	/* whitening bits the packet header has already used up */
 	int skip = HEADER_WHITENING_BITS;
+	int fec_corrections = 0;
 
 	switch(pkt->packet_type)
 	{
@@ -1043,10 +1126,16 @@ int DM(int clock, btbb_packet* pkt)
 	}
 	if(!decode_payload_header(stream, clock, header_bytes, size, 1, skip, pkt))
 		return 0;
-	/* check that the length indicated in the payload header is within spec */
-	if(pkt->payload_length > max_length)
+	/* Check that the length indicated in the payload header is within
+	 * spec. Nothing below here has decoded a payload yet, so a length the
+	 * type cannot carry leaves none to report. decode_payload_header()
+	 * already clamps the claimed length to the type's maximum, so this is
+	 * the backstop for the two maximums ever disagreeing. */
+	if(pkt->payload_length > max_length) {
+		pkt->payload_length = 0;
 		/* could be encrypted */
 		return 1;
+	}
 	bitlength = pkt->payload_length*8;
 	if(fec23_symbols(bitlength) > size) {
 		/* the capture ends before the payload does: the rate 2/3 FEC
@@ -1056,13 +1145,14 @@ int DM(int clock, btbb_packet* pkt)
 		return 1; //FIXME should throw exception
 	}
 
-	char *corrected = unfec23(stream, bitlength);
+	char *corrected = unfec23(stream, bitlength, &fec_corrections);
 	if (!corrected) {
 		/* a block the error correction could not put right, so
 		 * nothing is decoded to report */
 		pkt->payload_length = 0;
 		return 0;
 	}
+	pkt->corrected_payload_bits = (int16_t) fec_corrections;
 	unwhiten(corrected, pkt->payload, clock, bitlength, skip, pkt);
 	free(corrected);
 
@@ -1106,10 +1196,14 @@ int DH(int clock, btbb_packet* pkt)
 	if(!decode_payload_header(stream, clock, header_bytes, size, 0,
 				  HEADER_WHITENING_BITS, pkt))
 		return 0;
-	/* check that the length indicated in the payload header is within spec */
-	if(pkt->payload_length > max_length)
+	/* As in DM() above: nothing is decoded yet, so a length the type
+	 * cannot carry leaves no payload to report, and the clamp in
+	 * decode_payload_header() means this is only a backstop. */
+	if(pkt->payload_length > max_length) {
+		pkt->payload_length = 0;
 		/* could be encrypted */
 		return 1;
+	}
 	bitlength = pkt->payload_length*8;
 	if(bitlength > size) {
 		/* the capture ends before the payload does, so there is
@@ -1196,7 +1290,14 @@ int EV3(int clock, btbb_packet* pkt)
 	return esco_payload(clock, pkt, maxbytes);
 }
 
-int EV4(int clock, btbb_packet* pkt)
+/*
+ * The body of EV4(), which decodes a block at a time and so counts the bits
+ * the error correction put right a block at a time. The running total goes in
+ * corrected_total rather than on the packet: crc_check() calls this decoder
+ * straight, once per candidate clock, and a count added to the packet's each
+ * time would come out as the sum over every clock tried.
+ */
+static int ev4_payload(int clock, btbb_packet* pkt, int *corrected_total)
 {
 	char *corrected;
 
@@ -1218,6 +1319,9 @@ int EV4(int clock, btbb_packet* pkt)
 
 	int syms = 0; /* number of symbols we have decoded */
 	int bits = 0; /* number of payload bits we have decoded */
+	int fec_corrections = 0;
+
+	*corrected_total = 0;
 
 	pkt->payload_length = minbytes;
 
@@ -1230,7 +1334,7 @@ int EV4(int clock, btbb_packet* pkt)
 			pkt->payload_length = bits / 8;
 			return 1; //FIXME should throw exception
 		}
-		corrected = unfec23(stream + syms, 10);
+		corrected = unfec23(stream + syms, 10, &fec_corrections);
 		if (!corrected) {
 			if (syms < minsymbols) {
 				/* what is here is shorter than the shortest
@@ -1238,15 +1342,30 @@ int EV4(int clock, btbb_packet* pkt)
 				 * of these packets and there is no payload to
 				 * report */
 				pkt->payload_length = 0;
+				*corrected_total = 0;
 				return 0;
 			}
-			/* this block is lost, so the payload ends before it */
+			/*
+			 * This block is lost, so the payload ends before it.
+			 * The count stays positive: the published record
+			 * layout gives a negative count the meaning "this
+			 * many corrected and uncorrectable bits together",
+			 * and the block that could not be put right is not
+			 * part of the payload being reported.
+			 *
+			 * A block is 10 bits and the length reported is whole
+			 * bytes, so up to two counted bits can belong to bits
+			 * past the end of the payload. That is as close as a
+			 * count made a block at a time can get.
+			 */
 			pkt->payload_length = bits / 8;
 			return 1;
 		}
 		unwhiten(corrected, pkt->payload + bits, clock, 10,
 			 HEADER_WHITENING_BITS + bits, pkt);
 		free(corrected);
+
+		*corrected_total += fec_corrections;
 
 		syms += 15;
 		bits += 10;
@@ -1268,6 +1387,15 @@ int EV4(int clock, btbb_packet* pkt)
 	return 2;
 }
 
+int EV4(int clock, btbb_packet* pkt)
+{
+	int corrected = 0;
+	int rv = ev4_payload(clock, pkt, &corrected);
+
+	pkt->corrected_payload_bits = (int16_t) corrected;
+	return rv;
+}
+
 int EV5(int clock, btbb_packet* pkt)
 {
 	/* 180 information bytes and a two byte CRC
@@ -1284,6 +1412,7 @@ int HV(int clock, btbb_packet* pkt)
 	char *stream = pkt->symbols + 122;
 	/* number of symbols remaining after access code and packet header */
 	int size = pkt->length - 122;
+	int fec_corrections = 0;
 
 	pkt->payload_header_length = 0;
 	/* nothing is decoded yet, so each case below sets the length once it
@@ -1296,10 +1425,10 @@ int HV(int clock, btbb_packet* pkt)
 		case PACKET_TYPE_HV1:
 			{
 			char corrected[80];
-			if (!unfec13(stream, corrected, 80))
+			if (!unfec13(stream, corrected, 80, &fec_corrections))
 				return 0;
 			pkt->payload_length = 10;
-			btbb_packet_set_flag(pkt, BTBB_HAS_PAYLOAD, 1);
+			pkt->corrected_payload_bits = (int16_t) fec_corrections;
 			unwhiten(corrected, pkt->payload, clock,
 				 pkt->payload_length*8,
 				 HEADER_WHITENING_BITS, pkt);
@@ -1307,11 +1436,12 @@ int HV(int clock, btbb_packet* pkt)
 			break;
 		case PACKET_TYPE_HV2:
 			{
-			char *corrected = unfec23(stream, 160);
+			char *corrected = unfec23(stream, 160,
+						  &fec_corrections);
 			if (!corrected)
 				return 0;
 			pkt->payload_length = 20;
-			btbb_packet_set_flag(pkt, BTBB_HAS_PAYLOAD, 1);
+			pkt->corrected_payload_bits = (int16_t) fec_corrections;
 			unwhiten(corrected, pkt->payload, clock,
 				 pkt->payload_length*8,
 				 HEADER_WHITENING_BITS, pkt);
@@ -1319,8 +1449,8 @@ int HV(int clock, btbb_packet* pkt)
 			}
 			break;
 		case PACKET_TYPE_HV3:
+			/* no FEC on this one, so nothing to correct */
 			pkt->payload_length = 30;
-			btbb_packet_set_flag(pkt, BTBB_HAS_PAYLOAD, 1);
 			unwhiten(stream, pkt->payload, clock,
 				 pkt->payload_length*8,
 				 HEADER_WHITENING_BITS, pkt);
@@ -1344,7 +1474,9 @@ uint8_t try_clock(int clock, btbb_packet* pkt)
 	if (pkt->length < 122)
 		return 0;
 
-	if (!unfec13(stream, header, 18))
+	/* A trial clock, not the packet's own decode, so the corrections this
+	 * one makes are not the packet's to report. */
+	if (!unfec13(stream, header, 18, NULL))
 		return 0;
 	unwhiten(header, unwhitened, clock, 18, 0, pkt);
 	uint16_t hdr_data = air_to_host16(unwhitened, 10);
@@ -1363,6 +1495,7 @@ int btbb_decode_header(btbb_packet* pkt)
 	/* 18 bit packet header */
 	char header[18];
 	uint8_t UAP;
+	int header_corrections = 0;
 
 	/* Nothing is known about this packet until it decodes, and a packet
 	 * can be handed new symbols without its decoded state being reset, so
@@ -1375,12 +1508,16 @@ int btbb_decode_header(btbb_packet* pkt)
 	btbb_packet_set_flag(pkt, BTBB_CRC_CORRECT, 0);
 	pkt->payload_length = 0;
 	pkt->payload_header_length = 0;
+	pkt->corrected_header_bits = 0;
+	pkt->corrected_payload_bits = 0;
 
 	/* check that we have enough symbols */
 	if (pkt->length < 122)
 		return 0;
 
-	if (btbb_packet_get_flag(pkt, BTBB_CLK6_VALID) && unfec13(stream, header, 18)) {
+	if (btbb_packet_get_flag(pkt, BTBB_CLK6_VALID) &&
+	    unfec13(stream, header, 18, &header_corrections)) {
+		pkt->corrected_header_bits = (uint8_t) header_corrections;
 		unwhiten(header, pkt->packet_header, pkt->clkn, 18, 0, pkt);
 		uint16_t hdr_data = air_to_host16(pkt->packet_header, 10);
 		uint8_t hec = air_to_host8(&pkt->packet_header[10], 8);
@@ -1415,6 +1552,10 @@ int btbb_decode_payload(btbb_packet* pkt)
 	 * changes the packet type between two calls here. */
 	btbb_packet_set_flag(pkt, BTBB_CRC_CHECKED, 0);
 	btbb_packet_set_flag(pkt, BTBB_CRC_CORRECT, 0);
+
+	/* and nothing has been corrected yet either: the count belongs to the
+	 * payload the decoder below settles on */
+	pkt->corrected_payload_bits = 0;
 
 	switch(pkt->packet_type)
 	{
@@ -1498,7 +1639,28 @@ int btbb_decode_payload(btbb_packet* pkt)
 		btbb_packet_set_flag(pkt, BTBB_CRC_CORRECT, 0);
 	}
 
-	btbb_packet_set_flag(pkt, BTBB_HAS_PAYLOAD, 1);
+	/* The flag says the payload field holds a payload this packet
+	 * decoded, which is what btbb_print_packet() and the capture file
+	 * writers report. Each decoder above reports the length it decoded,
+	 * and none where it gave up: a payload header claiming more than the
+	 * type can carry, a capture that ended before the payload did, a
+	 * block the error correction could not put right, or no whitening
+	 * input whose CRC came out. A NULL or POLL has no payload to decode
+	 * and so reports none either.
+	 *
+	 * Without this the flag said every packet had a payload, and the
+	 * bytes reported for one that decoded none were whatever the last
+	 * packet this object decoded left in the field: a packet object is
+	 * reused across packets by btbb_find_ac(). The field is cleared here
+	 * so a caller that reads it past the flag cannot see them. */
+	if (pkt->payload_length > 0) {
+		btbb_packet_set_flag(pkt, BTBB_HAS_PAYLOAD, 1);
+	}
+	else {
+		btbb_packet_set_flag(pkt, BTBB_HAS_PAYLOAD, 0);
+		memset(pkt->payload, 0, sizeof(pkt->payload));
+	}
+
 	return rv;
 }
 
@@ -1525,7 +1687,11 @@ int btbb_decode(btbb_packet* pkt)
 /* print packet information */
 void btbb_print_packet(const btbb_packet* pkt)
 {
-	if (btbb_packet_get_flag(pkt, BTBB_HAS_PAYLOAD)) {
+	/* The type, and the payload header's fields where one was read, come
+	 * from the decoded packet header, which is what a valid HEC says the
+	 * library has. A packet whose payload did not decode still has a type
+	 * worth printing; what it does not have is data. */
+	if (btbb_packet_get_flag(pkt, BTBB_HEC_VALID)) {
 		printf("  Type: %s\n", TYPE_NAMES[pkt->packet_type]);
 		if (pkt->payload_header_length > 0) {
 			printf("  LT_ADDR: %d\n", pkt->packet_lt_addr);
@@ -1533,7 +1699,7 @@ void btbb_print_packet(const btbb_packet* pkt)
 			printf("  flow: %d\n", pkt->payload_flow);
 			printf("  payload length: %d\n", pkt->payload_length);
 		}
-		if (pkt->payload_length) {
+		if (btbb_packet_get_flag(pkt, BTBB_HAS_PAYLOAD)) {
 			printf("  Data: ");
 			int i;
 			for(i=0; i<pkt->payload_length; i++)

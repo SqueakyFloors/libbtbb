@@ -24,10 +24,12 @@
 #include "btbb.h"
 #include "pcap-common.h"
 
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <assert.h>
 #include <sys/types.h>
+#include <unistd.h>
 
 typedef enum {
 	PCAP_OK = 0,
@@ -60,6 +62,24 @@ FILE *btbb_pcap_open(const char *filename, uint32_t dlt, uint32_t snaplen) {
 
 	FILE *pcap_file = fopen(filename, "w");
 	if (pcap_file == NULL) return NULL;
+
+	/* Write straight through, which has to be set before anything else
+	   uses the stream. This is what lets a record that cannot be written
+	   whole be taken back out below: with a buffer in the way, part of
+	   the failed record is on disk and the rest is in the buffer, and
+	   there is no way to discard a buffer without flushing it - which
+	   would put those bytes in the middle of the file after the
+	   truncation. Each record is flushed as it is written in any case, so
+	   the cost is a second write per record, the header and the body no
+	   longer being coalesced.
+
+	   A stream that cannot be given up its buffer is no good for writing
+	   records that have to be whole, so give up on it here rather than
+	   write a capture that cannot be rolled back. */
+	if (setvbuf(pcap_file, NULL, _IONBF, 0) != 0) {
+		(void) fclose(pcap_file);
+		return NULL;
+	}
 
 	/* A file whose header did not reach it is no capture file, so say so
 	   now rather than leaving the caller with a handle to it. */
@@ -118,23 +138,56 @@ typedef struct {
 	pcap_bluetooth_bredr_bb_header bredr_bb_header;
 } pcap_bredr_packet;
 
+/* Take a record that could not be written whole back out of the file, so the
+   capture ends on the last complete record and a reader does not run into a
+   record header whose length reaches past the end of the file.
+   btbb_pcap_open() left the stream unbuffered, so what reached the file is
+   all there was of the record.
+
+   This is the best that can be done rather than a guarantee: a capture going
+   to something whose position cannot be found, or that cannot be truncated
+   or sought - a named pipe, say - keeps the part of the record that reached
+   it, as every capture did before. Writing to such a thing goes on failing
+   on its own, and the caller is told this record failed either way, so a
+   caller that stops capturing there - the only sensible answer to a full
+   disk - ends up with a file no worse than it would have had. */
+static void discard_partial_record(FILE *file, off_t start_of_record)
+{
+	if (start_of_record < 0) {
+		return;
+	}
+	if (ftruncate(fileno(file), start_of_record) != 0) {
+		return;
+	}
+	/* Put the stream back on the end of the file, and only then make it
+	   usable again. A seek that failed would leave the stream past the
+	   new end of the file, where a further record would be written beyond
+	   a hole; leaving the error set is what keeps that from happening
+	   quietly. */
+	if (fseeko(file, start_of_record, SEEK_SET) == 0) {
+		clearerr(file);
+	}
+}
+
 /* Write one record. Returns 0, or -PCAP_FILE_WRITE_ERROR if any of it did not
    reach the file, so a capture that runs out of disk space is reported to the
-   caller instead of looking like a capture that simply ended. The file may
-   end part way through the record that failed; unlike the pcapng writer this
-   one does not take it back out, because stdio has already decided how much
-   of it to put there. */
+   caller instead of looking like a capture that simply ended. A record that
+   could not be written whole is taken back out, as the pcapng writer does
+   with a block, leaving the file parsable to its end. */
 static int btbb_pcap_dump(FILE *file, pcaprec_hdr_t *pcap_header, u_char *data) {
-	if (fwrite(pcap_header, sizeof(*pcap_header), 1, file) != 1) {
-		return -PCAP_FILE_WRITE_ERROR;
+	/* ftello() rather than ftell(), so the position is the off_t that
+	   ftruncate() below takes and that the pcapng writer uses, which is
+	   64 bits wide wherever large file support is on. */
+	off_t start_of_record = ftello(file);
+
+	if ((fwrite(pcap_header, sizeof(*pcap_header), 1, file) == 1) &&
+	    (fwrite(data, pcap_header->incl_len, 1, file) == 1) &&
+	    (fflush(file) == 0)) {
+		return 0;
 	}
-	if (fwrite(data, pcap_header->incl_len, 1, file) != 1) {
-		return -PCAP_FILE_WRITE_ERROR;
-	}
-	if (fflush(file) != 0) {
-		return -PCAP_FILE_WRITE_ERROR;
-	}
-	return 0;
+
+	discard_partial_record(file, start_of_record);
+	return -PCAP_FILE_WRITE_ERROR;
 }
 
 static void
@@ -208,6 +261,11 @@ btbb_pcap_append_packet(btbb_pcap_handle * h, const uint64_t ns,
 		uint8_t payload_bytes[BREDR_MAX_PAYLOAD];
 		int payload_length = btbb_packet_get_payload_length(pkt);
 		uint32_t caplen = 0;
+		/* The format gives neither corrected-bits field a validity
+		   flag, so a reader takes both at face value. The payload's
+		   count describes the payload in the record, so it is only
+		   recorded alongside one. */
+		int16_t corrected_payload_bits = 0;
 		pcap_bredr_packet pcap_pkt;
 
 		/* Only a payload the decoder produced for this packet goes in
@@ -218,6 +276,7 @@ btbb_pcap_append_packet(btbb_pcap_handle * h, const uint64_t ns,
 		    (payload_length > 0) &&
 		    (payload_length <= MAX_PAYLOAD_LENGTH / 8)) {
 			caplen = (uint32_t) btbb_get_payload_packed( pkt, (char *) &payload_bytes[0] );
+			corrected_payload_bits = pkt->corrected_payload_bits;
 		}
 
 		assemble_pcapng_bredr_packet( &pcap_pkt,
@@ -230,8 +289,8 @@ btbb_pcap_append_packet(btbb_pcap_handle * h, const uint64_t ns,
 					      btbb_packet_get_ac_errors(pkt),
 						  btbb_packet_get_transport(pkt),
 						  btbb_packet_get_modulation(pkt),
-					      0, /* TODO: corrected header bits */
-					      0, /* TODO: corrected payload bits */
+					      pkt->corrected_header_bits,
+					      corrected_payload_bits,
 					      btbb_packet_get_lap(pkt),
 					      reflap,
 					      refuap,
@@ -249,8 +308,9 @@ btbb_pcap_close(btbb_pcap_handle * h)
 {
 	int retval = 0;
 
-	/* Closing flushes, so this is the last chance to notice that part of
-	   the capture never reached the file. */
+	/* The stream is unbuffered, so every record has already reached the
+	   file or been reported as not reaching it; this catches a failure of
+	   the close itself. */
 	if (h && h->pcap_file && (fclose(h->pcap_file) != 0)) {
 		retval = -PCAP_FILE_WRITE_ERROR;
 	}
@@ -471,8 +531,9 @@ lell_pcap_close(lell_pcap_handle *h)
 {
 	int retval = 0;
 
-	/* Closing flushes, so this is the last chance to notice that part of
-	   the capture never reached the file. */
+	/* The stream is unbuffered, so every record has already reached the
+	   file or been reported as not reaching it; this catches a failure of
+	   the close itself. */
 	if (h && h->pcap_file && (fclose(h->pcap_file) != 0)) {
 		retval = -PCAP_FILE_WRITE_ERROR;
 	}

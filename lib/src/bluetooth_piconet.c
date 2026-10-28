@@ -373,33 +373,87 @@ static char observed_channel(uint32_t clk1_27, btbb_piconet *pn)
 }
 
 /*
- * Walk the CLK1-27 values whose low 6 bits are already known and find those
- * that hop to the channel the first packet arrived on.
- *
- * With candidates NULL this only counts them, which is how the caller learns
- * how large the list has to be: the hop sequence does not visit the channels
- * evenly, and under AFH it only ever visits the used ones, so an estimate
- * from a channel count is not a bound. Writing is capped at max entries as
- * well, so a future miscount cannot run past the end of the list.
+ * How many entries the candidate list starts with, and the least it grows by.
+ * 16384 entries is 64 kB. The list reaches about 26500 entries for the basic
+ * hopping sequence and about 105000 for the fewest channels AFH is defined
+ * for, so this is a few doublings short of either.
  */
-static int init_candidates(char channel, int known_clock_bits, btbb_piconet *pn,
-			   uint32_t *candidates, int max)
+#define CANDIDATE_BLOCK 16384
+
+/*
+ * Walk the CLK1-27 values whose low 6 bits are already known and collect
+ * those that hop to the channel the first packet arrived on, into a list the
+ * caller owns and frees. Returns the number of candidates found, or -1 if the
+ * list could not be allocated, in which case *candidates is NULL.
+ *
+ * The walk is 2^21 clock values, and each one's hop is computed from the
+ * piconet's current AFH map rather than read from a table, which makes this
+ * the expensive part of starting hop reversal: tens of milliseconds, inside
+ * the packet callback of whatever is capturing. So it happens once. The list
+ * grows as matches are found, rather than being counted in a walk of its own,
+ * and is handed back holding exactly the candidates found. The hop sequence
+ * does not visit the channels evenly, and under AFH it only ever visits the
+ * used ones, so there is no useful size to allocate up front.
+ *
+ * Growing before each write is what keeps the candidates inside the list
+ * however many of them there turn out to be. The two-pass version instead
+ * trusted its first pass to have counted them, and sizing that list from an
+ * even spread over the channels is what overflowed it under AFH.
+ */
+static int init_candidates(char channel, int known_clock_bits,
+			   btbb_piconet *pn, uint32_t **candidates)
 {
 	uint32_t clk1_27;
-	int count = 0; /* total number of candidates */
+	uint32_t *list = NULL;
+	uint32_t *grown;
+	int count = 0;	/* candidates found so far */
+	int room = 0;	/* entries the list has space for */
+
+	*candidates = NULL;
 
 	/* only try clock values that match our known bits */
 	for (clk1_27 = (uint32_t) known_clock_bits; clk1_27 < SEQUENCE_LENGTH;
 	     clk1_27 += 0x40) {
-		if (observed_channel(clk1_27, pn) == channel) {
-			if (candidates != NULL) {
-				if (count == max)
-					break;
-				candidates[count] = clk1_27;
+		if (observed_channel(clk1_27, pn) != channel)
+			continue;
+		if (count == room) {
+			/* Double the list each time, so the copying costs a
+			 * constant amount per candidate however long it
+			 * turns out to be. */
+			room = room ? room * 2 : CANDIDATE_BLOCK;
+			grown = (uint32_t *) malloc(sizeof(uint32_t) *
+						    (size_t) room);
+			if (grown == NULL) {
+				free(list);
+				return -1;
 			}
-			count++;
+			/* there is nothing to copy into the first block, and
+			 * memcpy() is not defined for a null source even
+			 * with a length of 0 */
+			if (count > 0)
+				memcpy(grown, list,
+				       sizeof(uint32_t) * (size_t) count);
+			free(list);
+			list = grown;
+		}
+		list[count++] = clk1_27;
+	}
+
+	if (count < room) {
+		/* Hand back a list of exactly the candidates found, as the
+		 * counting pass used to give. A larger one would be correct,
+		 * so a failure here is not worth losing the candidates
+		 * over. */
+		grown = (uint32_t *) malloc(sizeof(uint32_t) * (size_t) count);
+		if (grown != NULL) {
+			memcpy(grown, list,
+			       sizeof(uint32_t) * (size_t) count);
+			free(list);
+			list = grown;
 		}
 	}
+
+	*candidates = list;
 	return count;
 }
 
@@ -428,10 +482,8 @@ int btbb_init_hop_reversal(int aliased, btbb_piconet *pn)
 	int restarted = btbb_piconet_get_flag(pn, BTBB_HOP_REVERSAL_INIT);
 
 	/* A second call replaces the candidates of the first. */
-	if (restarted) {
-		free(pn->clock_candidates);
-		pn->clock_candidates = NULL;
-	}
+	free(pn->clock_candidates);
+	pn->clock_candidates = NULL;
 
 	/*
 	 * Hops are predicted one at a time from the piconet's current state
@@ -454,15 +506,12 @@ int btbb_init_hop_reversal(int aliased, btbb_piconet *pn)
 	btbb_piconet_set_flag(pn, BTBB_IS_ALIASED, aliased);
 
 	clock = (pn->clk6_offset + pn->first_pkt_time) & 0x3f;
-	count = init_candidates(pn->pattern_channels[0], (int) clock, pn, NULL, 0);
-	if (count > 0) {
-		pn->clock_candidates = (uint32_t*)
-			malloc(sizeof(uint32_t) * (size_t) count);
-		if (pn->clock_candidates != NULL)
-			pn->num_candidates = init_candidates(
-				pn->pattern_channels[0], (int) clock, pn,
-				pn->clock_candidates, count);
-	}
+	count = init_candidates(pn->pattern_channels[0], (int) clock, pn,
+				&pn->clock_candidates);
+	/* -1 is a list that could not be allocated, which leaves the piconet
+	 * with no candidates, as a walk that found none does. */
+	if (count > 0)
+		pn->num_candidates = count;
 
 	if (restarted)
 		printf("%d CLK1-27 candidates for the new AFH map\n",

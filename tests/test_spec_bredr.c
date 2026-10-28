@@ -36,6 +36,7 @@
  */
 
 #include <string.h>
+#include <unistd.h>
 
 #include "bluetooth_packet.c"
 
@@ -514,6 +515,7 @@ static void test_fec13_single_symbol_correction(void)
 	static const uint32_t DATA[] = { 0x00000, 0x3ffff, 0x12345, 0x2aaaa };
 	size_t row;
 	int bit, position;
+	int corrected = -1;
 
 	for (row = 0; row < sizeof(DATA) / sizeof(DATA[0]); row++) {
 		char encoded[54];
@@ -527,12 +529,16 @@ static void test_fec13_single_symbol_correction(void)
 			encoded[bit * 3 + 2] = value;
 		}
 
-		CHECK(unfec13(encoded, decoded, 18));
+		CHECK(unfec13(encoded, decoded, 18, &corrected));
+		CHECK(corrected == 0);
 		CHECK(air_to_host32(decoded, 18) == (DATA[row] & 0x3ffff));
 
 		for (position = 0; position < 54; position++) {
 			encoded[position] ^= 1;
-			CHECK(unfec13(encoded, decoded, 18));
+			CHECK(unfec13(encoded, decoded, 18, &corrected));
+			/* whichever symbol of the triple it is, the bit it
+			 * belongs to is the one corrected */
+			CHECK(corrected == 1);
 			CHECK(air_to_host32(decoded, 18) ==
 			      (DATA[row] & 0x3ffff));
 			encoded[position] ^= 1;
@@ -638,7 +644,7 @@ static void test_dh1_sample_packet(void)
 	{
 		char decoded[18];
 
-		CHECK(unfec13(header_symbols, decoded, 18));
+		CHECK(unfec13(header_symbols, decoded, 18, NULL));
 		CHECK(air_to_host16(decoded, 10) == 0x123);
 		CHECK(air_to_host8(&decoded[10], 8) == 0x06);
 		CHECK(spec_hec(0x123, 0x47) == 0x06);
@@ -709,7 +715,7 @@ static void test_dm1_sample_packet(void)
 	{
 		char decoded[18];
 
-		CHECK(unfec13(header_symbols, decoded, 18));
+		CHECK(unfec13(header_symbols, decoded, 18, NULL));
 		CHECK(air_to_host16(decoded, 10) == 0x11b);
 		CHECK(air_to_host8(&decoded[10], 8) == 0x79);
 		CHECK(spec_hec(0x11b, 0x47) == 0x79);
@@ -750,6 +756,50 @@ static void test_dm1_sample_packet(void)
 	for (i = 0; i < 5; i++)
 		CHECK((uint8_t) packed[1 + i] == (uint8_t) (i + 1));
 
+	/* Nothing in this packet needed putting right, which is what a
+	 * capture file's corrected-bits fields then say. */
+	CHECK(pkt->corrected_header_bits == 0);
+	CHECK(pkt->corrected_payload_bits == 0);
+
+	btbb_packet_unref(pkt);
+
+	/*
+	 * One wrong data symbol in a rate 2/3 block: the code puts it back,
+	 * so the payload decodes the same and its CRC still comes out, and
+	 * the count is the one bit per block it had to correct.
+	 *
+	 * The first block carries the payload header, which the decoder reads
+	 * on its own before decoding the whole payload, so a correction there
+	 * is counted once rather than twice.
+	 */
+	for (i = 0; i < 7; i++) {
+		payload[i * 15 + 2] ^= 1;
+		length = build_packet(stream, 0x9e8b33, 0x11b, 0x79, payload,
+				      payload_symbols, 0, 0);
+		pkt = packet_for(stream, length, 0x47, 0, 0);
+		CHECK(pkt != NULL);
+		if (pkt == NULL)
+			return;
+		CHECK(btbb_decode_header(pkt) == 1);
+		CHECK(btbb_decode_payload(pkt) == 10);
+		CHECK(btbb_packet_get_payload_length(pkt) == 8);
+		CHECK(pkt->corrected_payload_bits == 1);
+		btbb_packet_unref(pkt);
+		payload[i * 15 + 2] ^= 1;
+	}
+
+	/* two blocks, two corrected bits */
+	payload[1 * 15 + 2] ^= 1;
+	payload[4 * 15 + 2] ^= 1;
+	length = build_packet(stream, 0x9e8b33, 0x11b, 0x79, payload,
+			      payload_symbols, 0, 0);
+	pkt = packet_for(stream, length, 0x47, 0, 0);
+	CHECK(pkt != NULL);
+	if (pkt == NULL)
+		return;
+	CHECK(btbb_decode_header(pkt) == 1);
+	CHECK(btbb_decode_payload(pkt) == 10);
+	CHECK(pkt->corrected_payload_bits == 2);
 	btbb_packet_unref(pkt);
 }
 
@@ -1040,6 +1090,53 @@ static void test_acl_truncated_capture(void)
 }
 
 /*
+ * The most corrections a payload can report: a DM5, the longest payload the
+ * rate 2/3 code carries, with a wrong check symbol in every one of its
+ * blocks. Each is a single-bit syndrome, which leaves the data alone, so the
+ * payload still decodes and its CRC still comes out.
+ *
+ * 183 is above the +180 the published record layout describes for this field,
+ * which is what the longest payload really comes to; the count the decoder
+ * made is what gets reported.
+ */
+static void test_the_largest_corrected_payload_count(void)
+{
+	char payload[MAX_SYMBOLS];
+	char stream[MAX_SYMBOLS];
+	char packed[MAX_PAYLOAD_LENGTH / 8];
+	uint16_t header_data;
+	btbb_packet *pkt;
+	int payload_symbols, length, blocks, i;
+	const int clock = 0x2a;
+
+	payload_symbols = build_acl_payload(payload, 2, 224, 1, 1, 0x47,
+					    clock);
+	blocks = payload_symbols / 15;
+	CHECK(blocks == 183);
+	/* symbol 10 of a block is its first check symbol */
+	for (i = 0; i < blocks; i++)
+		payload[i * 15 + 10] ^= 1;
+
+	header_data = (uint16_t) (1 | (PACKET_TYPE_DM5 << 3) | (3 << 7));
+	length = build_packet(stream, 0x9e8b33, header_data,
+			      spec_hec(header_data, 0x47), payload,
+			      payload_symbols, clock, 1);
+	pkt = packet_for(stream, length, 0x47, clock, 1);
+	CHECK(pkt != NULL);
+	if (pkt == NULL)
+		return;
+	CHECK(btbb_decode_header(pkt) == 1);
+	CHECK(btbb_decode_payload(pkt) == 10);	/* the CRC came out */
+	CHECK(btbb_packet_get_payload_length(pkt) == 228);
+	CHECK(pkt->corrected_payload_bits == blocks);
+	/* and the payload is the one that was sent */
+	CHECK(btbb_get_payload_packed(pkt, packed) == 228);
+	for (i = 0; i < 224; i++)
+		CHECK((uint8_t) packed[2 + i] == (uint8_t) (i + 1));
+	btbb_packet_unref(pkt);
+}
+
+/*
  * Make one rate 2/3 FEC block uncorrectable. Two of a block's check symbols
  * disagree with its data, which is neither the no-error case nor one of the
  * single bit errors the code can put right, so unfec23() gives the block up.
@@ -1103,6 +1200,7 @@ static void test_uncorrectable_payload_fec(void)
 		CHECK(btbb_decode_header(pkt) == 1);
 		CHECK(btbb_decode_payload(pkt) == 0);
 		CHECK(btbb_packet_get_payload_length(pkt) == 0);
+		CHECK(btbb_packet_get_flag(pkt, BTBB_HAS_PAYLOAD) == 0);
 		btbb_packet_unref(pkt);
 	}
 
@@ -1132,6 +1230,7 @@ static void test_uncorrectable_payload_fec(void)
 		CHECK(btbb_decode_header(pkt) == 1);
 		CHECK(btbb_decode_payload(pkt) == 0);
 		CHECK(btbb_packet_get_payload_length(pkt) == 0);
+		CHECK(btbb_packet_get_flag(pkt, BTBB_HAS_PAYLOAD) == 0);
 		btbb_packet_unref(pkt);
 	}
 
@@ -1856,6 +1955,111 @@ static void test_payload_crc_needs_a_payload(void)
 	btbb_packet_unref(pkt);
 }
 
+/* Run btbb_print_packet() with stdout redirected into out. */
+static int capture_print(const btbb_packet *pkt, char *out, size_t outlen)
+{
+	FILE *capture = tmpfile();
+	int saved;
+	size_t read;
+
+	out[0] = '\0';
+	if (capture == NULL)
+		return -1;
+	fflush(stdout);
+	saved = dup(fileno(stdout));
+	if (saved < 0 || dup2(fileno(capture), fileno(stdout)) < 0) {
+		if (saved >= 0) {
+			dup2(saved, fileno(stdout));
+			close(saved);
+		}
+		fclose(capture);
+		return -1;
+	}
+
+	btbb_print_packet(pkt);
+	fflush(stdout);
+	dup2(saved, fileno(stdout));
+	close(saved);
+
+	rewind(capture);
+	read = fread(out, 1, outlen - 1, capture);
+	out[read] = '\0';
+	fclose(capture);
+	return 0;
+}
+
+/*
+ * What btbb_print_packet() prints, which is what ubertooth-rx shows for a
+ * decoded packet. The type comes from the packet header and the data from the
+ * payload, so a packet whose payload did not decode has its type printed and
+ * no data: the flag that says a payload was decoded used to gate both.
+ */
+static void test_printing_a_packet(void)
+{
+	char payload[MAX_SYMBOLS];
+	char stream[MAX_SYMBOLS];
+	char out[4096];
+	uint16_t header_data;
+	btbb_packet *pkt;
+	int payload_symbols, length;
+
+	/* the specification's DH1, whole */
+	payload_symbols = symbols_from_string(
+		"01110100"
+		"10000000" "01000000" "11000000" "00100000" "10100000"
+		"1110110000110110", payload);
+	length = build_packet(stream, 0x9e8b33, 0x123, 0x06, payload,
+			      payload_symbols, 0, 0);
+	pkt = packet_for(stream, length, 0x47, 0, 0);
+	CHECK(pkt != NULL);
+	if (pkt == NULL)
+		return;
+	CHECK(btbb_decode_header(pkt) == 1);
+	CHECK(btbb_decode_payload(pkt) == 10);
+	CHECK(capture_print(pkt, out, sizeof(out)) == 0);
+	CHECK(strstr(out, "Type: DH1") != NULL);
+	CHECK(strstr(out, "payload length: 8") != NULL);
+	CHECK(strstr(out, "Data:  2e 01 02 03 04 05") != NULL);
+
+	/* the same packet object, a capture that ends inside the payload */
+	btbb_packet_set_data(pkt, stream, 122 + 16, 0, 0);
+	CHECK(btbb_decode_header(pkt) == 1);
+	CHECK(btbb_decode_payload(pkt) == 1);
+	CHECK(capture_print(pkt, out, sizeof(out)) == 0);
+	CHECK(strstr(out, "Type: DH1") != NULL);
+	CHECK(strstr(out, "payload length: 0") != NULL);
+	/* no data line, and above all none of the first decode's bytes */
+	CHECK(strstr(out, "Data:") == NULL);
+	CHECK(strstr(out, "2e 01 02") == NULL);
+	btbb_packet_unref(pkt);
+
+	/* a POLL, which has no payload to decode and still has a type */
+	header_data = (uint16_t) (1 | (PACKET_TYPE_POLL << 3));
+	memset(stream, 0, sizeof(stream));
+	(void) build_packet(stream, 0x9e8b33, header_data,
+			    spec_hec(header_data, 0x47), NULL, 0, 0, 0);
+	pkt = packet_for(stream, 122, 0x47, 0, 0);
+	CHECK(pkt != NULL);
+	if (pkt == NULL)
+		return;
+	CHECK(btbb_decode_header(pkt) == 1);
+	CHECK(btbb_decode_payload(pkt) == 1);
+	CHECK(capture_print(pkt, out, sizeof(out)) == 0);
+	CHECK(strstr(out, "Type: POLL") != NULL);
+	CHECK(strstr(out, "Data:") == NULL);
+	btbb_packet_unref(pkt);
+
+	/* a packet whose header did not decode has nothing to say at all */
+	pkt = packet_for(stream, 121, 0x47, 0, 0);
+	CHECK(pkt != NULL);
+	if (pkt == NULL)
+		return;
+	CHECK(btbb_decode_header(pkt) == 0);
+	CHECK(capture_print(pkt, out, sizeof(out)) == 0);
+	CHECK(out[0] == '\0');
+	btbb_packet_unref(pkt);
+}
+
 /*
  * NULL and POLL packets have no payload at all, and an ID packet has no header
  * either, which btbb_header_present() is what tells apart.
@@ -1886,6 +2090,9 @@ static void test_packets_without_payload(void)
 		CHECK(btbb_decode_header(pkt) == 1);
 		CHECK(btbb_decode_payload(pkt) == 1);
 		CHECK(btbb_packet_get_payload_length(pkt) == 0);
+		/* these types have no payload to report, which the flag the
+		 * writers read has to say as well as the length */
+		CHECK(btbb_packet_get_flag(pkt, BTBB_HAS_PAYLOAD) == 0);
 		btbb_packet_unref(pkt);
 	}
 
@@ -1981,6 +2188,7 @@ int main(void)
 	test_acl_payload_lengths();
 	test_acl_payload_length_clamped();
 	test_acl_truncated_capture();
+	test_the_largest_corrected_payload_count();
 	test_uncorrectable_payload_fec();
 	test_esco_no_length_matches();
 	test_header_needs_its_symbols();
@@ -1992,6 +2200,7 @@ int main(void)
 	test_dv_truncated_capture();
 	test_payload_crc_needs_a_payload();
 	test_fhs_payload();
+	test_printing_a_packet();
 	test_packets_without_payload();
 	test_uap_and_clock_recovery();
 

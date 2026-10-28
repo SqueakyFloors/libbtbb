@@ -252,6 +252,10 @@ int btbb_pcapng_append_packet(btbb_pcapng_handle * h, const uint64_t ns,
 	char payload_bytes[BREDR_MAX_PAYLOAD];
 	int payload_length = btbb_packet_get_payload_length(pkt);
 	uint32_t caplen = 0;
+	/* The format gives neither corrected-bits field a validity flag, so a
+	   reader takes both at face value. The payload's count describes the
+	   payload in the record, so it is only recorded alongside one. */
+	int16_t corrected_payload_bits = 0;
 	pcapng_bredr_packet pcapng_pkt;
 
 	/* Only a payload the decoder produced for this packet goes in the
@@ -260,6 +264,7 @@ int btbb_pcapng_append_packet(btbb_pcapng_handle * h, const uint64_t ns,
 	if (btbb_packet_get_flag(pkt, BTBB_HAS_PAYLOAD) &&
 	    (payload_length > 0) && (payload_length <= MAX_PAYLOAD_LENGTH / 8)) {
 		caplen = (uint32_t) btbb_get_payload_packed( pkt, &payload_bytes[0] );
+		corrected_payload_bits = pkt->corrected_payload_bits;
 	}
 
 	assemble_pcapng_bredr_packet( &pcapng_pkt,
@@ -272,8 +277,8 @@ int btbb_pcapng_append_packet(btbb_pcapng_handle * h, const uint64_t ns,
 				      btbb_packet_get_ac_errors(pkt),
 				      btbb_packet_get_transport(pkt),
 				      btbb_packet_get_modulation(pkt),
-				      0, /* TODO: corrected header bits */
-				      0, /* TODO: corrected payload bits */
+				      pkt->corrected_header_bits,
+				      corrected_payload_bits,
 				      btbb_packet_get_lap(pkt),
 				      reflap,
 				      refuap,
