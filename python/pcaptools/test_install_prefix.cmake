@@ -58,7 +58,7 @@ function(check_install prefix bindir)
 		message(FATAL_ERROR "${script} -h printed no usage text:\n${output}")
 	endif()
 
-	# And the same run as a user makes it, with whatever the interpreter's
+	# And a smoke run as a user makes it, with whatever the interpreter's
 	# own sys.path holds.
 	execute_process(COMMAND "${PYTHON}" "${script}" -h
 	                WORKING_DIRECTORY "${prefix}"
@@ -71,6 +71,55 @@ function(check_install prefix bindir)
 	file(REMOVE_RECURSE "${prefix}")
 endfunction()
 
+# The search stops at the prefix the script is installed in. A module in a
+# prefix further up belongs to another install, and where the prefix sits
+# under a directory anyone can write to, it is a module anyone could have
+# put there.
+function(check_search_stops_at_prefix root)
+	file(REMOVE_RECURSE "${root}")
+	foreach(prefix "${root}" "${root}/inner")
+		execute_process(COMMAND "${PYTHON}" -m pip install --no-deps
+		                        --upgrade --prefix "${prefix}" "${wheel}"
+		                RESULT_VARIABLE result
+		                OUTPUT_VARIABLE output ERROR_VARIABLE output)
+		if(NOT result EQUAL 0)
+			message(FATAL_ERROR
+				"installing the wheel into ${prefix} failed: "
+				"${result}\n${output}")
+		endif()
+	endforeach()
+
+	# Take the module out of the inner prefix, leaving its site directory
+	# behind, so the inner prefix is an install without the module in it.
+	file(GLOB modules "${root}/inner/lib*/python*/*-packages/pcapdump"
+	                  "${root}/inner/local/lib*/python*/*-packages/pcapdump")
+	list(LENGTH modules module_count)
+	if(NOT module_count EQUAL 1)
+		message(FATAL_ERROR
+			"expected the module in one site directory of "
+			"${root}/inner, found ${module_count}")
+	endif()
+	file(REMOVE_RECURSE ${modules})
+
+	file(COPY "${BTAPTAP}" DESTINATION "${root}/inner/${BINDIR}")
+	execute_process(COMMAND "${PYTHON}" -I -S
+	                        "${root}/inner/${BINDIR}/${script_name}" -h
+	                RESULT_VARIABLE result
+	                OUTPUT_VARIABLE output ERROR_VARIABLE output)
+	if(result EQUAL 0)
+		message(FATAL_ERROR
+			"${script_name} imported a module from outside the prefix "
+			"it is installed in:\n${output}")
+	endif()
+	if(NOT output MATCHES "No module named")
+		message(FATAL_ERROR
+			"${script_name} failed, but not on the missing module:"
+			"\n${output}")
+	endif()
+
+	file(REMOVE_RECURSE "${root}")
+endfunction()
+
 check_install("${PREFIX}" "${BINDIR}")
 
 # A prefix named with a glob metacharacter in it is a directory name, not a
@@ -80,5 +129,7 @@ check_install("${PREFIX}-[1]" "${BINDIR}")
 # A binary directory more than one level inside the prefix, as a packager
 # configuring usr/bin gets.
 check_install("${PREFIX}-deep" "usr/${BINDIR}")
+
+check_search_stops_at_prefix("${PREFIX}-nested")
 
 message(STATUS "btaptap imported pcapdump from an install of its own")

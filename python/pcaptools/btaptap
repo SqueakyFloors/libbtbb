@@ -68,12 +68,21 @@ def site_dir_for(module):
             # metacharacter stands for itself.
             candidates.extend(
                 glob.glob(os.path.join(glob.escape(directory), pattern)))
+        if not candidates:
+            continue
         candidates.sort(
             key=lambda path: (running not in path.split(os.sep), path))
 
         for path in candidates:
             if os.path.isdir(os.path.join(path, module)):
                 return path
+
+        # A directory with a site directory in it is the install prefix, so
+        # the search ends here whether the module was in it or not. What is
+        # in a prefix further up belongs to some other install, and on a
+        # prefix under a directory anyone can write to, that is a module
+        # anyone could have put there.
+        return None
     return None
 
 

@@ -19,3 +19,7 @@ simplified HID messaging that can be interpreted, for example, by a PC BIOS.
 Some of those keyboards also transmit these messages over unencrypted
 Bluetooth.  This tool can be used to extract keystrokes from such
 transmissions.
+
+Note that btaptap gets no keystrokes out of a capture on python 3: it reads
+every byte through ord(), which python 3 does not accept, and it reports the
+capture as finished instead.  See issue 55.
