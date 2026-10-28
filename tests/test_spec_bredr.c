@@ -1038,6 +1038,17 @@ static void wreck_fec23_block(char *payload, int block)
 }
 
 /*
+ * Leave a payload length behind in the packet, standing in for a previous
+ * decode of the same packet object. A clock sweep calls crc_check() once per
+ * candidate clock, so a decoder that reports a length it did not decode
+ * reports one of these.
+ */
+static void seed_stale_payload_length(btbb_packet *pkt)
+{
+	pkt->payload_length = 99;
+}
+
+/*
  * A payload block the error correction cannot recover leaves nothing
  * decoded, and the decoder has to report nothing rather than the length the
  * payload header claimed. Noise does this far more often than a capture
@@ -1075,6 +1086,7 @@ static void test_uncorrectable_payload_fec(void)
 		CHECK(pkt != NULL);
 		if (pkt == NULL)
 			return;
+		seed_stale_payload_length(pkt);
 		CHECK(btbb_decode_header(pkt) == 1);
 		CHECK(btbb_decode_payload(pkt) == 0);
 		CHECK(btbb_packet_get_payload_length(pkt) == 0);
@@ -1103,6 +1115,7 @@ static void test_uncorrectable_payload_fec(void)
 		CHECK(pkt != NULL);
 		if (pkt == NULL)
 			return;
+		seed_stale_payload_length(pkt);
 		CHECK(btbb_decode_header(pkt) == 1);
 		CHECK(btbb_decode_payload(pkt) == 0);
 		CHECK(btbb_packet_get_payload_length(pkt) == 0);
@@ -1148,6 +1161,7 @@ static void test_uncorrectable_payload_fec(void)
 			CHECK(pkt != NULL);
 			if (pkt == NULL)
 				return;
+			seed_stale_payload_length(pkt);
 			CHECK(btbb_decode_header(pkt) == 1);
 			CHECK(HV(clock, pkt) == 0);
 			CHECK(btbb_packet_get_payload_length(pkt) == 0);
@@ -1179,6 +1193,7 @@ static void test_uncorrectable_payload_fec(void)
 		CHECK(pkt != NULL);
 		if (pkt == NULL)
 			return;
+		seed_stale_payload_length(pkt);
 		CHECK(btbb_decode_header(pkt) == 1);
 		CHECK(EV4(clock, pkt) == 1);
 		/* three blocks decoded, 30 bits, so three whole bytes */
