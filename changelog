@@ -1,4 +1,19 @@
 libbtbb (2020-12-R1+fork5) unstable; urgency=low
+  * A clock the library recovered that turns out not to be the piconet's is
+    now given up. Following a piconet never winnowed again, so a wrong CLK1-6
+    or UAP meant every packet printed "Failed to decode packet" for as long as
+    the capture ran, with no way back. After 20 packets in a row fail to
+    decode, btbb_process_packet() reports BTBB_LOCK_LOST and the piconet
+    starts discovery again; a clock the caller set itself, as
+    ubertooth-follow does from an adapter, is left alone.
+  * A long LE pcapng capture now says when a CONNECT_IND's connection
+    parameters were not recorded. Room for them is set aside in the interface
+    description block when the file is created, about 340 connections' worth
+    on a 16 kB page, and a capture that filled it used to keep writing packets
+    and quietly stop recording the parameters needed to follow the
+    connections in them. lell_pcapng_append_packet() now returns
+    LELL_PCAPNG_CONNECT_INFO_NOT_RECORDED, a positive value where its errors
+    are negative, so a capture tool can warn once.
   * The hopping sequence notes ("Calculating complete hopping sequence.",
     "Hopping sequence calculated." and "Found hopping sequence in cache.") are
     gone, along with the sequence they announced. A tool streaming its capture

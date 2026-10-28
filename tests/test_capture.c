@@ -1824,6 +1824,89 @@ static void test_le_short_connect_ind(void)
 	CHECK(find_option(idb, 16, PCAPNG_LE_LL_CONNECTION_INFO, NULL) == 0);
 }
 
+/* How many blocks of one type the capture holds. */
+static int count_blocks(uint32_t block_type)
+{
+	size_t off = 0;
+	int found = 0;
+
+	while ((off = find_block(block_type, off)) < capture_len) {
+		found++;
+		off += rd32(off + 4);
+	}
+	return found;
+}
+
+/*
+ * The connection parameters of a CONNECT_IND are recorded as an option of the
+ * interface description block, whose room for options is set aside when the
+ * file is created: one memory page, which holds a few hundred of them. A
+ * capture long enough to fill it used to keep writing packets and quietly
+ * stop recording the parameters, so a reader of the later connections had no
+ * access address, hop increment or channel map to follow them with and no
+ * sign that any had been left out. Now the writer says so, while the packet
+ * itself still reaches the file.
+ */
+static void test_le_connect_ind_options_run_out(void)
+{
+	const char *filename = "test_capture_le_full.pcapng";
+	lell_pcapng_handle *h = NULL;
+	lell_packet *pkt = NULL;
+	int recorded = 0;
+	int appended = 0;
+	int reported = 0;
+	int i;
+
+	unlink_quietly(filename);
+	lell_allocate_and_decode_n(CONNECT_IND, sizeof(CONNECT_IND),
+				   CONNECT_IND_CHANNEL_MHZ, 42, &pkt);
+	CHECK(pkt != NULL);
+	if (pkt == NULL)
+		return;
+	CHECK(lell_pcapng_create_file(filename, "test", &h) == 0);
+	if (h == NULL) {
+		lell_packet_unref(pkt);
+		return;
+	}
+
+	/* Enough packets to fill a page of options, whatever the page size,
+	   and a few more once it is full. */
+	for (i = 0; i < 6000; i++) {
+		reported = lell_pcapng_append_packet(h, (uint64_t) i, -20,
+						     -80, LE_ADV_AA, pkt);
+		if (reported != 0)
+			break;
+		recorded++;
+	}
+	CHECK(recorded > 1);
+	CHECK(reported == LELL_PCAPNG_CONNECT_INFO_NOT_RECORDED);
+	appended = recorded + 1;
+
+	/* It keeps saying so, and keeps writing the packets. */
+	for (i = 0; i < 3; i++) {
+		CHECK(lell_pcapng_append_packet(h, 1ull, -20, -80, LE_ADV_AA,
+						pkt) ==
+		      LELL_PCAPNG_CONNECT_INFO_NOT_RECORDED);
+		appended++;
+	}
+	(void) lell_pcapng_close(h);
+	lell_packet_unref(pkt);
+
+	CHECK(read_capture(filename));
+	unlink_quietly(filename);
+	if (capture_len == 0)
+		return;
+
+	/* Every packet is in the file: the option space running out costs the
+	   parameters, not the capture. find_block() walks every block on the
+	   way, so a block whose length does not add up is caught here too. */
+	CHECK(count_blocks(BLOCK_TYPE_ENHANCED_PACKET) == appended);
+	/* and the parameters recorded before the space ran out are still
+	   readable */
+	CHECK(find_option(find_block(BLOCK_TYPE_INTERFACE, 0), 16,
+			  PCAPNG_LE_LL_CONNECTION_INFO, NULL) != 0);
+}
+
 /*
  * The padding options that fill the spare room of the two header blocks must
  * cover it exactly, so a reader walking the options arrives at the end of
@@ -2179,6 +2262,7 @@ int main(void)
 	test_le_pcap_records();
 	test_le_connect_ind_option();
 	test_le_short_connect_ind();
+	test_le_connect_ind_options_run_out();
 	test_header_padding_options();
 	test_padding_beyond_one_option();
 	test_section_option_limit();

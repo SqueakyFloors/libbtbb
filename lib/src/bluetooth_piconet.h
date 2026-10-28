@@ -51,6 +51,29 @@
  */
 #define CLK27_CONFIRM_HOPS 4
 
+/*
+ * How many packets in a row have to fail to decode while following a piconet
+ * before the clock the library recovered is given up.
+ *
+ * Following starts once a clock is accepted, and from then on nothing
+ * winnows: a clock that was wrong is used for every packet that follows.
+ * Every candidate shares the CLK1-6 that CRC-confirmed discovery found, so
+ * what a wrong candidate gets wrong is the hopping, not the dewhitening; the
+ * clock bits a decode does depend on are CLK1-6 and the UAP, and those can
+ * also be wrong, accepted by elimination rather than by a CRC.  Then every
+ * packet fails to decode and, until now, there was no way back.
+ *
+ * The run has to be long enough that a correctly followed piconet on a noisy
+ * link does not cross it: a failure there is a packet lost to bit errors, and
+ * giving the clock up costs a fresh discovery, which #49 measured at 10.7 to
+ * 14.7 packets.  Twenty is longer than that, so the library cannot give up a
+ * lock faster than it can win one back.  Against a wrong CLK1-6 or UAP it
+ * costs almost nothing: the header's 8-bit HEC has to agree with the
+ * piconet's UAP, so about one packet in 256 decodes by chance and twenty
+ * failures in a row arrive in about twenty packets.
+ */
+#define FOLLOW_DECODE_FAILURES 20
+
 struct btbb_piconet {
 
 	uint32_t refcount;
@@ -119,6 +142,16 @@ struct btbb_piconet {
 	 * hops that confirm it, counted against CLK27_CONFIRM_HOPS above. */
 	int clk27_confirmations;
 
+	/* True once hop reversal has accepted a clock for this piconet, which
+	 * is the clock that can be given up again.  A caller that set the
+	 * clock itself, from an adapter say, owns it: the library has no
+	 * better one to fall back on, so it does not take that one away. */
+	uint8_t clock_recovered;
+
+	/* Packets in a row that failed to decode while following, counted
+	 * against FOLLOW_DECODE_FAILURES above. */
+	int follow_decode_failures;
+
 	/* CLK1-6 candidates */
 	int clock6_candidates[64];
 
@@ -137,7 +170,12 @@ struct btbb_piconet {
 	 * masking clk_offset's CLKN ticks to 6 bits would not give slots. */
 	int clk6_offset;
 
-	/* local clock (CLK1-27) at time of first packet */
+	/* The observer's own clock when the first packet arrived, as CLK1-27:
+	 * a count of 625 us slots, the same unit as btbb_packet's clkn, which
+	 * is where it comes from.  Candidate clocks, the hop differences in
+	 * pattern_indices and clk6_offset are all in those slots too; the
+	 * only clock here in 312.5 us CLKN ticks is clk_offset above, which
+	 * is what a receiver is told to hop on. */
 	uint32_t first_pkt_time;
 
 	/* queue of packets to be decoded */

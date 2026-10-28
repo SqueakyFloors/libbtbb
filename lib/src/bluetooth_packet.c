@@ -500,7 +500,10 @@ void btbb_packet_set_data(btbb_packet *pkt, char *data, int length,
 
 	pkt->length = length;
 	pkt->channel = channel;
-	pkt->clkn = clkn >> 1; // really CLK1
+	/* The caller's clock counts 312.5 us ticks (CLK27-0); the packet
+	 * keeps CLK1-27, the 625 us slot count, because that is the clock
+	 * dewhitening, the CRC and hop reversal all work in. */
+	pkt->clkn = clkn >> 1;
 
 	/* Nothing is known about these symbols yet, so drop everything the
 	 * decoder worked out about the last ones: what it checked, the header

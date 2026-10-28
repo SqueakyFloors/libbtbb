@@ -125,6 +125,8 @@ uint8_t btbb_packet_get_transport(const btbb_packet *pkt);
 
 uint8_t btbb_packet_get_channel(const btbb_packet *pkt);
 uint8_t btbb_packet_get_ac_errors(const btbb_packet *pkt);
+/* The packet's clock as CLK1-27, the 625 us slot count: the 312.5 us value
+   given to btbb_packet_set_data() below, shifted down by one. */
 uint32_t btbb_packet_get_clkn(const btbb_packet *pkt);
 uint32_t btbb_packet_get_header_packed(const btbb_packet* pkt);
 
@@ -212,7 +214,22 @@ uint8_t btbb_piconet_get_channel_seen(btbb_piconet *pn, uint8_t channel);
 void btbb_piconet_set_afh_map(btbb_piconet *pn, uint8_t *afh_map);
 uint8_t *btbb_piconet_get_afh_map(btbb_piconet *pn);
 
-/* Extract as much information (LAP/UAP/CLK) as possible from received packet */
+/* btbb_process_packet() returns this when the clock it recovered turned out
+   not to be the piconet's: packet after packet of this piconet arrived while
+   following it and none of them decoded. The piconet has started discovery
+   again, so BTBB_FOLLOWING and the clock are gone and a new clock offset will
+   be reported in time. A receiver put on the old offset has to be taken off
+   it: a capture tool is expected to warn once and follow the piconet again
+   when the library has a clock for it.
+
+   It is positive, where the one other thing this function reports is
+   negative, so a caller written before it existed is unaffected. */
+#define BTBB_LOCK_LOST 1
+
+/* Extract as much information (LAP/UAP/CLK) as possible from received packet.
+   Returns BTBB_LOCK_LOST (above), -1 when the piconet's clock has just been
+   recovered and the caller should follow it on
+   btbb_piconet_get_clk_offset(), and 0 otherwise. */
 int btbb_process_packet(btbb_packet *pkt, btbb_piconet *pn);
 
 /* use packet headers to determine UAP */
@@ -281,6 +298,16 @@ void lell_print(const lell_packet *pkt);
 typedef struct lell_pcapng_handle lell_pcapng_handle;
 /* create a PCAPNG file for LE captures */
 int lell_pcapng_create_file(const char *filename, const char *interface_desc, lell_pcapng_handle ** ph);
+
+/* lell_pcapng_append_packet() returns this when the packet reached the file
+   but the connection parameters it carried did not. A CONNECT_IND's
+   parameters are recorded as an option of the interface description block,
+   whose room for them is set aside when the file is created, and a long
+   capture can fill it. Everything else the writer reports is negative, so a
+   caller that only checks for an error sees none: a capture tool is expected
+   to warn once and carry on. */
+#define LELL_PCAPNG_CONNECT_INFO_NOT_RECORDED 1
+
 /* save an LE packet to PCAPNG capture file */
 int lell_pcapng_append_packet(lell_pcapng_handle * h, const uint64_t ns,
                               const int8_t sigdbm, const int8_t noisedbm,
