@@ -198,14 +198,14 @@ vectors.
 
 | What was wrong | User impact | Pinned by | PR | Issue |
 |---|---|---|---|---|
-| `btaptap` read every byte of a capture through `ord()`, which python 3 raises a `TypeError` for, and the read loop took any `TypeError` as the end of the capture | no capture ever gave up a keystroke: the tool printed nothing, said nothing and exited 0, since the changelog claimed python 3 support in 2020-12-R1 | `btaptap`, keystrokes out of a baseband and an HCI capture and out of the recorded Ellisys export | #63 | #55 |
-| The Ellisys path opened the CSV in text mode, so the CR LF line endings its header comparison expects never matched, and past that point it called `xreadlines()`, converted hex with `str.decode("hex")` and built its faked L2CAP packet with `chr()` | `-e` refused the repository's own example export as not an Ellisys export, and exited 0 | `btaptap`, the recorded export decoded, and a CSV that is not one refused | #63 | #55 |
-| `parse_l2cap_keydata()` read the first 11 bytes of what it was given on the strength of the packet's own length field | a frame cut short, which a snapshot length or a capture that stopped leaves, ended the run with an `IndexError` traceback partway through the capture | `btaptap`, a short frame followed by a good one | #63 | #55 |
-| An unsupported data link layer was reported once per packet, and the run still exited 0 | a capture from the Ubertooth tools, whose link type `btaptap` does not read, printed one line per packet and reported success | `btaptap`, a `DLT_BLUETOOTH_BREDR_BB` capture | #63 | #55 |
-| `PcapDumper` joined the bytes of its file and record headers with `''.join()` | the half of the `pcapdump` module the README offers could not write a capture at all | `btaptap`'s module cases, which write a capture and read it back | #63 | #55 |
-| `PcapReader` built a record's timestamp with `float("%s.%s")` | a packet 5 microseconds past the second was timestamped half a second past it | `btaptap`'s timestamp case | #63 | #55 |
-| `PcapReader` took any file whose first four bytes were not the byte-swapped magic number as a little-endian capture, so its "not a libpcap capture" could not be reached | a file that is not a capture was read as one, and failed later with a traceback out of the reader | `btaptap`, a text file and a file shorter than a capture header | #63 | #55 |
-| `lib/src/CMakeLists.txt` guarded "no library at all" with an option name nothing sets | `cmake -DBUILD_SHARED_LIB=OFF`, the obvious way to ask for a static build, configured a tree with no library in it and failed halfway through the build with `ld: library 'btbb-static' not found` | `library_config`, and a static-only job in CI | #63 | #62 |
+| `btaptap` read every byte of a capture through `ord()`, which python 3 raises a `TypeError` for, and the read loop took any `TypeError` as the end of the capture | no capture ever gave up a keystroke: the tool printed nothing, said nothing and exited 0, since the changelog claimed python 3 support in 2020-12-R1 | `btaptap`, keystrokes out of a baseband and an HCI capture and out of the recorded Ellisys export | #64 | #55 |
+| The Ellisys path opened the CSV in text mode, so the CR LF line endings its header comparison expects never matched, and past that point it called `xreadlines()`, converted hex with `str.decode("hex")` and built its faked L2CAP packet with `chr()` | `-e` refused the repository's own example export as not an Ellisys export, and exited 0 | `btaptap`, the recorded export decoded, and a CSV that is not one refused | #64 | #55 |
+| `parse_l2cap_keydata()` read the first 11 bytes of what it was given on the strength of the packet's own length field | a frame cut short, which a snapshot length or a capture that stopped leaves, ended the run with an `IndexError` traceback partway through the capture | `btaptap`, a short frame followed by a good one | #64 | #55 |
+| An unsupported data link layer was reported once per packet, and the run still exited 0 | a capture from the Ubertooth tools, whose link type `btaptap` does not read, printed one line per packet and reported success | `btaptap`, a `DLT_BLUETOOTH_BREDR_BB` capture | #64 | #55 |
+| `PcapDumper` joined the bytes of its file and record headers with `''.join()` | the half of the `pcapdump` module the README offers could not write a capture at all | `btaptap`'s module cases, which write a capture and read it back | #64 | #55 |
+| `PcapReader` built a record's timestamp with `float("%s.%s")` | a packet 5 microseconds past the second was timestamped half a second past it | `btaptap`'s timestamp case | #64 | #55 |
+| `PcapReader` took any file whose first four bytes were not the byte-swapped magic number as a little-endian capture, so its "not a libpcap capture" could not be reached | a file that is not a capture was read as one, and failed later with a traceback out of the reader | `btaptap`, a text file and a file shorter than a capture header | #64 | #55 |
+| `lib/src/CMakeLists.txt` guarded "no library at all" with an option name nothing sets | `cmake -DBUILD_SHARED_LIB=OFF`, the obvious way to ask for a static build, configured a tree with no library in it and failed halfway through the build with `ld: library 'btbb-static' not found` | `library_config`, and a static-only job in CI | #64 | #62 |
 
 The vectors ported from upstream's own test programs in #9 — the FEC 2/3
 blocks, the syndrome values and the 20-row header table — all passed. They
@@ -259,9 +259,9 @@ map changes, and the replaced allocator.
 
 | | Before | After | Source |
 |---|---|---|---|
-| Keystrokes `btaptap` recovered from the recorded Ellisys export, 864 keyboard reports | 0, and the export refused | 543 characters, the paragraph that was typed | PR #63, `python3 btaptap -e python/pcaptools/tests/ellysis-keyboard.csv` on each build |
-| The 22 cases of the new `btaptap` test, run against the tree before the fix | 26 failures and 4 errors | all pass | PR #63, the test file copied into a checkout of `master` |
-| Test programs a `-DBUILD_SHARED_LIB=OFF` build links | none: the build stopped at the first one | the configuration is refused, and `-DBUILD_SHARED_LIB=OFF -DBUILD_STATIC_LIB=ON` builds and passes all 15 | PR #63, `ctest` in a static-only build |
+| Keystrokes `btaptap` recovered from the recorded Ellisys export, 864 keyboard reports | 0, and the export refused | 543 characters, the paragraph that was typed | PR #64, `python3 btaptap -e python/pcaptools/tests/ellysis-keyboard.csv` on each build |
+| The 22 cases of the new `btaptap` test, run against the tree before the fix | 26 failures and 4 errors | all pass | PR #64, the test file copied into a checkout of `master` |
+| Test programs a `-DBUILD_SHARED_LIB=OFF` build links | none: the build stopped at the first one | the configuration is refused, and `-DBUILD_SHARED_LIB=OFF -DBUILD_STATIC_LIB=ON` builds and passes all 15 | PR #64, `ctest` in a static-only build |
 
 Each capture-file fix was also reverted on its own: 1 to 8 failing checks each,
 two compile errors, one SIGSEGV and two sanitizer reports, 20 rows in PR #36.
