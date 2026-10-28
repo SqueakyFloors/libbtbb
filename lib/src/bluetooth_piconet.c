@@ -1073,7 +1073,17 @@ btbb_piconet *btbb_next_survey_result() {
  * SEQUENCE_LENGTH, so the subtraction is taken modulo that. */
 static uint32_t failure_run_slots(const btbb_piconet *pn, uint32_t clkn)
 {
-	return (clkn - pn->first_failure_time) & (SEQUENCE_LENGTH - 1);
+	uint32_t slots = (clkn - pn->first_failure_time) &
+			 (SEQUENCE_LENGTH - 1);
+
+	/* A run that reads as more than half the clock's range has not been
+	 * going for eleven hours: the packet clock went backwards, which a
+	 * caller handing over a capture out of order can do. Nothing has
+	 * elapsed as far as the time bound is concerned, so it takes the full
+	 * count of failures. */
+	if (slots > SEQUENCE_LENGTH / 2)
+		return 0;
+	return slots;
 }
 
 /*

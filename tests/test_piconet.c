@@ -1273,20 +1273,35 @@ static void test_a_wrong_clock_is_given_up_within_a_few_seconds(void)
 	const uint32_t quiet = 400;
 	btbb_piconet *busy_pn = following_clock_offset(0);
 	btbb_piconet *quiet_pn = following_clock_offset(0);
+	btbb_piconet *backwards_pn = following_clock_offset(0);
 	btbb_packet *pkt = failed_header_packet();
 	char out[4096], err[4096];
-	int busy_headers, quiet_headers;
+	int busy_headers, quiet_headers, backwards_headers;
+	int i;
 
 	CHECK(pkt != NULL);
 	if (pkt == NULL || capture_or_fail() != 0) {
 		btbb_piconet_unref(busy_pn);
 		btbb_piconet_unref(quiet_pn);
+		btbb_piconet_unref(backwards_pn);
 		return;
 	}
 	/* a packet every slot pair, which is a link carrying traffic */
 	busy_headers = headers_until_the_clock_is_given_up(busy_pn, pkt, 2);
 	quiet_headers = headers_until_the_clock_is_given_up(quiet_pn, pkt,
 							    quiet);
+	/* A clock that runs backwards, which a caller handing packets over
+	 * out of order gives: no time has elapsed, so it takes the full count
+	 * of failures however far apart the clocks read. */
+	backwards_headers = 0;
+	for (i = 1; i <= 2 * FOLLOW_HEADER_FAILURES; i++) {
+		pkt->clkn = (uint32_t) -(i * (int) quiet);
+		if (btbb_process_packet(pkt, backwards_pn) ==
+		    BTBB_PROCESS_LOCK_LOST) {
+			backwards_headers = i;
+			break;
+		}
+	}
 	capture_stop(out, sizeof(out), err, sizeof(err));
 
 	/* On the busy link the count of failures gets there first, and the
@@ -1296,6 +1311,7 @@ static void test_a_wrong_clock_is_given_up_within_a_few_seconds(void)
 	 * reach it. */
 	CHECK_EQ(FOLLOW_FAILURES_IN_TIME, quiet_headers);
 	CHECK(quiet_headers < FOLLOW_HEADER_FAILURES);
+	CHECK_EQ(FOLLOW_HEADER_FAILURES, backwards_headers);
 	/* and the run that ended it had been failing for 3600 slots, 2250 ms,
 	 * which the note reports */
 	CHECK(strstr(err, "over 23 ms") != NULL);
@@ -1305,6 +1321,7 @@ static void test_a_wrong_clock_is_given_up_within_a_few_seconds(void)
 	btbb_packet_unref(pkt);
 	btbb_piconet_unref(busy_pn);
 	btbb_piconet_unref(quiet_pn);
+	btbb_piconet_unref(backwards_pn);
 }
 
 /*
