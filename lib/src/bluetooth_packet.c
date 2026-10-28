@@ -1366,11 +1366,15 @@ int btbb_decode_header(btbb_packet* pkt)
 
 	/* Nothing is known about this packet until it decodes, and a packet
 	 * can be handed new symbols without its decoded state being reset, so
-	 * clear every answer before the first return below. */
+	 * drop every answer and the payload before the first return below.
+	 * Without this a short capture after a decoded one is recorded with
+	 * the earlier packet's payload and the checks that passed on it. */
 	btbb_packet_set_flag(pkt, BTBB_HEC_CHECKED, 0);
 	btbb_packet_set_flag(pkt, BTBB_HEC_VALID, 0);
 	btbb_packet_set_flag(pkt, BTBB_CRC_CHECKED, 0);
 	btbb_packet_set_flag(pkt, BTBB_CRC_CORRECT, 0);
+	pkt->payload_length = 0;
+	pkt->payload_header_length = 0;
 
 	/* check that we have enough symbols */
 	if (pkt->length < 122)

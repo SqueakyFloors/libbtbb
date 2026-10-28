@@ -61,7 +61,12 @@ FILE *btbb_pcap_open(const char *filename, uint32_t dlt, uint32_t snaplen) {
 	FILE *pcap_file = fopen(filename, "w");
 	if (pcap_file == NULL) return NULL;
 
-	fwrite(&pcap_header, sizeof(pcap_header), 1, pcap_file);
+	/* A file whose header did not reach it is no capture file, so say so
+	   now rather than leaving the caller with a handle to it. */
+	if (fwrite(&pcap_header, sizeof(pcap_header), 1, pcap_file) != 1) {
+		(void) fclose(pcap_file);
+		return NULL;
+	}
 
 	return pcap_file;
 }
@@ -237,12 +242,16 @@ btbb_pcap_append_packet(btbb_pcap_handle * h, const uint64_t ns,
 int 
 btbb_pcap_close(btbb_pcap_handle * h)
 {
-	if (h && h->pcap_file) {
-		fclose(h->pcap_file);
+	int retval = 0;
+
+	/* Closing flushes, so this is the last chance to notice that part of
+	   the capture never reached the file. */
+	if (h && h->pcap_file && (fclose(h->pcap_file) != 0)) {
+		retval = -PCAP_FILE_WRITE_ERROR;
 	}
 	if (h) {
 		free(h);
-		return 0;
+		return retval;
 	}
 	return -PCAP_INVALID_HANDLE;
 }
@@ -455,12 +464,16 @@ lell_pcap_append_ppi_packet(lell_pcap_handle * h, const uint64_t ns,
 int 
 lell_pcap_close(lell_pcap_handle *h)
 {
-	if (h && h->pcap_file) {
-		fclose(h->pcap_file);
+	int retval = 0;
+
+	/* Closing flushes, so this is the last chance to notice that part of
+	   the capture never reached the file. */
+	if (h && h->pcap_file && (fclose(h->pcap_file) != 0)) {
+		retval = -PCAP_FILE_WRITE_ERROR;
 	}
 	if (h) {
 		free(h);
-		return 0;
+		return retval;
 	}
 	return -PCAP_INVALID_HANDLE;
 }

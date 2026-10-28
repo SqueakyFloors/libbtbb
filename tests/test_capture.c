@@ -869,9 +869,11 @@ static void test_bredr_uap_search(void)
 static void test_bredr_reused_packet(void)
 {
 	const char *filename = "test_capture_reuse.pcapng";
+	const char *pcap_name = "test_capture_reuse.pcap";
 	char header_symbols[55];
 	char stream[1024];
 	btbb_pcapng_handle *h = NULL;
+	btbb_pcap_handle *ph = NULL;
 	btbb_packet *pkt = NULL;
 	size_t blk, data;
 	int length;
@@ -908,6 +910,15 @@ static void test_bredr_reused_packet(void)
 	CHECK(btbb_pcapng_append_packet(h, 19ull, -20, -80, SPEC_DH1_LAP,
 					SPEC_DH1_UAP, pkt) == 0);
 	(void) btbb_pcapng_close(h);
+
+	unlink_quietly(pcap_name);
+	CHECK(btbb_pcap_create_file(pcap_name, &ph) == 0);
+	if (ph != NULL) {
+		CHECK(btbb_pcap_append_packet(ph, 19ull, -20, -80,
+					      SPEC_DH1_LAP, SPEC_DH1_UAP,
+					      pkt) == 0);
+		CHECK(btbb_pcap_close(ph) == 0);
+	}
 	btbb_packet_unref(pkt);
 
 	CHECK(read_capture(filename));
@@ -922,6 +933,23 @@ static void test_bredr_reused_packet(void)
 	CHECK((rd16(data + 20) &
 	       (BREDR_HEC_CHECKED | BREDR_HEC_VALID |
 		BREDR_CRC_CHECKED | BREDR_CRC_VALID)) == 0);
+	/* and the earlier packet's payload is not in it either */
+	CHECK((rd16(data + 20) & BREDR_PAYLOAD_PRESENT) == 0);
+	CHECK(rd32(blk + 20) == 22);
+	CHECK(rd32(blk + 4) == 60);
+
+	if (ph != NULL) {
+		CHECK(read_capture(pcap_name));
+		unlink_quietly(pcap_name);
+		if (capture_len != 0) {
+			CHECK(rd32(24 + 8) == 22);
+			CHECK((rd16(24 + 16 + 20) &
+			       (BREDR_HEC_CHECKED | BREDR_HEC_VALID |
+				BREDR_CRC_CHECKED | BREDR_CRC_VALID |
+				BREDR_PAYLOAD_PRESENT)) == 0);
+			CHECK(capture_len == 24 + 16 + 22);
+		}
+	}
 }
 
 /*
