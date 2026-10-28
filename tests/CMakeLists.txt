@@ -36,6 +36,14 @@ if(BUILD_TESTING)
     add_test(NAME spec_bredr COMMAND test_spec_bredr)
     set_tests_properties(spec_bredr PROPERTIES TIMEOUT 30)
 
+    # The eSCO length decision, also internal: it compiles the translation
+    # unit the payload decoders live in.
+    add_executable(test_esco test_esco.c)
+    target_include_directories(test_esco PRIVATE ${PROJECT_SOURCE_DIR}/lib/src)
+    target_compile_options(test_esco PRIVATE -std=gnu90)
+    add_test(NAME esco COMMAND test_esco)
+    set_tests_properties(esco PROPERTIES TIMEOUT 30)
+
     add_executable(test_spec_hop test_spec_hop.c)
     target_include_directories(test_spec_hop PRIVATE ${PROJECT_SOURCE_DIR}/lib/src)
     if(BUILD_SHARED_LIB)

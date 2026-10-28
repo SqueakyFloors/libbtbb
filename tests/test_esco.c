@@ -1,0 +1,584 @@
+/* -*- c -*- */
+/*
+ * The length an eSCO payload is decoded at, and the HV3 that shares a type
+ * code with an EV3.
+ *
+ * Neither length is in the packet, so both are worked out from the payload.
+ * These tests build payloads that make the wrong answer visible: one with
+ * three lengths whose CRC agrees, and a voice payload with no CRC at all.
+ *
+ * The decoders are internal to the library and have no external linkage, so
+ * the test compiles the translation unit they live in.
+ *
+ * This file is part of libbtbb
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation; either version 2, or (at your option)
+ * any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with libbtbb; see the file COPYING.  If not, write to
+ * the Free Software Foundation, Inc., 51 Franklin Street,
+ * Boston, MA 02110-1301, USA.
+ */
+
+#include <string.h>
+
+#include "bluetooth_packet.c"
+
+static int failures = 0;
+
+#define CHECK(cond)                                                        \
+	do {                                                               \
+		if (!(cond)) {                                             \
+			printf("FAIL %s:%d: %s\n", __FILE__, __LINE__,     \
+			       #cond);                                     \
+			++failures;                                        \
+		}                                                          \
+	} while (0)
+
+/* the upper address part the CRC is seeded with */
+#define TEST_UAP 0x47
+
+/* where a payload starts in a symbol stream: the access code and the header */
+#define PAYLOAD_OFFSET 122
+
+/* a payload byte, least significant bit first, the order of the air */
+static void put_byte(char *bits, uint8_t value)
+{
+	int i;
+
+	for (i = 0; i < 8; i++)
+		bits[i] = (char) ((value >> i) & 1);
+}
+
+static uint8_t get_byte(const char *bits)
+{
+	return air_to_host8(bits, 8);
+}
+
+/*
+ * Put the CRC over the first info_bytes bytes of a payload into the two bytes
+ * that follow them, which is where an eSCO payload carries it, so that the
+ * payload's CRC agrees at a length of info_bytes + 2.
+ */
+static void put_crc(char *bits, int info_bytes)
+{
+	uint16_t crc = crcgen(bits, info_bytes * 8, TEST_UAP);
+
+	put_byte(bits + info_bytes * 8, (uint8_t) (crc & 0xff));
+	put_byte(bits + (info_bytes + 1) * 8, (uint8_t) (crc >> 8));
+}
+
+/*
+ * A 30 byte payload whose CRC agrees at three lengths: 5, 20 and 30. Only 30
+ * is the whole payload; the other two are the chance matches a 16-bit CRC
+ * gives about one length in 65536, built here on purpose so that a decoder
+ * which stops at the first one reports a payload 25 bytes short.
+ */
+#define COLLISION_BYTES 30
+#define COLLISION_MATCH_SHORT 5
+#define COLLISION_MATCH_MIDDLE 20
+
+static int build_collision_payload(char *bits)
+{
+	int i;
+
+	memset(bits, 0, COLLISION_BYTES * 8);
+
+	put_byte(bits + 0 * 8, 0x11);
+	put_byte(bits + 1 * 8, 0x22);
+	put_byte(bits + 2 * 8, 0x33);
+	put_crc(bits, 3);
+
+	for (i = 5; i < 18; i++)
+		put_byte(bits + i * 8, (uint8_t) (0x40 + i));
+	put_crc(bits, 18);
+
+	for (i = 20; i < 28; i++)
+		put_byte(bits + i * 8, (uint8_t) (0x80 + i));
+	put_crc(bits, 28);
+
+	return COLLISION_BYTES * 8;
+}
+
+/* rate 2/3 FEC, the way an EV4 carries its payload: 15 symbols per 10 bits */
+static int fec23_encode(const char *bits, int length, char *out)
+{
+	int block, i;
+
+	for (block = 0; block * 10 < length; block++) {
+		uint16_t codeword = fec23(air_to_host16(bits + block * 10,
+							10));
+
+		for (i = 0; i < 15; i++)
+			out[block * 15 + i] = (char) ((codeword >> i) & 1);
+	}
+
+	return fec23_symbols(length);
+}
+
+/*
+ * A packet holding nothing but the given payload symbols, as a decode that
+ * had read the header would leave it: the type the header gave, and the
+ * length of capture the receiver recorded. Whitening is off, so the payload
+ * bytes are the bits given here.
+ *
+ * trailing is how many symbols the capture holds past the payload. A real
+ * capture holds some: the receiver takes a fixed window, not a window that
+ * ends where the packet does. quiet writes zeros there; otherwise it gets a
+ * fixed stand-in for noise, which is what a real capture holds.
+ */
+static btbb_packet *packet_with_tail(uint8_t type, const char *payload,
+				     int payload_symbols, int trailing,
+				     int quiet)
+{
+	static char stream[MAX_SYMBOLS];
+	btbb_packet *pkt = btbb_packet_new();
+	uint32_t noise = 0x5eed1234;
+	int i;
+
+	if (pkt == NULL)
+		return NULL;
+
+	memset(stream, 0, sizeof(stream));
+	memcpy(stream + PAYLOAD_OFFSET, payload, (size_t) payload_symbols);
+	for (i = 0; !quiet && i < trailing; i++) {
+		noise = noise * 1103515245u + 12345u;
+		stream[PAYLOAD_OFFSET + payload_symbols + i] =
+			(char) ((noise >> 20) & 1);
+	}
+
+	btbb_packet_set_data(pkt, stream,
+			     PAYLOAD_OFFSET + payload_symbols + trailing,
+			     0, 0);
+	btbb_packet_set_flag(pkt, BTBB_WHITENED, 0);
+	btbb_packet_set_uap(pkt, TEST_UAP);
+	pkt->packet_type = type;
+
+	return pkt;
+}
+
+static btbb_packet *packet_with_payload(uint8_t type, const char *payload,
+					int payload_symbols, int trailing)
+{
+	return packet_with_tail(type, payload, payload_symbols, trailing, 0);
+}
+
+/* the payload the decoder reported, byte by byte, against what was sent */
+static void check_payload_bytes(const btbb_packet *pkt, const char *sent,
+				int bytes)
+{
+	int i;
+	int wrong = 0;
+
+	for (i = 0; i < bytes; i++)
+		if (get_byte(btbb_get_payload(pkt) + i * 8) !=
+		    get_byte(sent + i * 8))
+			wrong++;
+
+	CHECK(wrong == 0);
+}
+
+/*
+ * The search for an eSCO length keeps going to the end and reports the
+ * longest length whose CRC agreed. The first one that agrees is not the
+ * payload: here it is 5 bytes of a 30 byte payload.
+ */
+static void test_esco_search_reports_the_longest_match(void)
+{
+	char payload[COLLISION_BYTES * 8];
+	char encoded[COLLISION_BYTES * 8 * 2];
+	int symbols = build_collision_payload(payload);
+	int encoded_symbols = fec23_encode(payload, symbols, encoded);
+	btbb_packet *pkt;
+
+	/* EV5 and EV3 carry the payload as it is */
+	pkt = packet_with_payload(PACKET_TYPE_EV5, payload, symbols, 0);
+	CHECK(pkt != NULL);
+	if (pkt == NULL)
+		return;
+	CHECK(btbb_decode_payload(pkt) == 10);
+	CHECK(btbb_packet_get_payload_length(pkt) == COLLISION_BYTES);
+	CHECK(btbb_packet_get_flag(pkt, BTBB_HAS_PAYLOAD) == 1);
+	CHECK(btbb_packet_get_flag(pkt, BTBB_CRC_CHECKED) == 1);
+	CHECK(btbb_packet_get_flag(pkt, BTBB_CRC_CORRECT) == 1);
+	check_payload_bytes(pkt, payload, COLLISION_BYTES);
+	btbb_packet_unref(pkt);
+
+	/* the same, with the capture running on past the packet */
+	pkt = packet_with_payload(PACKET_TYPE_EV5, payload, symbols, 200);
+	CHECK(pkt != NULL);
+	if (pkt == NULL)
+		return;
+	CHECK(btbb_decode_payload(pkt) == 10);
+	CHECK(btbb_packet_get_payload_length(pkt) == COLLISION_BYTES);
+	btbb_packet_unref(pkt);
+
+	pkt = packet_with_payload(PACKET_TYPE_HV3, payload, symbols, 200);
+	CHECK(pkt != NULL);
+	if (pkt == NULL)
+		return;
+	CHECK(btbb_decode_payload(pkt) == 10);
+	CHECK(btbb_packet_get_payload_length(pkt) == COLLISION_BYTES);
+	check_payload_bytes(pkt, payload, COLLISION_BYTES);
+	btbb_packet_unref(pkt);
+
+	/* an EV4 carries it under rate 2/3 FEC, and searches a block at a
+	 * time rather than a byte at a time */
+	pkt = packet_with_payload(PACKET_TYPE_EV4, encoded, encoded_symbols,
+				  200);
+	CHECK(pkt != NULL);
+	if (pkt == NULL)
+		return;
+	CHECK(btbb_decode_payload(pkt) == 10);
+	CHECK(btbb_packet_get_payload_length(pkt) == COLLISION_BYTES);
+	CHECK(btbb_packet_get_flag(pkt, BTBB_CRC_CORRECT) == 1);
+	check_payload_bytes(pkt, payload, COLLISION_BYTES);
+	/* an intact payload, so the error correction put nothing right */
+	CHECK(pkt->corrected_payload_bits == 0);
+	btbb_packet_unref(pkt);
+}
+
+/*
+ * A capture of zeros after the packet does not run the reported length up to
+ * the longest the type allows. Every length that only adds zero bytes agrees
+ * as well, because the CRC register comes out zero over a payload whose CRC
+ * agrees and zero bytes leave it there. One of them is taken, since the
+ * payload's own CRC could be the zero byte, and no more than one.
+ */
+static void test_zeros_after_the_payload_stop_at_one(void)
+{
+	char payload[COLLISION_BYTES * 8];
+	int symbols = build_collision_payload(payload);
+	btbb_packet *pkt;
+	int tail;
+
+	for (tail = 1; tail <= 4; tail++) {
+		pkt = packet_with_tail(PACKET_TYPE_EV5, payload, symbols,
+				       tail * 8, 1);
+		CHECK(pkt != NULL);
+		if (pkt == NULL)
+			return;
+		CHECK(btbb_decode_payload(pkt) == 10);
+		CHECK(btbb_packet_get_payload_length(pkt) ==
+		      COLLISION_BYTES + 1);
+		/* and the payload itself is reported as it was sent */
+		check_payload_bytes(pkt, payload, COLLISION_BYTES);
+		btbb_packet_unref(pkt);
+	}
+
+	/* a capture of nothing but zeros past the packet, where "the longest
+	 * length that agrees" would have reported all 182 bytes an EV5 can
+	 * carry */
+	pkt = packet_with_tail(PACKET_TYPE_EV5, payload, symbols, 1000, 1);
+	CHECK(pkt != NULL);
+	if (pkt == NULL)
+		return;
+	CHECK(btbb_decode_payload(pkt) == 10);
+	CHECK(btbb_packet_get_payload_length(pkt) == COLLISION_BYTES + 1);
+	btbb_packet_unref(pkt);
+
+	/* the caller's own length is not guessed at at all */
+	pkt = packet_with_tail(PACKET_TYPE_EV5, payload, symbols, 1000, 1);
+	CHECK(pkt != NULL);
+	if (pkt == NULL)
+		return;
+	btbb_packet_set_esco_length(pkt, COLLISION_BYTES - 2);
+	CHECK(btbb_decode_payload(pkt) == 10);
+	CHECK(btbb_packet_get_payload_length(pkt) == COLLISION_BYTES);
+	btbb_packet_unref(pkt);
+}
+
+/*
+ * A payload whose own CRC ends in a zero byte. The CRC register comes out
+ * zero a byte early, so the length one short of the payload agrees as well,
+ * and a search that stops at the first length to agree reports the payload
+ * one byte short and reads its last information byte as part of the CRC. One
+ * payload in 256 is like this, which is what #40 reported.
+ */
+#define HIGH_ZERO_BYTES 20
+
+static int build_high_zero_payload(char *bits)
+{
+	int filler, i;
+
+	/* the filler byte that gives a CRC ending in a zero byte is searched
+	 * for rather than written down, so that the one thing this payload
+	 * has to have is in plain sight */
+	for (filler = 0; filler < 256; filler++) {
+		memset(bits, 0, HIGH_ZERO_BYTES * 8);
+		for (i = 0; i < HIGH_ZERO_BYTES - 3; i++)
+			put_byte(bits + i * 8, (uint8_t) (0x10 + i));
+		put_byte(bits + (HIGH_ZERO_BYTES - 3) * 8, (uint8_t) filler);
+
+		if ((crcgen(bits, (HIGH_ZERO_BYTES - 2) * 8, TEST_UAP) >> 8)
+		    == 0) {
+			put_crc(bits, HIGH_ZERO_BYTES - 2);
+			return HIGH_ZERO_BYTES * 8;
+		}
+	}
+
+	return 0;
+}
+
+static void test_payload_whose_crc_ends_in_zero(void)
+{
+	char payload[HIGH_ZERO_BYTES * 8];
+	char encoded[HIGH_ZERO_BYTES * 8 * 2];
+	int symbols = build_high_zero_payload(payload);
+	int encoded_symbols;
+	btbb_packet *pkt;
+
+	CHECK(symbols == HIGH_ZERO_BYTES * 8);
+	if (symbols != HIGH_ZERO_BYTES * 8)
+		return;
+	encoded_symbols = fec23_encode(payload, symbols, encoded);
+
+	/* the length one byte short agrees, which is the answer to beat */
+	CHECK(crcgen(payload, (HIGH_ZERO_BYTES - 3) * 8, TEST_UAP) ==
+	      air_to_host16(&payload[(HIGH_ZERO_BYTES - 3) * 8], 16));
+
+	pkt = packet_with_payload(PACKET_TYPE_EV5, payload, symbols, 200);
+	CHECK(pkt != NULL);
+	if (pkt == NULL)
+		return;
+	CHECK(btbb_decode_payload(pkt) == 10);
+	CHECK(btbb_packet_get_payload_length(pkt) == HIGH_ZERO_BYTES);
+	check_payload_bytes(pkt, payload, HIGH_ZERO_BYTES);
+	btbb_packet_unref(pkt);
+
+	pkt = packet_with_payload(PACKET_TYPE_HV3, payload, symbols, 200);
+	CHECK(pkt != NULL);
+	if (pkt == NULL)
+		return;
+	CHECK(btbb_decode_payload(pkt) == 10);
+	CHECK(btbb_packet_get_payload_length(pkt) == HIGH_ZERO_BYTES);
+	btbb_packet_unref(pkt);
+
+	pkt = packet_with_payload(PACKET_TYPE_EV4, encoded, encoded_symbols,
+				  200);
+	CHECK(pkt != NULL);
+	if (pkt == NULL)
+		return;
+	CHECK(btbb_decode_payload(pkt) == 10);
+	CHECK(btbb_packet_get_payload_length(pkt) == HIGH_ZERO_BYTES);
+	check_payload_bytes(pkt, payload, HIGH_ZERO_BYTES);
+	btbb_packet_unref(pkt);
+}
+
+/*
+ * A caller that knows the length the link was set up with says so, and that
+ * length is decoded and nothing else: not the longest that agrees, and not
+ * the first.
+ */
+static void test_known_esco_length_is_decoded(void)
+{
+	char payload[COLLISION_BYTES * 8];
+	char encoded[COLLISION_BYTES * 8 * 2];
+	int symbols = build_collision_payload(payload);
+	int encoded_symbols = fec23_encode(payload, symbols, encoded);
+	btbb_packet *pkt;
+
+	pkt = packet_with_payload(PACKET_TYPE_EV5, payload, symbols, 200);
+	CHECK(pkt != NULL);
+	if (pkt == NULL)
+		return;
+
+	/* the middle length that agrees, which neither end of the search
+	 * would have picked */
+	btbb_packet_set_esco_length(pkt, COLLISION_MATCH_MIDDLE - 2);
+	CHECK(btbb_packet_get_esco_length(pkt) == COLLISION_MATCH_MIDDLE - 2);
+	CHECK(btbb_decode_payload(pkt) == 10);
+	CHECK(btbb_packet_get_payload_length(pkt) == COLLISION_MATCH_MIDDLE);
+	CHECK(btbb_packet_get_flag(pkt, BTBB_CRC_CORRECT) == 1);
+	check_payload_bytes(pkt, payload, COLLISION_MATCH_MIDDLE);
+
+	/* and the short one */
+	btbb_packet_set_esco_length(pkt, COLLISION_MATCH_SHORT - 2);
+	CHECK(btbb_decode_payload(pkt) == 10);
+	CHECK(btbb_packet_get_payload_length(pkt) == COLLISION_MATCH_SHORT);
+
+	/*
+	 * A length whose CRC does not agree is still the length the caller
+	 * said: an encrypted payload's CRC never agrees, and the length is
+	 * what makes the payload reportable at all. 10 is a CRC that did not
+	 * come out.
+	 */
+	btbb_packet_set_esco_length(pkt, 10);
+	CHECK(btbb_decode_payload(pkt) == 2);
+	CHECK(btbb_packet_get_payload_length(pkt) == 12);
+	CHECK(btbb_packet_get_flag(pkt, BTBB_HAS_PAYLOAD) == 1);
+	/* and the library claims a CRC only where one came out */
+	CHECK(btbb_packet_get_flag(pkt, BTBB_CRC_CHECKED) == 0);
+	check_payload_bytes(pkt, payload, 12);
+
+	/* a length this type cannot carry is no use, so the search runs */
+	btbb_packet_set_esco_length(pkt, EV5_MAX_PAYLOAD - 1);
+	CHECK(btbb_decode_payload(pkt) == 10);
+	CHECK(btbb_packet_get_payload_length(pkt) == COLLISION_BYTES);
+
+	btbb_packet_set_esco_length(pkt, 0);
+	CHECK(btbb_decode_payload(pkt) == 10);
+	CHECK(btbb_packet_get_payload_length(pkt) == COLLISION_BYTES);
+
+	btbb_packet_unref(pkt);
+
+	/* an EV4's search is the same decision a block at a time */
+	pkt = packet_with_payload(PACKET_TYPE_EV4, encoded, encoded_symbols,
+				  200);
+	CHECK(pkt != NULL);
+	if (pkt == NULL)
+		return;
+	btbb_packet_set_esco_length(pkt, COLLISION_MATCH_MIDDLE - 2);
+	CHECK(btbb_decode_payload(pkt) == 10);
+	CHECK(btbb_packet_get_payload_length(pkt) == COLLISION_MATCH_MIDDLE);
+	check_payload_bytes(pkt, payload, COLLISION_MATCH_MIDDLE);
+	CHECK(pkt->corrected_payload_bits == 0);
+	btbb_packet_unref(pkt);
+
+	/* an EV4 length the type cannot carry is ignored the same way */
+	pkt = packet_with_payload(PACKET_TYPE_EV4, encoded, encoded_symbols,
+				  200);
+	CHECK(pkt != NULL);
+	if (pkt == NULL)
+		return;
+	btbb_packet_set_esco_length(pkt, EV4_MAX_PAYLOAD - 1);
+	CHECK(btbb_decode_payload(pkt) == 10);
+	CHECK(btbb_packet_get_payload_length(pkt) == COLLISION_BYTES);
+	btbb_packet_unref(pkt);
+}
+
+/* a length that agreed is the payload, even where the capture ends there */
+static void test_truncated_capture_keeps_a_match(void)
+{
+	char payload[COLLISION_BYTES * 8];
+	int symbols = build_collision_payload(payload);
+	btbb_packet *pkt;
+
+	CHECK(symbols == COLLISION_BYTES * 8);
+
+	/* the capture holds the first 20 bytes and three bytes more */
+	pkt = packet_with_payload(PACKET_TYPE_EV5, payload,
+				  COLLISION_MATCH_MIDDLE * 8 + 24, 0);
+	CHECK(pkt != NULL);
+	if (pkt == NULL)
+		return;
+	CHECK(btbb_decode_payload(pkt) == 10);
+	CHECK(btbb_packet_get_payload_length(pkt) == COLLISION_MATCH_MIDDLE);
+	CHECK(btbb_packet_get_flag(pkt, BTBB_CRC_CORRECT) == 1);
+	btbb_packet_unref(pkt);
+
+	/* with nothing that agreed, the bytes that were captured are all
+	 * there is to report */
+	pkt = packet_with_payload(PACKET_TYPE_EV5, payload, 8 * 4, 0);
+	CHECK(pkt != NULL);
+	if (pkt == NULL)
+		return;
+	CHECK(btbb_decode_payload(pkt) == 1);
+	CHECK(btbb_packet_get_payload_length(pkt) == 4);
+	btbb_packet_unref(pkt);
+}
+
+/*
+ * An HV3 carries 30 bytes of voice and no CRC at all, so no length agrees
+ * with an EV3's search. The two share a type code, and the one that has a
+ * CRC to show for itself is the one to report: without it the packet is the
+ * HV3 it is the right size to be, not 32 bytes of EV3.
+ */
+static void test_hv3_is_not_reported_as_ev3(void)
+{
+	char voice[30 * 8];
+	btbb_packet *pkt;
+	int i;
+
+	for (i = 0; i < 30; i++)
+		put_byte(voice + i * 8, (uint8_t) (0x10 + i));
+
+	/*
+	 * A capture that runs 16 symbols or more past the packet, which a
+	 * real one does: the EV3 search then reaches the end of every length
+	 * it could try, agrees with none, and has nothing to show.
+	 */
+	pkt = packet_with_payload(PACKET_TYPE_HV3, voice, 30 * 8, 64);
+	CHECK(pkt != NULL);
+	if (pkt == NULL)
+		return;
+	CHECK(btbb_decode_payload(pkt) == 2);
+	CHECK(btbb_packet_get_payload_length(pkt) == 30);
+	CHECK(btbb_packet_get_flag(pkt, BTBB_HAS_PAYLOAD) == 1);
+	/* a voice payload has no CRC, so none was checked */
+	CHECK(btbb_packet_get_flag(pkt, BTBB_CRC_CHECKED) == 0);
+	CHECK(btbb_packet_get_flag(pkt, BTBB_CRC_CORRECT) == 0);
+	check_payload_bytes(pkt, voice, 30);
+	btbb_packet_unref(pkt);
+
+	/* a capture that ends with the packet reports the same 30 bytes */
+	pkt = packet_with_payload(PACKET_TYPE_HV3, voice, 30 * 8, 0);
+	CHECK(pkt != NULL);
+	if (pkt == NULL)
+		return;
+	CHECK(btbb_decode_payload(pkt) == 2);
+	CHECK(btbb_packet_get_payload_length(pkt) == 30);
+	check_payload_bytes(pkt, voice, 30);
+	btbb_packet_unref(pkt);
+
+	/* one shorter than an HV3's 240 symbols is neither packet */
+	pkt = packet_with_payload(PACKET_TYPE_HV3, voice, 30 * 8 - 8, 0);
+	CHECK(pkt != NULL);
+	if (pkt == NULL)
+		return;
+	CHECK(btbb_decode_payload(pkt) == 1);
+	CHECK(btbb_packet_get_payload_length(pkt) == 0);
+	CHECK(btbb_packet_get_flag(pkt, BTBB_HAS_PAYLOAD) == 0);
+	btbb_packet_unref(pkt);
+}
+
+/* an EV3 on a link the caller knows about is an EV3, not an HV3 */
+static void test_known_esco_length_rules_out_hv3(void)
+{
+	char payload[COLLISION_BYTES * 8];
+	int symbols = build_collision_payload(payload);
+	btbb_packet *pkt;
+
+	pkt = packet_with_payload(PACKET_TYPE_HV3, payload, symbols, 64);
+	CHECK(pkt != NULL);
+	if (pkt == NULL)
+		return;
+
+	btbb_packet_set_esco_length(pkt, COLLISION_MATCH_MIDDLE - 2);
+	CHECK(btbb_decode_payload(pkt) == 10);
+	CHECK(btbb_packet_get_payload_length(pkt) == COLLISION_MATCH_MIDDLE);
+
+	/* a length whose CRC does not agree is the caller's answer too: an
+	 * HV3's 30 voice bytes are not what this link carries */
+	btbb_packet_set_esco_length(pkt, 10);
+	CHECK(btbb_decode_payload(pkt) == 2);
+	CHECK(btbb_packet_get_payload_length(pkt) == 12);
+
+	btbb_packet_unref(pkt);
+}
+
+int main(void)
+{
+	test_esco_search_reports_the_longest_match();
+	test_zeros_after_the_payload_stop_at_one();
+	test_payload_whose_crc_ends_in_zero();
+	test_known_esco_length_is_decoded();
+	test_truncated_capture_keeps_a_match();
+	test_hv3_is_not_reported_as_ev3();
+	test_known_esco_length_rules_out_hv3();
+
+	if (failures != 0) {
+		printf("%d check(s) failed\n", failures);
+		return 1;
+	}
+	printf("all checks passed\n");
+	return 0;
+}

@@ -47,6 +47,28 @@ libbtbb (2020-12-R1+fork5) unstable; urgency=low
     every byte of it (EV3 and EV5) or checked the CRC at a length the payload
     cannot have, reading before the start of the payload (EV4). None of the
     three could decode a payload at the longest length its type allows either.
+  * An eSCO payload is reported at the length the caller says the link was set
+    up with, and otherwise at the longest length whose CRC agrees and that
+    adds a byte of its own. The search used to stop at the first length that
+    agreed. One payload in 256 ends its CRC in a zero byte, which makes the
+    length one byte short of it agree as well, so the search stopped there and
+    dropped the payload's last information byte; shorter lengths also agree by
+    chance. A payload at the longest length its type carries, which is what a
+    link normally sets up, now comes out right: over 20,000 random payloads
+    per type, EV3 reported 79 wrong lengths before this and 1 after, EV5 132
+    and 0, EV4 28 and 0. A payload shorter than that can now come out one byte
+    too long instead of one byte too short, since a zero byte of noise right
+    after it agrees as well; a caller following a known link should say its
+    length with btbb_packet_set_esco_length(), which skips the guess and is
+    the only way to get the length right on an encrypted link, where no CRC
+    ever agrees.
+  * An HV3 voice packet is no longer reported as 32 bytes of EV3. The two
+    share a packet type code, and the library chose between them by decoding
+    as EV3 and falling back to HV3 only when the capture ran out before the
+    search had finished, which a real capture does not. An HV3 carries no CRC
+    for the search to agree with, so no length agreed and the packet was
+    reported at the longest one anyway: its 30 bytes of voice and two bytes
+    that were not part of the packet. Only a CRC that agrees now says EV3.
   * A DV packet's data field decodes. It was being dewhitened with the 80 bits
     of whitening that belong to the packet's voice field, so the payload
     header's length, the data and the CRC were all wrong.

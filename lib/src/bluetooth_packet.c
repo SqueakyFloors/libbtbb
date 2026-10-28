@@ -571,6 +571,16 @@ int btbb_get_payload_packed(const btbb_packet* pkt, char *dst)
 	return pkt->payload_length;
 }
 
+void btbb_packet_set_esco_length(btbb_packet *pkt, int length)
+{
+	pkt->esco_length = length;
+}
+
+int btbb_packet_get_esco_length(const btbb_packet *pkt)
+{
+	return pkt->esco_length;
+}
+
 uint8_t btbb_packet_get_type(const btbb_packet* pkt)
 {
 	return pkt->packet_type;
@@ -1227,13 +1237,90 @@ int DH(int clock, btbb_packet* pkt)
 }
 
 /*
+ * Whether the payload bytes from first up to, but not including, last are all
+ * zero.
+ */
+static int payload_bytes_zero(const btbb_packet* pkt, int first, int last)
+{
+	int byte;
+
+	for (byte = first; byte < last; byte++)
+		if (air_to_host8(&pkt->payload[byte * 8], 8) != 0)
+			return 0;
+
+	return 1;
+}
+
+/*
+ * Whether a length whose CRC agrees is a better answer than one that already
+ * agreed, for a search that has no length to go on. extended says the length
+ * that already agreed was itself reached by the rule below.
+ *
+ * A length agrees when the CRC register comes out zero over the bytes it
+ * covers, and zero bytes leave a zero register where it is. So lengths that
+ * differ only by zero bytes all agree together, and a run of them says
+ * nothing about where the payload ends. Both ends of a run are one byte in
+ * 256, and the packet holds nothing that tells them apart:
+ *
+ *   - the payload ends at the start of the run, and the byte after it, which
+ *     is whatever the receiver recorded once the packet was over, is zero;
+ *   - the payload ends one byte later, and its own CRC ends in a zero byte,
+ *     which leaves the register at zero a byte early and makes the length one
+ *     short of the payload agree as well.
+ *
+ * This takes the second, one byte past the start of the run and no further,
+ * which keeps every information byte the payload carried. The cost is a
+ * payload reported one byte long when it was the first: its CRC's low byte is
+ * reported as the last information byte. Nothing beyond that byte is taken,
+ * so a capture of zeros after the packet does not run the length up to the
+ * longest the type allows, which is where "the longest length that agrees"
+ * on its own would end up. A caller that knows the link's length does not
+ * have the guess made for it at all; see btbb_packet_set_esco_length().
+ */
+static int better_length(const btbb_packet* pkt, int match, int extended,
+			 int length)
+{
+	if (match == 0)
+		return 1;
+
+	/* a length that adds a byte of its own is evidence on its own */
+	if (!payload_bytes_zero(pkt, match, length))
+		return 1;
+
+	return (length == match + 1) && !extended;
+}
+
+/*
+ * The length of an eSCO payload the caller has told us about, in bytes
+ * including the CRC, or 0 if there is none to go on.
+ *
+ * maxlength is the longest payload the packet type allows, also including the
+ * CRC, so a length this type cannot carry is no use and is ignored.
+ */
+static int known_esco_length(const btbb_packet* pkt, int maxlength)
+{
+	/* the caller counts information bytes; the two byte CRC is part of
+	 * the length this library reports */
+	if (pkt->esco_length < 1 || pkt->esco_length > maxlength - 2)
+		return 0;
+
+	return pkt->esco_length + 2;
+}
+
+/*
  * Find the length of an eSCO payload that carries no FEC, and decode it.
  *
  * The length is agreed when the link is set up and is not carried in the
- * packet (Vol 2, Part B, Section 6.5.3), so the only way to find it is to
- * unwhiten one byte at a time and see which length the CRC agrees with. A
- * length is worth trying as soon as that many bytes have been decoded, so the
- * byte decoded in each pass is the last one its length needs.
+ * packet (Vol 2, Part B, Section 6.5.3), so unless the caller has told us the
+ * link's length the only way to find it is to unwhiten one byte at a time and
+ * see which length the CRC agrees with. A length is worth trying as soon as
+ * that many bytes have been decoded, so the byte decoded in each pass is the
+ * last one its length needs.
+ *
+ * More than one length can agree, so the search keeps going to the end and
+ * better_length() picks between them. Stopping at the first one dropped the
+ * rest of a payload whose CRC ends in a zero byte, which is one payload in
+ * 256, and the rest of one a shorter length agreed with by chance.
  *
  * maxlength is the longest payload the packet type allows, in bytes including
  * the CRC. The shortest is one information byte and the two byte CRC, which
@@ -1247,34 +1334,73 @@ static int esco_payload(int clock, btbb_packet* pkt, int maxlength)
 	/* number of symbols remaining after access code and packet header */
 	int size = pkt->length - 122;
 
+	/* the length the link was set up with, when the caller knows it: then
+	 * that length is the answer and there is nothing to search for */
+	int known = known_esco_length(pkt, maxlength);
+	int last = known ? known : maxlength;
+
+	/* the first length worth checking the CRC at: the one the caller
+	 * knows, or the shortest this type carries */
+	int first = known ? known : 3;
+
+	/* the best length whose CRC agreed, or 0 if none has, and whether it
+	 * was reached by better_length()'s zero byte rule */
+	int match = 0;
+	int extended = 0;
+
 	/* number of bits we have decoded */
 	int bits;
 
 	for (pkt->payload_length = 1;
-			pkt->payload_length <= maxlength; pkt->payload_length++) {
+			pkt->payload_length <= last; pkt->payload_length++) {
 
 		bits = (pkt->payload_length - 1) * 8;
 
 		/* unwhiten next byte */
 		if ((bits + 8) > size) {
 			/*
-			 * The capture ran out, so the bytes decoded so far are
-			 * all the payload there is to report. They are
-			 * reported even below the shortest length this type
-			 * carries, unlike a payload given up on: this says
-			 * only that the capture stopped, so the bytes are
-			 * real and the rest of the packet was simply never
-			 * recorded.
+			 * The capture ran out. A length that agreed before it
+			 * did is still the payload, so report that one;
+			 * otherwise the bytes decoded so far are all the
+			 * payload there is to report. They are reported even
+			 * below the shortest length this type carries, unlike
+			 * a payload given up on: this says only that the
+			 * capture stopped, so the bytes are real and the rest
+			 * of the packet was simply never recorded.
 			 */
+			if (match)
+				break;
 			pkt->payload_length = bits / 8;
 			return 1; //FIXME should throw exception
 		}
 		unwhiten(stream + bits, pkt->payload + bits, clock, 8,
 			 HEADER_WHITENING_BITS + bits, pkt);
 
-		if (payload_crc(pkt))
-			return 10;
+		if (pkt->payload_length >= first && payload_crc(pkt) &&
+		    better_length(pkt, match, extended, pkt->payload_length)) {
+			extended = match &&
+				payload_bytes_zero(pkt, match,
+						   pkt->payload_length);
+			match = pkt->payload_length;
+		}
 	}
+
+	if (match) {
+		/* report the length that agreed, and check it again so that
+		 * the flags payload_crc() records are about that length and
+		 * not about the last one tried */
+		pkt->payload_length = match;
+		payload_crc(pkt);
+		return 10;
+	}
+
+	if (known) {
+		/* the caller's length stands whether the CRC agreed or not:
+		 * an encrypted payload's CRC never does */
+		pkt->payload_length = known;
+		return 2;
+	}
+
 	/* no length matched, so report the longest, which is as far as the
 	 * search decoded; the length the loop ended on is one byte past it */
 	pkt->payload_length = maxlength;
@@ -1283,11 +1409,7 @@ static int esco_payload(int clock, btbb_packet* pkt, int maxlength)
 
 int EV3(int clock, btbb_packet* pkt)
 {
-	/* 30 information bytes and a two byte CRC
-	 * (Vol 2, Part B, Section 6.5.3.1) */
-	int maxbytes = 30 + 2;
-
-	return esco_payload(clock, pkt, maxbytes);
+	return esco_payload(clock, pkt, EV3_MAX_PAYLOAD);
 }
 
 /*
@@ -1307,9 +1429,9 @@ static int ev4_payload(int clock, btbb_packet* pkt, int *corrected_total)
 	/* number of symbols remaining after access code and packet header */
 	int size = pkt->length - 122;
 
-	/* 120 information bytes and a two byte CRC (Vol 2, Part B, Section
-	 * 6.5.3.2), which rate 2/3 FEC turns into 98 blocks of 15 symbols */
-	int maxbytes = 120 + 2;
+	/* the longest payload, which rate 2/3 FEC turns into 98 blocks of 15
+	 * symbols */
+	int maxbytes = EV4_MAX_PAYLOAD;
 	int maxsymbols = fec23_symbols(maxbytes * 8);
 
 	/* the shortest payload is one information byte and the two byte CRC,
@@ -1317,20 +1439,39 @@ static int ev4_payload(int clock, btbb_packet* pkt, int *corrected_total)
 	int minbytes = 3;
 	int minsymbols = fec23_symbols(minbytes * 8);
 
+	/* the length the link was set up with, when the caller knows it: then
+	 * that length is the answer and there is nothing to search for */
+	int known = known_esco_length(pkt, maxbytes);
+	int last = known ? known : maxbytes;
+
 	int syms = 0; /* number of symbols we have decoded */
 	int bits = 0; /* number of payload bits we have decoded */
 	int fec_corrections = 0;
 
+	/* the next length worth checking the CRC at */
+	int candidate = known ? known : minbytes;
+
+	/* the best length whose CRC agreed, or 0 if none has, whether it was
+	 * reached by better_length()'s zero byte rule, and the corrections
+	 * the error correction had made by the end of it */
+	int match = 0;
+	int extended = 0;
+	int match_corrections = 0;
+
 	*corrected_total = 0;
 
-	pkt->payload_length = minbytes;
+	pkt->payload_length = candidate;
 
 	while (syms < maxsymbols) {
 
 		/* unfec/unwhiten next block (15 symbols -> 10 bits) */
 		if (syms + 15 > size) {
-			/* the capture ran out partway through a block, so only
-			 * whole bytes before it are a payload to report */
+			/* The capture ran out partway through a block. A
+			 * length that agreed before it did is still the
+			 * payload; otherwise only whole bytes before it are a
+			 * payload to report. */
+			if (match)
+				break;
 			pkt->payload_length = bits / 8;
 			return 1; //FIXME should throw exception
 		}
@@ -1358,6 +1499,8 @@ static int ev4_payload(int clock, btbb_packet* pkt, int *corrected_total)
 			 * past the end of the payload. That is as close as a
 			 * count made a block at a time can get.
 			 */
+			if (match)
+				break;
 			pkt->payload_length = bits / 8;
 			return 1;
 		}
@@ -1373,14 +1516,46 @@ static int ev4_payload(int clock, btbb_packet* pkt, int *corrected_total)
 		/*
 		 * Same search as esco_payload(), a block at a time: try the
 		 * CRC at every length the bits decoded so far can hold, this
-		 * block's included.
+		 * block's included, and keep the longest that agrees.
 		 */
-		while (pkt->payload_length * 8 <= bits) {
-			if (payload_crc(pkt))
-				return 10;
-			pkt->payload_length++;
+		while (candidate <= last && candidate * 8 <= bits) {
+			pkt->payload_length = candidate;
+			if (payload_crc(pkt) &&
+			    better_length(pkt, match, extended, candidate)) {
+				extended = match &&
+					payload_bytes_zero(pkt, match,
+							   candidate);
+				match = candidate;
+				match_corrections = *corrected_total;
+			}
+			candidate++;
 		}
+
+		/* nothing longer left to try */
+		if (candidate > last)
+			break;
 	}
+
+	if (match) {
+		/* Report the length that agreed, with the corrections the
+		 * error correction had made by the end of the block that
+		 * completed it, which is up to 9 bits past the length itself:
+		 * the blocks after it are no part of the payload reported.
+		 * Check the CRC again too, so that the flags payload_crc()
+		 * records are about that length and not the last one tried. */
+		pkt->payload_length = match;
+		payload_crc(pkt);
+		*corrected_total = match_corrections;
+		return 10;
+	}
+
+	if (known) {
+		/* the caller's length stands whether the CRC agreed or not:
+		 * an encrypted payload's CRC never does */
+		pkt->payload_length = known;
+		return 2;
+	}
+
 	/* no length matched, so report the longest, which is as far as the
 	 * search decoded; the length the loop ended on is one byte past it */
 	pkt->payload_length = maxbytes;
@@ -1398,11 +1573,7 @@ int EV4(int clock, btbb_packet* pkt)
 
 int EV5(int clock, btbb_packet* pkt)
 {
-	/* 180 information bytes and a two byte CRC
-	 * (Vol 2, Part B, Section 6.5.3.3) */
-	int maxbytes = 180 + 2;
-
-	return esco_payload(clock, pkt, maxbytes);
+	return esco_payload(clock, pkt, EV5_MAX_PAYLOAD);
 }
 
 /* HV packet type payload parser */
@@ -1586,9 +1757,23 @@ int btbb_decode_payload(btbb_packet* pkt)
 			rv = HV(pkt->clkn, pkt);
 			break;
 		case PACKET_TYPE_HV3: /* HV3/EV3/3-EV3 */
-			/* decode as EV3 if CRC checks out */
-			if ((rv = EV3(pkt->clkn, pkt)) <= 1)
-				/* otherwise assume HV3 */
+			/*
+			 * An HV3 and an EV3 share this type code, so what
+			 * each can carry has to tell them apart. An EV3
+			 * payload ends in a CRC; an HV3 is 30 voice bytes
+			 * with no CRC at all (Vol 2, Part B, Section
+			 * 6.5.2.3). So a CRC that agrees at some length says
+			 * EV3, and anything else - including a search that
+			 * found no length it agreed at - leaves the HV3 this
+			 * is the right size to be.
+			 *
+			 * A caller that knows the link carries eSCO payloads
+			 * has said so, and then this is an EV3 of that length
+			 * whether its CRC agreed or not: an encrypted
+			 * payload's CRC never does.
+			 */
+			rv = EV3(pkt->clkn, pkt);
+			if (rv < 10 && !known_esco_length(pkt, EV3_MAX_PAYLOAD))
 				rv = HV(pkt->clkn, pkt);
 			/* don't know how to decode 3-EV3 */
 			break;
