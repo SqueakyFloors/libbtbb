@@ -108,6 +108,14 @@ struct btbb_packet {
 	* decoded, and is only meaningful where the type carries FEC: 0 to 80
 	* bits for the rate 1/3 code, and one bit per 15-symbol block for the
 	* rate 2/3 code. Both are 0 until something is decoded.
+	*
+	* The published record layout describes the payload field as running
+	* to +180 for the rate 2/3 code. The longest payload that code
+	* carries is a DM5's 228 bytes, which is 183 blocks, so a reception
+	* marginal enough to need a correction in every one of them reports
+	* 183. The count the decoder made is reported either way: a reader is
+	* better served by the real number than by one capped to the
+	* description, and the field is signed 16-bit, so it fits.
 	*/
 	uint8_t corrected_header_bits;
 	int16_t corrected_payload_bits;

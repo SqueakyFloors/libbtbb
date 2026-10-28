@@ -427,7 +427,12 @@ static int init_candidates(char channel, int known_clock_bits,
 				free(list);
 				return -1;
 			}
-			memcpy(grown, list, sizeof(uint32_t) * (size_t) count);
+			/* there is nothing to copy into the first block, and
+			 * memcpy() is not defined for a null source even
+			 * with a length of 0 */
+			if (count > 0)
+				memcpy(grown, list,
+				       sizeof(uint32_t) * (size_t) count);
 			free(list);
 			list = grown;
 		}

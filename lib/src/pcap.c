@@ -135,7 +135,14 @@ typedef struct {
    record header whose length reaches past the end of the file. The stream is
    in its error state, which has to be cleared before it will accept the seek
    that follows the truncation. btbb_pcap_open() left the stream unbuffered,
-   so what reached the file is all there was of the record. */
+   so what reached the file is all there was of the record.
+
+   This is the best that can be done rather than a guarantee: a capture going
+   to something that cannot be truncated or sought, a named pipe for
+   instance, keeps the part of the record that reached it, as every capture
+   did before. The caller is told the write failed either way, and a caller
+   that stops capturing there - which is the only sensible answer to a full
+   disk - ends up with a file no worse than it would have had. */
 static void discard_partial_record(FILE *file, long start_of_record)
 {
 	clearerr(file);

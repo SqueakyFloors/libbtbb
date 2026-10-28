@@ -1089,6 +1089,53 @@ static void test_acl_truncated_capture(void)
 }
 
 /*
+ * The most corrections a payload can report: a DM5, the longest payload the
+ * rate 2/3 code carries, with a wrong check symbol in every one of its
+ * blocks. Each is a single-bit syndrome, which leaves the data alone, so the
+ * payload still decodes and its CRC still comes out.
+ *
+ * 183 is above the +180 the published record layout describes for this field,
+ * which is what the longest payload really comes to; the count the decoder
+ * made is what gets reported.
+ */
+static void test_the_largest_corrected_payload_count(void)
+{
+	char payload[MAX_SYMBOLS];
+	char stream[MAX_SYMBOLS];
+	char packed[MAX_PAYLOAD_LENGTH / 8];
+	uint16_t header_data;
+	btbb_packet *pkt;
+	int payload_symbols, length, blocks, i;
+	const int clock = 0x2a;
+
+	payload_symbols = build_acl_payload(payload, 2, 224, 1, 1, 0x47,
+					    clock);
+	blocks = payload_symbols / 15;
+	CHECK(blocks == 183);
+	/* symbol 10 of a block is its first check symbol */
+	for (i = 0; i < blocks; i++)
+		payload[i * 15 + 10] ^= 1;
+
+	header_data = (uint16_t) (1 | (PACKET_TYPE_DM5 << 3) | (3 << 7));
+	length = build_packet(stream, 0x9e8b33, header_data,
+			      spec_hec(header_data, 0x47), payload,
+			      payload_symbols, clock, 1);
+	pkt = packet_for(stream, length, 0x47, clock, 1);
+	CHECK(pkt != NULL);
+	if (pkt == NULL)
+		return;
+	CHECK(btbb_decode_header(pkt) == 1);
+	CHECK(btbb_decode_payload(pkt) == 10);	/* the CRC came out */
+	CHECK(btbb_packet_get_payload_length(pkt) == 228);
+	CHECK(pkt->corrected_payload_bits == blocks);
+	/* and the payload is the one that was sent */
+	CHECK(btbb_get_payload_packed(pkt, packed) == 228);
+	for (i = 0; i < 224; i++)
+		CHECK((uint8_t) packed[2 + i] == (uint8_t) (i + 1));
+	btbb_packet_unref(pkt);
+}
+
+/*
  * Make one rate 2/3 FEC block uncorrectable. Two of a block's check symbols
  * disagree with its data, which is neither the no-error case nor one of the
  * single bit errors the code can put right, so unfec23() gives the block up.
@@ -2035,6 +2082,7 @@ int main(void)
 	test_acl_payload_lengths();
 	test_acl_payload_length_clamped();
 	test_acl_truncated_capture();
+	test_the_largest_corrected_payload_count();
 	test_uncorrectable_payload_fec();
 	test_esco_no_length_matches();
 	test_header_needs_its_symbols();
