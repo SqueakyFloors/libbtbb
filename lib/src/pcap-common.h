@@ -175,6 +175,18 @@ typedef struct __attribute__((packed)) _pcap_bluetooth_le_ll_header {
 #define LE_MIC_CHECKED       0x1000
 #define LE_MIC_VALID         0x2000
 
+/* Whether the reference access address flag belongs in a record's flags.
+ *
+ * The published layout defines that field as "the Access Address configured
+ * into the capture tool that led to the capture of this packet", and the flag
+ * as saying the field "is valid and led to this packet being captured". So
+ * the flag follows the address the caller gives, not the channel the packet
+ * arrived on: a tool following a connection gives the address it followed,
+ * and one listening to the advertising channels gives 0x8E89BED6. Zero means
+ * the caller had no address to give, which no real one can be - the rules in
+ * Vol 6, Part B, Section 2.1.2 forbid four equal octets. */
+#define LE_REF_AA_FLAG(aa)   ((aa) != 0 ? LE_REF_AA_VALID : 0)
+
 /* Full captured LE frame: access address (4) + header (2) + payload (251) + CRC (3). */
 #define LE_MAX_PAYLOAD       260
 

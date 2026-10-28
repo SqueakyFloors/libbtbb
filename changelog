@@ -1,4 +1,20 @@
 libbtbb (2020-12-R1+fork5) unstable; urgency=low
+  * An advertising PDU's length is read from the whole header octet, as the
+    Bluetooth Core specification has defined it since 5.0. Six bits were read,
+    which was the 4.x header, so an extended advertising PDU on a primary
+    channel - up to 64 octets, where a legacy one stops at 37 - was reported
+    as its length less 64: a 64-octet PDU came out as 0 bytes, and both
+    lell_print() and the capture files held none of its payload. A claim
+    longer than the symbol buffer holds is capped at the 251 payload bytes it
+    does hold, which is also as much as an Ubertooth can receive.
+  * An LE capture file's reference access address flag now follows the
+    address the caller gave rather than the channel the packet arrived on.
+    The published layout defines that field as the access address configured
+    into the capture tool, so a tool following a connection earns the flag on
+    a data channel, where it used to be cleared, and a caller that gave no
+    address does not earn it on an advertising channel, where it used to be
+    set. Ubertooth passes the advertising address on an advertising channel
+    and none on a data channel, so its own capture files are unchanged.
   * A clock and UAP the library recovered that turn out not to be the
     piconet's are now given up. Following a piconet never winnowed again, so a
     wrong CLK1-6 or UAP meant every packet printed "Failed to decode packet"

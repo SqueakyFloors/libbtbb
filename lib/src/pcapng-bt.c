@@ -496,7 +496,7 @@ lell_pcapng_append_packet(lell_pcapng_handle * h, const uint64_t ns,
 	uint16_t flags = LE_DEWHITENED | LE_AA_OFFENSES_VALID |
 		LE_SIGPOWER_VALID |
 		((noisedbm < sigdbm) ? LE_NOISEPOWER_VALID : 0) |
-		(lell_packet_is_data(pkt) ? 0 : LE_REF_AA_VALID);
+		LE_REF_AA_FLAG(refAA);
 	pcapng_le_packet pcapng_pkt;
 
 	/* The extra 9 bytes added to the packet length are for:

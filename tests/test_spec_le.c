@@ -46,25 +46,6 @@ static int failures = 0;
 		}                                                          \
 	} while (0)
 
-/*
- * A vector the library is known to get wrong, with the issue that tracks the
- * bug. It does not count as a failure while it fails, but it does count as
- * one once it starts passing, so that the fix has to come back here and turn
- * the line into a CHECK.
- */
-#define XFAIL(issue, cond)                                                 \
-	do {                                                               \
-		if (cond) {                                                \
-			printf("XPASS %s:%d: %s now passes; issue #%d is "  \
-			       "fixed, so make this a CHECK\n",            \
-			       __FILE__, __LINE__, #cond, (issue));        \
-			++failures;                                        \
-		} else {                                                   \
-			printf("xfail (#%d) %s:%d: %s\n", (issue),         \
-			       __FILE__, __LINE__, #cond);                 \
-		}                                                          \
-	} while (0)
-
 /* ------------------------------------------------------------------ *
  * Section 1.4.1: physical channel indices
  * ------------------------------------------------------------------ */
@@ -218,8 +199,8 @@ static void test_advertising_pdu_header(void)
  * Section 2.3: "The valid range of the Length field shall be 1 to 255
  * octets", so the whole second header octet is the length. Legacy advertising
  * PDUs stay at or below 37, but an extended advertising PDU on a primary
- * channel can be longer, and reading six bits of the field reports the wrong
- * length for those.
+ * channel reaches 64 octets, which six bits of the field reported as 0, and
+ * every length above that modulo 64.
  */
 static void test_advertising_pdu_length_is_eight_bits(void)
 {
@@ -244,11 +225,51 @@ static void test_advertising_pdu_length_is_eight_bits(void)
 		if (pkt == NULL)
 			return;
 
-		if (LENGTHS[row] <= 63)
-			CHECK(lell_get_payload_length(pkt) == LENGTHS[row]);
-		else
-			XFAIL(25, lell_get_payload_length(pkt) ==
-				  LENGTHS[row]);
+		CHECK(lell_get_payload_length(pkt) == LENGTHS[row]);
+		/* every payload byte is where the printer and the capture
+		 * writers look for it */
+		for (i = 0; i < LENGTHS[row]; i++)
+			CHECK(pkt->symbols[6 + i] == (uint8_t) (i + 1));
+		lell_packet_unref(pkt);
+	}
+
+	/*
+	 * The field reaches 255, which is 264 bytes of packet, more than the
+	 * symbol buffer holds. The length is capped at the 251 payload bytes
+	 * it does hold, so nothing reads past it.
+	 */
+	{
+		uint8_t stream[MAX_LE_SYMBOLS];
+		lell_packet *pkt = NULL;
+		int i;
+
+		memset(stream, 0, sizeof(stream));
+		stream[0] = 0xd6;
+		stream[1] = 0xbe;
+		stream[2] = 0x89;
+		stream[3] = 0x8e;
+		stream[4] = 0x07;
+		stream[5] = 255;
+		for (i = 6; i < MAX_LE_SYMBOLS; i++)
+			stream[i] = (uint8_t) i;
+
+		lell_allocate_and_decode_n(stream, sizeof(stream), 2402, 0,
+					   &pkt);
+		CHECK(pkt != NULL);
+		if (pkt == NULL)
+			return;
+		CHECK(lell_get_payload_length(pkt) == MAX_BUILT_PAYLOAD);
+		CHECK(MAX_BUILT_PAYLOAD == 251);
+		lell_packet_unref(pkt);
+
+		/* and a claim of 255 where only 37 octets arrived still
+		 * reports the 37 */
+		pkt = NULL;
+		lell_allocate_and_decode_n(stream, 9 + 37, 2402, 0, &pkt);
+		CHECK(pkt != NULL);
+		if (pkt == NULL)
+			return;
+		CHECK(lell_get_payload_length(pkt) == 37);
 		lell_packet_unref(pkt);
 	}
 }

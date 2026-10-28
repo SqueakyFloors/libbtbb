@@ -453,7 +453,7 @@ lell_pcap_append_packet(lell_pcap_handle * h, const uint64_t ns,
 		uint16_t flags = LE_DEWHITENED | LE_AA_OFFENSES_VALID |
 			LE_SIGPOWER_VALID |
 			((noisedbm < sigdbm) ? LE_NOISEPOWER_VALID : 0) |
-			(lell_packet_is_data(pkt) ? 0 : LE_REF_AA_VALID);
+			LE_REF_AA_FLAG(refAA);
 		pcap_le_packet pcap_pkt;
 		assemble_pcapng_le_packet( &pcap_pkt,
 					   0,

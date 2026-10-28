@@ -1615,9 +1615,10 @@ static void test_le_pcap_records(void)
 		}
 	}
 
-	/* A packet on a data channel. The writers clear the reference access
-	   address flag for one of those, which is the half of the LE flag
-	   word the advertising cases above cannot show. */
+	/* A packet on a data channel, written twice: once for a caller that
+	   followed an access address and once for a caller that had none. The
+	   reference access address flag follows the address the caller gives,
+	   not the channel, so the data channel shows both halves of it. */
 	{
 		const char *data_name = "test_capture_le_data.pcap";
 		static const uint8_t DATA_PDU[] = {
@@ -1626,8 +1627,9 @@ static void test_le_pcap_records(void)
 			0x01, 0x02, 0x03, 0x04,		/* payload */
 			0xaa, 0xbb, 0xcc		/* CRC */
 		};
-		lell_pcap_handle *dh = NULL;
+		static const uint32_t REF_AAS[] = { 0x12345678u, 0 };
 		lell_packet *dpkt = NULL;
+		size_t row;
 
 		/* 2404 MHz is channel index 0, a data channel */
 		lell_allocate_and_decode_n(DATA_PDU, sizeof(DATA_PDU), 2404,
@@ -1635,22 +1637,50 @@ static void test_le_pcap_records(void)
 		CHECK(dpkt != NULL);
 		if (dpkt != NULL) {
 			CHECK(lell_packet_is_data(dpkt));
-			unlink_quietly(data_name);
-			CHECK(lell_pcap_create_file(data_name, &dh) == 0);
-			if (dh != NULL) {
+			for (row = 0; row < 2; row++) {
+				lell_pcap_handle *dh = NULL;
+
+				unlink_quietly(data_name);
+				CHECK(lell_pcap_create_file(data_name,
+							    &dh) == 0);
+				if (dh == NULL)
+					continue;
 				CHECK(lell_pcap_append_packet(dh, 5ull, -20,
-							      -80, 0x12345678,
+							      -80,
+							      REF_AAS[row],
 							      dpkt) == 0);
 				CHECK(lell_pcap_close(dh) == 0);
 				CHECK(read_capture(data_name));
 				unlink_quietly(data_name);
 				if (capture_len != 0) {
-					CHECK((rd16(48) &
-					       LE_REF_AA_VALID) == 0);
-					CHECK(rd32(44) == 0x12345678u);
+					CHECK(rd32(44) == REF_AAS[row]);
+					CHECK((rd16(48) & LE_REF_AA_VALID) ==
+					      (REF_AAS[row] != 0 ?
+					       LE_REF_AA_VALID : 0));
 				}
 			}
 			lell_packet_unref(dpkt);
+		}
+	}
+
+	/* An advertising channel packet whose caller gave no reference access
+	   address: the flag is clear there too. */
+	{
+		const char *none_name = "test_capture_le_no_ref.pcap";
+		lell_pcap_handle *nh = NULL;
+
+		unlink_quietly(none_name);
+		CHECK(lell_pcap_create_file(none_name, &nh) == 0);
+		if (nh != NULL) {
+			CHECK(lell_pcap_append_packet(nh, 5ull, -20, -80, 0,
+						      pkt) == 0);
+			CHECK(lell_pcap_close(nh) == 0);
+			CHECK(read_capture(none_name));
+			unlink_quietly(none_name);
+			if (capture_len != 0) {
+				CHECK(rd32(44) == 0);
+				CHECK((rd16(48) & LE_REF_AA_VALID) == 0);
+			}
 		}
 	}
 
@@ -1907,6 +1937,64 @@ static void test_le_connect_ind_options_run_out(void)
 	   readable */
 	CHECK(find_option(find_block(BLOCK_TYPE_INTERFACE, 0), 16,
 			  PCAPNG_LE_LL_CONNECTION_INFO, NULL) != 0);
+}
+
+/*
+ * The pcapng writer takes the reference access address flag from the address
+ * its caller gives, as the pcap writer does. A tool following a connection
+ * has one for a data channel packet; a tool following nothing has none.
+ */
+static void test_le_pcapng_reference_access_address(void)
+{
+	static const uint8_t DATA_PDU[] = {
+		0x78, 0x56, 0x34, 0x12,		/* access address */
+		0x02, 0x04,			/* LLID 2, length 4 */
+		0x01, 0x02, 0x03, 0x04,		/* payload */
+		0xaa, 0xbb, 0xcc		/* CRC */
+	};
+	static const uint32_t REF_AAS[] = { 0x12345678u, 0 };
+	const char *filename = "test_capture_le_ref_aa.pcapng";
+	size_t row;
+
+	for (row = 0; row < 2; row++) {
+		lell_pcapng_handle *h = NULL;
+		lell_packet *pkt = NULL;
+		size_t blk, data;
+
+		/* 2404 MHz is channel index 0, a data channel */
+		lell_allocate_and_decode_n(DATA_PDU, sizeof(DATA_PDU), 2404,
+					   7, &pkt);
+		CHECK(pkt != NULL);
+		if (pkt == NULL)
+			return;
+		CHECK(lell_packet_is_data(pkt));
+
+		unlink_quietly(filename);
+		CHECK(lell_pcapng_create_file(filename, "test", &h) == 0);
+		if (h == NULL) {
+			lell_packet_unref(pkt);
+			return;
+		}
+		CHECK(lell_pcapng_append_packet(h, 7ull, -20, -80,
+						REF_AAS[row], pkt) == 0);
+		(void) lell_pcapng_close(h);
+		lell_packet_unref(pkt);
+
+		CHECK(read_capture(filename));
+		unlink_quietly(filename);
+		if (capture_len == 0)
+			return;
+
+		blk = find_block(BLOCK_TYPE_ENHANCED_PACKET, 0);
+		CHECK(blk < capture_len);
+		if (blk >= capture_len)
+			return;
+		/* the pseudoheader starts after the 28-byte block header */
+		data = blk + 28;
+		CHECK(rd32(data + 4) == REF_AAS[row]);
+		CHECK((rd16(data + 8) & LE_REF_AA_VALID) ==
+		      (REF_AAS[row] != 0 ? LE_REF_AA_VALID : 0));
+	}
 }
 
 /*
@@ -2265,6 +2353,7 @@ int main(void)
 	test_le_connect_ind_option();
 	test_le_short_connect_ind();
 	test_le_connect_ind_options_run_out();
+	test_le_pcapng_reference_access_address();
 	test_header_padding_options();
 	test_padding_beyond_one_option();
 	test_section_option_limit();
