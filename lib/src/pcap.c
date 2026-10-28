@@ -115,8 +115,11 @@ typedef struct {
 
 /* Write one record. Returns 0, or -PCAP_FILE_WRITE_ERROR if any of it did not
    reach the file, so a capture that runs out of disk space is reported to the
-   caller rather than left to look like a short capture. */
-int btbb_pcap_dump(FILE *file, pcaprec_hdr_t *pcap_header, u_char *data) {
+   caller instead of looking like a capture that simply ended. The file may
+   end part way through the record that failed; unlike the pcapng writer this
+   one does not take it back out, because stdio has already decided how much
+   of it to put there. */
+static int btbb_pcap_dump(FILE *file, pcaprec_hdr_t *pcap_header, u_char *data) {
 	if (fwrite(pcap_header, sizeof(*pcap_header), 1, file) != 1) {
 		return -PCAP_FILE_WRITE_ERROR;
 	}

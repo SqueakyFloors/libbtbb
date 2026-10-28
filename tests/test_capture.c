@@ -674,10 +674,11 @@ static void test_bredr_failed_checks(void)
  */
 static void test_bredr_voice_payload_has_no_crc(void)
 {
-	/* HV3, EV4 and EV5: the first has no CRC at all, and the other two
-	   look for their payload length by checking a CRC at every candidate
-	   until they run out of symbols. */
-	static const uint8_t TYPES[] = { 7, 12, 13 };
+	/* FHS, HV3, EV4 and EV5. HV3 has no CRC at all; the eSCO types look
+	   for their payload length by checking a CRC at every candidate until
+	   they run out of symbols, and an FHS tries all 32 whitening inputs
+	   before giving up. */
+	static const uint8_t TYPES[] = { 2, 7, 12, 13 };
 	size_t row;
 
 	for (row = 0; row < sizeof(TYPES) / sizeof(TYPES[0]); row++) {
@@ -699,10 +700,14 @@ static void test_bredr_voice_payload_has_no_crc(void)
 			return;
 		encode_header_13(header_data, (uint8_t) hec, header_symbols);
 		/* 30 bytes of payload, which is what an HV3 carries, and not
-		   enough for either eSCO type to finish its search */
+		   enough for either eSCO type to finish its search. An FHS
+		   payload goes through rate 2/3 error correction first, and
+		   all zeroes is a valid codeword of any linear code, so that
+		   is what the FHS row sends: it decodes, and its CRC does not
+		   come out. */
 		for (i = 0; i < 240; i++)
-			payload[i] =
-				(char) ('0' + ((0x9c5a3 >> (i % 19)) & 1));
+			payload[i] = (TYPES[row] == 2) ? '0'
+				: (char) ('0' + ((0x9c5a3 >> (i % 19)) & 1));
 		payload[240] = '\0';
 		length = build_bredr_stream(stream, SPEC_DH1_LAP,
 					    header_symbols, payload);
@@ -1057,6 +1062,45 @@ static void test_le_pcap_records(void)
 				CHECK(capture[50 + i] == CONNECT_IND[i]);
 			CHECK(capture_len == 24 + 16 + 10 +
 			      sizeof(CONNECT_IND));
+		}
+	}
+
+	/* A packet on a data channel. The writers clear the reference access
+	   address flag for one of those, which is the half of the LE flag
+	   word the advertising cases above cannot show. */
+	{
+		const char *data_name = "test_capture_le_data.pcap";
+		static const uint8_t DATA_PDU[] = {
+			0x78, 0x56, 0x34, 0x12,		/* access address */
+			0x02, 0x04,			/* LLID 2, length 4 */
+			0x01, 0x02, 0x03, 0x04,		/* payload */
+			0xaa, 0xbb, 0xcc		/* CRC */
+		};
+		lell_pcap_handle *dh = NULL;
+		lell_packet *dpkt = NULL;
+
+		/* 2404 MHz is channel index 0, a data channel */
+		lell_allocate_and_decode_n(DATA_PDU, sizeof(DATA_PDU), 2404,
+					   7, &dpkt);
+		CHECK(dpkt != NULL);
+		if (dpkt != NULL) {
+			CHECK(lell_packet_is_data(dpkt));
+			unlink_quietly(data_name);
+			CHECK(lell_pcap_create_file(data_name, &dh) == 0);
+			if (dh != NULL) {
+				CHECK(lell_pcap_append_packet(dh, 5ull, -20,
+							      -80, 0x12345678,
+							      dpkt) == 0);
+				CHECK(lell_pcap_close(dh) == 0);
+				CHECK(read_capture(data_name));
+				unlink_quietly(data_name);
+				if (capture_len != 0) {
+					CHECK((rd16(48) &
+					       LE_REF_AA_VALID) == 0);
+					CHECK(rd32(44) == 0x12345678u);
+				}
+			}
+			lell_packet_unref(dpkt);
 		}
 	}
 

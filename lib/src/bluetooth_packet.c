@@ -1471,13 +1471,14 @@ int btbb_decode_payload(btbb_packet* pkt)
 			break;
 	}
 
-	/* The eSCO types find their payload length by trying every candidate
-	 * and checking the CRC at each, so only a CRC that came out (10)
-	 * describes the length the decoder settled on. Any other answer leaves
-	 * a result about a length it abandoned, or about a voice payload that
-	 * has no CRC at all, so drop it: a capture file would otherwise report
-	 * a CRC failure the packet never had. */
-	if ((rv < 10) && ((pkt->packet_type == PACKET_TYPE_HV3) ||
+	/* These types search for their payload: the eSCO ones try every
+	 * candidate length and an FHS tries all 32 whitening inputs, checking
+	 * the CRC at each. Only a CRC that came out describes what the decoder
+	 * settled on; any other answer is about an attempt it abandoned, or
+	 * about a voice payload with no CRC at all. Drop it, or a capture file
+	 * reports a CRC failure the packet never had. */
+	if ((rv < 10) && ((pkt->packet_type == PACKET_TYPE_FHS) ||
+			  (pkt->packet_type == PACKET_TYPE_HV3) ||
 			  (pkt->packet_type == PACKET_TYPE_EV4) ||
 			  (pkt->packet_type == PACKET_TYPE_EV5))) {
 		btbb_packet_set_flag(pkt, BTBB_CRC_CHECKED, 0);

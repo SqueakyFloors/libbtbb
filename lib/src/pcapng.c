@@ -30,9 +30,9 @@
 #include <sys/types.h>
 #include <unistd.h>
 
-/* The option code used for padding. The format defines no padding option;
-   this is a code in the range reserved for local use, and a reader steps
-   over an option it does not know by its length. */
+/* The option code used for padding. The format defines no padding option, so
+   this is a code of this library's own choosing; a reader steps over an
+   option it does not know by the length that follows the code. */
 #define PCAPNG_OPTION_PADDING 0xffff
 
 /* An option's length field is 16 bits wide, so one option can cover at most
@@ -347,7 +347,8 @@ PCAPNG_RESULT pcapng_append_packet( PCAPNG_HANDLE * handle,
 				    const enhanced_packet_block * packet )
 {
 	PCAPNG_RESULT retval = PCAPNG_OK;
-	if (handle && (handle->fd != -1)) {
+	if (handle && (handle->fd != -1) &&
+	    handle->section_header && (handle->section_header != MAP_FAILED)) {
 		size_t writesz = packet->block_total_length;
 		off_t before = lseek( handle->fd, 0, SEEK_CUR );
 		ssize_t result = write( handle->fd, packet, writesz );
