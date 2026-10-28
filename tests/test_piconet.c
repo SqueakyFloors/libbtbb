@@ -187,6 +187,73 @@ static int candidate_listed(btbb_piconet *pn, uint32_t clk1_27)
 static const uint8_t MAP_20[10] = {0xff, 0xff, 0x0f};
 
 /*
+ * stdout and stderr into temporary files for as long as a test needs, so it
+ * can say which stream the library wrote a line on. Returns 0 once both are
+ * captured; on failure nothing is redirected and the test says so.
+ */
+static FILE *out_capture, *err_capture;
+static int saved_out = -1, saved_err = -1;
+
+static int capture_start(void)
+{
+	out_capture = tmpfile();
+	err_capture = tmpfile();
+	fflush(stdout);
+	fflush(stderr);
+	saved_out = dup(fileno(stdout));
+	saved_err = dup(fileno(stderr));
+	if (out_capture != NULL && err_capture != NULL &&
+	    saved_out >= 0 && saved_err >= 0 &&
+	    dup2(fileno(out_capture), fileno(stdout)) >= 0 &&
+	    dup2(fileno(err_capture), fileno(stderr)) >= 0)
+		return 0;
+
+	/* put back whatever was redirected before giving up */
+	if (saved_out >= 0) {
+		dup2(saved_out, fileno(stdout));
+		close(saved_out);
+		saved_out = -1;
+	}
+	if (saved_err >= 0) {
+		dup2(saved_err, fileno(stderr));
+		close(saved_err);
+		saved_err = -1;
+	}
+	if (out_capture != NULL)
+		fclose(out_capture);
+	if (err_capture != NULL)
+		fclose(err_capture);
+	out_capture = err_capture = NULL;
+	printf("FAIL: could not capture the output\n");
+	++failures;
+	return -1;
+}
+
+static void read_capture(FILE *capture, char *into, size_t len)
+{
+	size_t read;
+
+	rewind(capture);
+	read = fread(into, 1, len - 1, capture);
+	into[read] = '\0';
+	fclose(capture);
+}
+
+static void capture_stop(char *out, size_t outlen, char *err, size_t errlen)
+{
+	fflush(stdout);
+	fflush(stderr);
+	dup2(saved_out, fileno(stdout));
+	dup2(saved_err, fileno(stderr));
+	close(saved_out);
+	close(saved_err);
+	saved_out = saved_err = -1;
+	read_capture(out_capture, out, outlen);
+	read_capture(err_capture, err, errlen);
+	out_capture = err_capture = NULL;
+}
+
+/*
  * Under AFH the hop sequence only ever visits the used channels, so a single
  * channel accounts for a far larger share of the sequence than an even spread
  * over all 79 would: with 20 used channels, one in 20 of the clock values
@@ -1119,6 +1186,113 @@ static void test_a_clock_the_caller_set_is_kept(void)
 	btbb_piconet_unref(pn);
 }
 
+/*
+ * Everything UAP and clock discovery has to say about its progress goes to
+ * stderr. A tool that dumps its capture to stdout would otherwise have these
+ * lines in the dump, with nothing to tell them from capture data.
+ */
+static void test_discovery_notes_go_to_stderr(void)
+{
+	btbb_piconet *pn = discovered(NULL, 0);
+	char out[4096], err[4096];
+	uint32_t offset;
+
+	first_hop(pn, channel_at(pn, 0));
+	if (capture_start() != 0) {
+		btbb_piconet_unref(pn);
+		return;
+	}
+	/* the candidate list, and the hops that narrow it to the clock */
+	btbb_init_hop_reversal(0, pn);
+	for (offset = 100; offset < 100 * 40; offset += 100) {
+		observe(pn, (int) offset, channel_at(pn, offset));
+		if (btbb_piconet_get_flag(pn, BTBB_CLK27_VALID))
+			break;
+	}
+	/* and the AFH map, which is a caller's own request to print */
+	btbb_print_afh_map(pn);
+	capture_stop(out, sizeof(out), err, sizeof(err));
+
+	CHECK(btbb_piconet_get_flag(pn, BTBB_CLK27_VALID));
+	CHECK(strstr(err, "initial CLK1-27 candidates") != NULL);
+	CHECK(strstr(err, "Acquired CLK1-27") != NULL);
+	/* nothing of the discovery on stdout, and the map still on it */
+	CHECK(strstr(out, "CLK1-27") == NULL);
+	CHECK(strncmp(out, "AFH map: 0x", 11) == 0);
+	CHECK(strstr(err, "AFH map: 0x") == NULL);
+	if (failures != 0)
+		printf("stdout was: %s\nstderr was: %s\n", out, err);
+	btbb_piconet_unref(pn);
+}
+
+/* The same, for the notes the paths that give up write. */
+static void test_discovery_complaints_go_to_stderr(void)
+{
+	char symbols[400];
+	btbb_packet *pkt = btbb_packet_new();
+	btbb_piconet *pn = discovered(NULL, 0);
+	char out[4096], err[4096];
+
+	memset(symbols, 0, sizeof(symbols));
+	first_hop(pn, channel_at(pn, 0));
+	CHECK(btbb_init_hop_reversal(0, pn) > 1);
+	/* the remembered pattern is full, which starts discovery over */
+	pn->packets_observed = MAX_PATTERN_LENGTH;
+	btbb_packet_set_data(pkt, symbols, (int) sizeof(symbols), 11,
+			     (pn->first_pkt_time + 123) << 1);
+
+	if (capture_start() != 0) {
+		btbb_packet_unref(pkt);
+		btbb_piconet_unref(pn);
+		return;
+	}
+	try_hop(pkt, pn);
+	capture_stop(out, sizeof(out), err, sizeof(err));
+
+	CHECK(strstr(err, "More hops than we can remember") != NULL);
+	CHECK_EQ(0, strlen(out));
+	if (failures != 0)
+		printf("stdout was: %s\nstderr was: %s\n", out, err);
+	btbb_packet_unref(pkt);
+	btbb_piconet_unref(pn);
+}
+
+/*
+ * Reversing the hops an aliased receiver observes is not implemented, so
+ * asking for it is refused rather than served with ordinary hop reversal.
+ * The piconet's 'aliased' field, which decided this, was never assigned, so
+ * a caller passing 1 used to get candidates chosen against unfolded
+ * channels - channels such a receiver never reports - and no sign of it.
+ */
+static void test_aliased_hop_reversal_is_refused(void)
+{
+	btbb_piconet *pn = discovered(NULL, 0);
+	char out[4096], err[4096];
+
+	first_hop(pn, channel_at(pn, 0));
+	if (capture_start() != 0) {
+		btbb_piconet_unref(pn);
+		return;
+	}
+	CHECK_EQ(0, btbb_init_hop_reversal(1, pn));
+	capture_stop(out, sizeof(out), err, sizeof(err));
+
+	CHECK(strstr(err, "aliased hop reversal is not implemented") != NULL);
+	CHECK_EQ(0, strlen(out));
+	/* nothing was started, so nothing has to be given up either */
+	CHECK_EQ(0, pn->num_candidates);
+	CHECK(pn->clock_candidates == NULL);
+	CHECK(!btbb_piconet_get_flag(pn, BTBB_HOP_REVERSAL_INIT));
+	CHECK(!btbb_piconet_get_flag(pn, BTBB_IS_ALIASED));
+
+	/* and ordinary hop reversal is unaffected */
+	CHECK(btbb_init_hop_reversal(0, pn) > 1);
+	CHECK(!btbb_piconet_get_flag(pn, BTBB_IS_ALIASED));
+	if (failures != 0)
+		printf("stdout was: %s\nstderr was: %s\n", out, err);
+	btbb_piconet_unref(pn);
+}
+
 int main(void)
 {
 	test_afh_candidates_fit_their_list();
@@ -1135,6 +1309,9 @@ int main(void)
 	test_an_allocation_failure_partway_through_the_list();
 	test_the_clock_is_confirmed_before_it_is_accepted();
 	test_a_wrong_clock_is_not_accepted_on_a_short_map();
+	test_discovery_notes_go_to_stderr();
+	test_discovery_complaints_go_to_stderr();
+	test_aliased_hop_reversal_is_refused();
 	test_the_clocks_of_the_device_and_the_observer_differ();
 	test_every_candidate_agrees_on_clk1_6();
 	test_a_run_of_header_failures_gives_up_the_clock();

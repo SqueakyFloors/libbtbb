@@ -94,9 +94,6 @@ struct btbb_piconet {
 
 	uint32_t flags;
 
-	/* true if using a particular aliased receiver implementation */
-	int aliased;
-
 	/* AFH channel map - either read or derived from observed packets */
 	uint8_t afh_map[10];
 
@@ -199,9 +196,6 @@ struct btbb_piconet {
 /* the number of CLK1-27 values, which is also the length of a full hopping
  * sequence: hops happen at every other clock value */
 #define SEQUENCE_LENGTH 134217728
-
-/* number of aliased channels received */
-#define ALIASED_CHANNELS 25
 
 /* do all the precalculation that can be done before knowing the address */
 void precalc(btbb_piconet *pnet);

@@ -376,6 +376,11 @@ uint8_t btbb_packet_get_ac_errors(const btbb_packet *pkt) {
 	return pkt->ac_errors;
 }
 
+/*
+ * Matching any LAP. 'search_length' offsets are tried, each as the start of a
+ * sync word, so this reads search_length + SYNCWORD_SYMBOLS - 1 symbols:
+ * btbb_find_ac_n() has already cut it down to the symbols the caller holds.
+ */
 int promiscuous_packet_search(char *stream, int search_length, uint32_t *lap,
 							  int max_ac_errors, uint8_t *ac_errors) {
 	uint64_t syncword, codeword, syndrome, corrected_barker;
@@ -436,7 +441,8 @@ int promiscuous_packet_search(char *stream, int search_length, uint32_t *lap,
 	return offset;
 }
 
-/* Matching a specific LAP */
+/* Matching a specific LAP. Reads as far as the search above, and is called
+ * with a 'search_length' bounded the same way. */
 int find_known_lap(char *stream, int search_length, uint32_t lap,
 				   int max_ac_errors, uint8_t *ac_errors) {
 	uint64_t syncword, ac;
@@ -457,11 +463,25 @@ int find_known_lap(char *stream, int search_length, uint32_t lap,
 	return offset;
 }
 
-/* Looks for an AC in the stream */
-int btbb_find_ac(char *stream, int search_length, uint32_t lap,
-				 int max_ac_errors, btbb_packet **pkt_ptr) {
+/* Looks for an AC in the stream it is given, and no further */
+int btbb_find_ac_n(char *stream, size_t stream_len, int search_length,
+				   uint32_t lap, int max_ac_errors,
+				   btbb_packet **pkt_ptr) {
 	int offset;
 	uint8_t ac_errors;
+
+	/*
+	 * Each offset searched is tried as the start of a sync word, so the
+	 * last offset the stream holds one of is stream_len - SYNCWORD_SYMBOLS,
+	 * and a stream shorter than a sync word holds none at all. Searching
+	 * past that would read symbols the caller never passed.
+	 */
+	if (search_length < 0)
+		search_length = 0;
+	if (stream_len < SYNCWORD_SYMBOLS)
+		search_length = 0;
+	else if ((size_t) search_length > stream_len - (SYNCWORD_SYMBOLS - 1))
+		search_length = (int) (stream_len - (SYNCWORD_SYMBOLS - 1));
 
 	/* Matching any LAP */
 	if (lap == LAP_ANY)
@@ -478,6 +498,17 @@ int btbb_find_ac(char *stream, int search_length, uint32_t lap,
 	}
 
 	return offset;
+}
+
+/* Looks for an AC in the stream, trusting the caller for its length */
+int btbb_find_ac(char *stream, int search_length, uint32_t lap,
+				 int max_ac_errors, btbb_packet **pkt_ptr) {
+	/* the symbols this form has always read */
+	size_t stream_len = search_length > 0 ?
+		(size_t) search_length + (SYNCWORD_SYMBOLS - 1) : 0;
+
+	return btbb_find_ac_n(stream, stream_len, search_length, lap,
+			      max_ac_errors, pkt_ptr);
 }
 
 /* Copy data (symbols) into packet and set rx data. */

@@ -26,6 +26,10 @@
 /* maximum number of symbols */
 #define MAX_SYMBOLS 3125
 
+/* Symbols in a sync word, the 64 bit field at the centre of the access code,
+ * which is what the access code search matches against. */
+#define SYNCWORD_SYMBOLS 64
+
 /* maximum number of payload bits */
 #define MAX_PAYLOAD_LENGTH 2744
 
