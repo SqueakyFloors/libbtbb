@@ -1361,13 +1361,17 @@ int btbb_decode_header(btbb_packet* pkt)
 	char header[18];
 	uint8_t UAP;
 
+	/* Nothing is known about this packet until it decodes, and a packet
+	 * can be handed new symbols without its decoded state being reset, so
+	 * clear every answer before the first return below. */
+	btbb_packet_set_flag(pkt, BTBB_HEC_CHECKED, 0);
+	btbb_packet_set_flag(pkt, BTBB_HEC_VALID, 0);
+	btbb_packet_set_flag(pkt, BTBB_CRC_CHECKED, 0);
+	btbb_packet_set_flag(pkt, BTBB_CRC_CORRECT, 0);
+
 	/* check that we have enough symbols */
 	if (pkt->length < 122)
 		return 0;
-
-	/* Nothing is known about this header until it decodes. */
-	btbb_packet_set_flag(pkt, BTBB_HEC_CHECKED, 0);
-	btbb_packet_set_flag(pkt, BTBB_HEC_VALID, 0);
 
 	if (btbb_packet_get_flag(pkt, BTBB_CLK6_VALID) && unfec13(stream, header, 18)) {
 		unwhiten(header, pkt->packet_header, pkt->clkn, 18, 0, pkt);

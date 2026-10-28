@@ -854,6 +854,69 @@ static void test_bredr_uap_search(void)
 }
 
 /*
+ * A packet handed new symbols keeps its decoded state until something
+ * replaces it, so a capture that reuses one packet for every frame, as the
+ * Ubertooth host does, must not carry one frame's results into the next.
+ */
+static void test_bredr_reused_packet(void)
+{
+	const char *filename = "test_capture_reuse.pcapng";
+	char header_symbols[55];
+	char stream[1024];
+	btbb_pcapng_handle *h = NULL;
+	btbb_packet *pkt = NULL;
+	size_t blk, data;
+	int length;
+
+	unlink_quietly(filename);
+	strcpy(header_symbols, SPEC_DH1_HEADER);
+	length = build_bredr_stream(stream, SPEC_DH1_LAP, header_symbols,
+				    SPEC_DH1_PAYLOAD);
+	CHECK(btbb_find_ac(stream, 1, SPEC_DH1_LAP, 0, &pkt) == 0);
+	CHECK(pkt != NULL);
+	if (pkt == NULL)
+		return;
+	btbb_packet_set_data(pkt, stream, length, 0, 0);
+	btbb_packet_set_flag(pkt, BTBB_WHITENED, 0);
+	btbb_packet_set_flag(pkt, BTBB_CLK6_VALID, 1);
+	btbb_packet_set_uap(pkt, SPEC_DH1_UAP);
+	CHECK(btbb_decode_header(pkt) == 1);
+	CHECK(btbb_decode_payload(pkt) == 10);
+	CHECK(btbb_packet_get_flag(pkt, BTBB_CRC_CORRECT));
+
+	/* the same packet, handed a capture too short to hold a header */
+	btbb_packet_set_data(pkt, stream, 121, 0, 0);
+	CHECK(btbb_decode_header(pkt) == 0);
+	CHECK(btbb_packet_get_flag(pkt, BTBB_HEC_CHECKED) == 0);
+	CHECK(btbb_packet_get_flag(pkt, BTBB_HEC_VALID) == 0);
+	CHECK(btbb_packet_get_flag(pkt, BTBB_CRC_CHECKED) == 0);
+	CHECK(btbb_packet_get_flag(pkt, BTBB_CRC_CORRECT) == 0);
+
+	CHECK(btbb_pcapng_create_file(filename, "test", &h) == 0);
+	if (h == NULL) {
+		btbb_packet_unref(pkt);
+		return;
+	}
+	CHECK(btbb_pcapng_append_packet(h, 19ull, -20, -80, SPEC_DH1_LAP,
+					SPEC_DH1_UAP, pkt) == 0);
+	(void) btbb_pcapng_close(h);
+	btbb_packet_unref(pkt);
+
+	CHECK(read_capture(filename));
+	unlink_quietly(filename);
+	if (capture_len == 0)
+		return;
+	blk = find_block(BLOCK_TYPE_ENHANCED_PACKET, 0);
+	CHECK(blk < capture_len);
+	if (blk >= capture_len)
+		return;
+	data = blk + 28;
+	CHECK((rd16(data + 20) &
+	       (BREDR_HEC_CHECKED | BREDR_HEC_VALID |
+		BREDR_CRC_CHECKED | BREDR_CRC_VALID)) == 0);
+}
+
+/*
  * The BD_ADDR and clock options a BR/EDR capture records, and what happens
  * when a capture records more options than the space set aside for them.
  */
@@ -1605,6 +1668,7 @@ int main(void)
 	test_bredr_failed_checks();
 	test_bredr_voice_payload_has_no_crc();
 	test_bredr_uap_search();
+	test_bredr_reused_packet();
 	test_bredr_interface_options();
 	test_bredr_pcap_record();
 	test_le_pcap_records();
