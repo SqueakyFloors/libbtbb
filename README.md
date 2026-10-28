@@ -13,6 +13,14 @@ This software has been developed and tested on Linux, it should work on other
 platforms but this has yet to be tested.
 
 
+Concepts
+========
+
+What this library decodes, and why it has to work the way it does — address
+parts, access code, whitening, clock recovery, the Low Energy connection
+request — is explained in [How Bluetooth sniffing works](https://github.com/SqueakyFloors/ubertooth/blob/main/docs/concepts.md).
+
+
 Build Instructions
 ==================
 
