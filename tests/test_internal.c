@@ -24,6 +24,8 @@
  */
 
 #include <string.h>
+#include <sys/mman.h>
+#include <unistd.h>
 
 #include "bluetooth_packet.c"
 
@@ -413,6 +415,176 @@ static void test_syndrome_map(void)
 	CHECK(find_syndrome(gen_syndrome(DEFAULT_AC ^ 0x7ULL)) == NULL);
 }
 
+/*
+ * The access code search. These cases run it against a stream that ends at a
+ * page the process may not read, so a search that goes past the symbols it
+ * was given does not merely read someone else's memory, it stops the test.
+ */
+#define TEST_LAP 0x345678U
+
+/* Write the first 'symbols' symbols of a sync word into a symbol stream, air
+ * order: symbol i is bit i. */
+static void plant_syncword(char *at, uint64_t syncword, int symbols)
+{
+	int i;
+
+	for (i = 0; i < symbols; i++)
+		at[i] = (char) ((syncword >> i) & 1);
+}
+
+/*
+ * A stream of 'len' symbols whose last symbol is the last byte of a readable
+ * page, with an unreadable page after it. Returns NULL where the mapping
+ * cannot be made, which leaves the caller nothing to test rather than a
+ * failure.
+ */
+static char *guarded_stream(size_t len, char **mapping, size_t *mapping_len)
+{
+	long page = sysconf(_SC_PAGESIZE);
+	size_t pages;
+	char *base;
+
+	if (page <= 0 || len > (size_t) page)
+		return NULL;
+	pages = 2 * (size_t) page;
+	base = mmap(NULL, pages, PROT_READ | PROT_WRITE,
+		    MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+	if (base == MAP_FAILED)
+		return NULL;
+	if (mprotect(base + (size_t) page, (size_t) page, PROT_NONE) != 0) {
+		munmap(base, pages);
+		return NULL;
+	}
+	*mapping = base;
+	*mapping_len = pages;
+	memset(base, 0, (size_t) page);
+	return base + (size_t) page - len;
+}
+
+static void test_find_ac_reads_only_the_stream_it_is_given(void)
+{
+	const size_t len = 200;
+	char *mapping = NULL;
+	size_t mapping_len = 0;
+	char *stream = guarded_stream(len, &mapping, &mapping_len);
+	const uint64_t syncword = btbb_gen_syncword((int) TEST_LAP);
+	/* the last offset the stream holds a whole sync word at */
+	const int last = (int) (len - SYNCWORD_SYMBOLS);
+	btbb_packet *pkt = NULL;
+
+	CHECK(stream != NULL);
+	if (stream == NULL)
+		return;
+
+	/*
+	 * A search length far beyond the stream, which is what the caller
+	 * cannot be checked on: the offsets past 'last' hold no whole sync
+	 * word, and trying them would read the guarded page.
+	 */
+	plant_syncword(stream + last, syncword, SYNCWORD_SYMBOLS);
+	CHECK(btbb_find_ac_n(stream, len, 100000, TEST_LAP, 0, &pkt) == last);
+	CHECK(pkt != NULL);
+	if (pkt != NULL) {
+		CHECK(btbb_packet_get_lap(pkt) == TEST_LAP);
+		CHECK(btbb_packet_get_ac_errors(pkt) == 0);
+		btbb_packet_unref(pkt);
+		pkt = NULL;
+	}
+	/* the same offset, found with no help from the LAP */
+	CHECK(btbb_find_ac_n(stream, len, 100000, LAP_ANY, 0, &pkt) == last);
+	if (pkt != NULL) {
+		CHECK(btbb_packet_get_lap(pkt) == TEST_LAP);
+		btbb_packet_unref(pkt);
+		pkt = NULL;
+	}
+
+	/*
+	 * A sync word whose first symbols are in the stream and whose last
+	 * are not. It is not there to be found: the symbols that would decide
+	 * it are not the caller's.
+	 */
+	memset(stream + last, 0, SYNCWORD_SYMBOLS);
+	plant_syncword(stream + last + 1, syncword, SYNCWORD_SYMBOLS - 1);
+	CHECK(btbb_find_ac_n(stream, len, 100000, TEST_LAP, 0, &pkt) < 0);
+	CHECK(btbb_find_ac_n(stream, len, 100000, LAP_ANY, 0, &pkt) < 0);
+	CHECK(pkt == NULL);
+
+	/*
+	 * The length is a cap on the search, not a floor: a caller asking for
+	 * fewer offsets than the stream holds gets the ones it asked for. The
+	 * sync word is back at the last offset, which a search of 100 offsets
+	 * does not reach.
+	 */
+	memset(stream + last + 1, 0, SYNCWORD_SYMBOLS - 1);
+	plant_syncword(stream + last, syncword, SYNCWORD_SYMBOLS);
+	CHECK(btbb_find_ac_n(stream, len, 100, TEST_LAP, 0, &pkt) < 0);
+	CHECK(btbb_find_ac_n(stream, len, 100, LAP_ANY, 0, &pkt) < 0);
+	CHECK(pkt == NULL);
+	CHECK(btbb_find_ac_n(stream, len, last + 1, TEST_LAP, 0, &pkt) == last);
+	if (pkt != NULL) {
+		btbb_packet_unref(pkt);
+		pkt = NULL;
+	}
+
+	/*
+	 * A stream shorter than one sync word, and an empty one, hold no
+	 * offset to search at all. Here the stream starts at the guarded
+	 * page, so any symbol read would stop the test.
+	 */
+	stream = mapping + mapping_len / 2;
+	CHECK(btbb_find_ac_n(stream, 0, 100000, TEST_LAP, 0, &pkt) < 0);
+	CHECK(btbb_find_ac_n(stream, 0, 100000, LAP_ANY, 0, &pkt) < 0);
+	CHECK(btbb_find_ac_n(stream, SYNCWORD_SYMBOLS - 1, 100000, TEST_LAP, 0,
+			     &pkt) < 0);
+	CHECK(btbb_find_ac_n(stream, SYNCWORD_SYMBOLS - 1, 100000, LAP_ANY, 0,
+			     &pkt) < 0);
+	CHECK(pkt == NULL);
+
+	munmap(mapping, mapping_len);
+}
+
+/*
+ * The form without a length reads what its search length asks for, which is
+ * what it has always read, so the two forms search the same offsets when the
+ * length is the one that form implies.
+ */
+static void test_find_ac_without_a_length_searches_the_same_offsets(void)
+{
+	char stream[300];
+	const uint64_t syncword = btbb_gen_syncword((int) TEST_LAP);
+	btbb_packet *pkt = NULL;
+	int search_length;
+
+	memset(stream, 0, sizeof(stream));
+	plant_syncword(stream + 120, syncword, SYNCWORD_SYMBOLS);
+
+	/* reaching the sync word, and stopping one offset short of it */
+	for (search_length = 121; search_length >= 120; search_length--) {
+		const size_t len = (size_t) search_length +
+			(SYNCWORD_SYMBOLS - 1);
+		const int expected = search_length > 120 ? 120 : -1;
+
+		CHECK(btbb_find_ac(stream, search_length, TEST_LAP, 0, &pkt) ==
+		      expected);
+		CHECK(btbb_find_ac_n(stream, len, search_length, TEST_LAP, 0,
+				     &pkt) == expected);
+		CHECK(btbb_find_ac(stream, search_length, LAP_ANY, 0, &pkt) ==
+		      expected);
+		CHECK(btbb_find_ac_n(stream, len, search_length, LAP_ANY, 0,
+				     &pkt) == expected);
+	}
+	if (pkt != NULL)
+		btbb_packet_unref(pkt);
+
+	/* nothing is searched for, and nothing read, at either entry point */
+	pkt = NULL;
+	CHECK(btbb_find_ac(NULL, 0, TEST_LAP, 0, &pkt) < 0);
+	CHECK(btbb_find_ac(NULL, -1, LAP_ANY, 0, &pkt) < 0);
+	CHECK(btbb_find_ac_n(NULL, 0, 0, TEST_LAP, 0, &pkt) < 0);
+	CHECK(btbb_find_ac_n(NULL, 0, -1, LAP_ANY, 0, &pkt) < 0);
+	CHECK(pkt == NULL);
+}
+
 int main(void)
 {
 	test_unfec23();
@@ -424,6 +596,8 @@ int main(void)
 	test_header_decode();
 	test_gen_syndrome();
 	test_syndrome_map();
+	test_find_ac_reads_only_the_stream_it_is_given();
+	test_find_ac_without_a_length_searches_the_same_offsets();
 
 	if (failures != 0) {
 		printf("%d check(s) failed\n", failures);

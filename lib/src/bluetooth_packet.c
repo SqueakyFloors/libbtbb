@@ -376,6 +376,11 @@ uint8_t btbb_packet_get_ac_errors(const btbb_packet *pkt) {
 	return pkt->ac_errors;
 }
 
+/*
+ * Matching any LAP. 'search_length' offsets are tried, each as the start of a
+ * sync word, so this reads search_length + SYNCWORD_SYMBOLS - 1 symbols:
+ * btbb_find_ac_n() has already cut it down to the symbols the caller holds.
+ */
 int promiscuous_packet_search(char *stream, int search_length, uint32_t *lap,
 							  int max_ac_errors, uint8_t *ac_errors) {
 	uint64_t syncword, codeword, syndrome, corrected_barker;
@@ -398,10 +403,10 @@ int promiscuous_packet_search(char *stream, int search_length, uint32_t *lap,
 	for (count = 0; count < search_length; count++) {
 		symbols = &stream[count];
 		barker >>= 1;
-		barker |= (symbols[63] << 6);
+		barker |= (symbols[SYNCWORD_SYMBOLS - 1] << 6);
 		if (BARKER_DISTANCE[barker] <= MAX_BARKER_ERRORS) {
 			// Error correction
-			syncword = air_to_host64(symbols, 64);
+			syncword = air_to_host64(symbols, SYNCWORD_SYMBOLS);
 
 			/* correct the barker code with a simple comparison */
 			corrected_barker = barker_correct[(uint8_t)(syncword >> 57)];
@@ -436,7 +441,8 @@ int promiscuous_packet_search(char *stream, int search_length, uint32_t *lap,
 	return offset;
 }
 
-/* Matching a specific LAP */
+/* Matching a specific LAP. Reads as far as the search above, and is called
+ * with a 'search_length' bounded the same way. */
 int find_known_lap(char *stream, int search_length, uint32_t lap,
 				   int max_ac_errors, uint8_t *ac_errors) {
 	uint64_t syncword, ac;
@@ -446,7 +452,7 @@ int find_known_lap(char *stream, int search_length, uint32_t lap,
 	ac = btbb_gen_syncword(lap);
 	for (count = 0; count < search_length; count++) {
 		symbols = &stream[count];
-		syncword = air_to_host64(symbols, 64);
+		syncword = air_to_host64(symbols, SYNCWORD_SYMBOLS);
 		*ac_errors = count_bits(syncword ^ ac);
 
 		if (*ac_errors <= max_ac_errors) {
@@ -457,11 +463,25 @@ int find_known_lap(char *stream, int search_length, uint32_t lap,
 	return offset;
 }
 
-/* Looks for an AC in the stream */
-int btbb_find_ac(char *stream, int search_length, uint32_t lap,
-				 int max_ac_errors, btbb_packet **pkt_ptr) {
+/* Looks for an AC in the stream it is given, and no further */
+int btbb_find_ac_n(char *stream, size_t stream_len, int search_length,
+				   uint32_t lap, int max_ac_errors,
+				   btbb_packet **pkt_ptr) {
 	int offset;
 	uint8_t ac_errors;
+
+	/*
+	 * Each offset searched is tried as the start of a sync word, so the
+	 * last offset the stream holds one of is stream_len - SYNCWORD_SYMBOLS,
+	 * and a stream shorter than a sync word holds none at all. Searching
+	 * past that would read symbols the caller never passed.
+	 */
+	if (search_length < 0)
+		search_length = 0;
+	if (stream_len < SYNCWORD_SYMBOLS)
+		search_length = 0;
+	else if ((size_t) search_length > stream_len - (SYNCWORD_SYMBOLS - 1))
+		search_length = (int) (stream_len - (SYNCWORD_SYMBOLS - 1));
 
 	/* Matching any LAP */
 	if (lap == LAP_ANY)
@@ -478,6 +498,28 @@ int btbb_find_ac(char *stream, int search_length, uint32_t lap,
 	}
 
 	return offset;
+}
+
+/* Looks for an AC in the stream, trusting the caller for its length */
+int btbb_find_ac(char *stream, int search_length, uint32_t lap,
+				 int max_ac_errors, btbb_packet **pkt_ptr) {
+	/* the symbols this form has always read */
+	size_t stream_len = 0;
+
+	if (search_length > 0) {
+		stream_len = (size_t) search_length;
+		/* No sum where size_t is no wider than int. A search length
+		 * that close to the maximum is not one any caller makes, and
+		 * the largest length there is reads no less than it asked
+		 * for. */
+		if (stream_len <= SIZE_MAX - (SYNCWORD_SYMBOLS - 1))
+			stream_len += SYNCWORD_SYMBOLS - 1;
+		else
+			stream_len = SIZE_MAX;
+	}
+
+	return btbb_find_ac_n(stream, stream_len, search_length, lap,
+			      max_ac_errors, pkt_ptr);
 }
 
 /* Copy data (symbols) into packet and set rx data. */
@@ -1863,12 +1905,12 @@ int btbb_decode(btbb_packet* pkt)
 		rv =  btbb_decode_payload(pkt);
 	}
 
-	/* If we were successful, print the packet */
-	if(rv > 0) {
-		printf("Packet decoded with clock 0x%02x (rv=%d)\n", pkt->clkn & 0x3f, rv);
-		btbb_print_packet(pkt);
-	}
-
+	/* Decoding prints nothing. A caller that wants the packet reported
+	 * calls btbb_print_packet(), which btbb_process_packet() does for a
+	 * packet of a piconet it is following. This used to print the packet
+	 * itself whenever one decoded, so a followed packet was printed
+	 * twice, and any other caller got a dump on stdout it had not asked
+	 * for. */
 	return rv;
 }
 

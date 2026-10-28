@@ -39,6 +39,9 @@
 #define BTBB_GOT_FIRST_PACKET  10
 #define BTBB_IS_AFH            11
 #define BTBB_LOOKS_LIKE_AFH    12
+/* BTBB_IS_ALIASED is vestigial: aliased hop reversal is not
+   implemented, so btbb_init_hop_reversal() refuses it and never sets
+   this flag. */
 #define BTBB_IS_ALIASED        13
 #define BTBB_FOLLOWING         14
 
@@ -91,11 +94,17 @@ void btbb_packet_unref(btbb_packet *pkt);
  * 'max_ac_errors' bit errors.
  *
  * Every one of the first 'search_length' symbols of 'stream' is tried
- * as the start of the 64 symbol sync word, so 'stream' must hold
- * search_length + 63 symbols, and nothing at all for a search_length
- * of zero, which reads none of it. The search reads no further than
- * that; decoding a packet it finds needs the rest of the packet, which
+ * as the start of the 64 symbol sync word, so the search reads
+ * search_length + 63 symbols, and none at all for a search_length of
+ * zero. Decoding a packet it finds needs the rest of the packet, which
  * the caller passes separately to btbb_packet_set_data().
+ *
+ * The _n form is the one to call: it takes the number of symbols
+ * 'stream' holds and searches only the offsets that hold a whole sync
+ * word, which is stream_len - 63 of them, so it reads no further than
+ * the caller's symbols however large a search_length it is given. The
+ * form without a length cannot check that, and reads whatever
+ * search_length asks for.
  *
  * Returns offset into 'stream' at which packet was found. If no
  * packet was found, returns a negative number. On a match a packet is
@@ -103,6 +112,12 @@ void btbb_packet_unref(btbb_packet *pkt);
  * the number of access code bit errors, which the caller reads back
  * with btbb_packet_get_lap() and btbb_packet_get_ac_errors(). */
 int btbb_find_ac(char *stream,
+	       int search_length,
+	       uint32_t lap,
+	       int max_ac_errors,
+	       btbb_packet **pkt);
+int btbb_find_ac_n(char *stream,
+	       size_t stream_len,
 	       int search_length,
 	       uint32_t lap,
 	       int max_ac_errors,
@@ -276,12 +291,22 @@ int btbb_uap_from_header(btbb_packet *pkt, btbb_piconet *pn);
 /* Print hexadecimal representation of the derived AFH map */
 void btbb_print_afh_map(btbb_piconet *pn);
 
-/* decode a whole packet from the given piconet */
+/* Decode a whole packet from the given piconet: the header, and the
+ * payload if the header decoded. Returns what btbb_decode_payload()
+ * returned, or 0 where the header did not decode. Prints nothing;
+ * btbb_print_packet() is what reports a decoded packet. */
 int btbb_decode(btbb_packet* pkt);
 
 
-/* initialize the hop reversal process */
-/* returns number of initial candidates for CLK1-27 */
+/* Start recovering CLK1-27 from the hops observed so far. Returns the
+ * number of candidate clock values left, which is zero where there is
+ * nothing to work with.
+ *
+ * Hops as an aliased receiver observes them, folded from 79 channels
+ * into 25, are not reversed: a nonzero 'aliased' chooses no
+ * candidates, returns zero and leaves the piconet as it was, with a
+ * note on stderr. It used to be accepted and then reversed as if
+ * unaliased, against channels such a receiver never reports. */
 int btbb_init_hop_reversal(int aliased, btbb_piconet *pn);
 
 /* narrow a list of candidate clock values based on all observed hops */

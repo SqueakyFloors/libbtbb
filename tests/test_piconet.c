@@ -48,6 +48,8 @@ static void *counted_malloc(size_t size);
 
 #undef malloc
 
+#include "stream_capture.h"
+
 static size_t largest_request;	/* bytes, since it was last reset */
 static int allocation_calls;	/* calls, since it was last reset */
 static int refuse_allocations;
@@ -171,6 +173,16 @@ static void first_hop(btbb_piconet *pn, uint8_t channel)
 	pn->pattern_indices[0] = 0;
 	pn->pattern_channels[0] = channel;
 	pn->packets_observed = 1;
+}
+
+/* Start capturing both streams, counting a failure to do so as one. */
+static int capture_or_fail(void)
+{
+	if (capture_start() == 0)
+		return 0;
+	printf("FAIL: could not capture the output\n");
+	++failures;
+	return -1;
 }
 
 static int candidate_listed(btbb_piconet *pn, uint32_t clk1_27)
@@ -1119,6 +1131,148 @@ static void test_a_clock_the_caller_set_is_kept(void)
 	btbb_piconet_unref(pn);
 }
 
+/*
+ * Everything UAP and clock discovery has to say about its progress goes to
+ * stderr. A tool that dumps its capture to stdout would otherwise have these
+ * lines in the dump, with nothing to tell them from capture data.
+ */
+static void test_discovery_notes_go_to_stderr(void)
+{
+	btbb_piconet *pn = discovered(NULL, 0);
+	char out[4096], err[4096];
+	uint32_t offset;
+
+	first_hop(pn, channel_at(pn, 0));
+	if (capture_or_fail() != 0) {
+		btbb_piconet_unref(pn);
+		return;
+	}
+	/* the candidate list, and the hops that narrow it to the clock */
+	btbb_init_hop_reversal(0, pn);
+	for (offset = 100; offset < 100 * 40; offset += 100) {
+		observe(pn, (int) offset, channel_at(pn, offset));
+		if (btbb_piconet_get_flag(pn, BTBB_CLK27_VALID))
+			break;
+	}
+	/* and the AFH map, which is a caller's own request to print */
+	btbb_print_afh_map(pn);
+	capture_stop(out, sizeof(out), err, sizeof(err));
+
+	CHECK(btbb_piconet_get_flag(pn, BTBB_CLK27_VALID));
+	CHECK(strstr(err, "initial CLK1-27 candidates") != NULL);
+	CHECK(strstr(err, "Acquired CLK1-27") != NULL);
+	/* nothing of the discovery on stdout, and the map still on it */
+	CHECK(strstr(out, "CLK1-27") == NULL);
+	CHECK(strncmp(out, "AFH map: 0x", 11) == 0);
+	CHECK(strstr(err, "AFH map: 0x") == NULL);
+	if (failures != 0)
+		printf("stdout was: %s\nstderr was: %s\n", out, err);
+	btbb_piconet_unref(pn);
+}
+
+/* The same, for the notes the paths that give up write. */
+static void test_discovery_complaints_go_to_stderr(void)
+{
+	char symbols[400];
+	btbb_packet *pkt = btbb_packet_new();
+	btbb_piconet *pn = discovered(NULL, 0);
+	char out[4096], err[4096];
+
+	memset(symbols, 0, sizeof(symbols));
+	first_hop(pn, channel_at(pn, 0));
+	CHECK(btbb_init_hop_reversal(0, pn) > 1);
+	/* the remembered pattern is full, which starts discovery over */
+	pn->packets_observed = MAX_PATTERN_LENGTH;
+	btbb_packet_set_data(pkt, symbols, (int) sizeof(symbols), 11,
+			     (pn->first_pkt_time + 123) << 1);
+
+	if (capture_or_fail() != 0) {
+		btbb_packet_unref(pkt);
+		btbb_piconet_unref(pn);
+		return;
+	}
+	try_hop(pkt, pn);
+	capture_stop(out, sizeof(out), err, sizeof(err));
+
+	CHECK(strstr(err, "More hops than we can remember") != NULL);
+	CHECK_EQ(0, strlen(out));
+	if (failures != 0)
+		printf("stdout was: %s\nstderr was: %s\n", out, err);
+	btbb_packet_unref(pkt);
+	btbb_piconet_unref(pn);
+}
+
+/*
+ * Reversing the hops an aliased receiver observes is not implemented, so
+ * asking for it is refused rather than served with ordinary hop reversal.
+ * The piconet's 'aliased' field, which decided this, was never assigned, so
+ * a caller passing 1 used to get candidates chosen against unfolded
+ * channels - channels such a receiver never reports - and no sign of it.
+ */
+static void test_aliased_hop_reversal_is_refused(void)
+{
+	btbb_piconet *pn = discovered(NULL, 0);
+	char out[4096], err[4096];
+
+	first_hop(pn, channel_at(pn, 0));
+	if (capture_or_fail() != 0) {
+		btbb_piconet_unref(pn);
+		return;
+	}
+	CHECK_EQ(0, btbb_init_hop_reversal(1, pn));
+	capture_stop(out, sizeof(out), err, sizeof(err));
+
+	CHECK(strstr(err, "aliased hop reversal is not implemented") != NULL);
+	CHECK_EQ(0, strlen(out));
+	/* nothing was started, so nothing has to be given up either */
+	CHECK_EQ(0, pn->num_candidates);
+	CHECK(pn->clock_candidates == NULL);
+	CHECK(!btbb_piconet_get_flag(pn, BTBB_HOP_REVERSAL_INIT));
+	CHECK(!btbb_piconet_get_flag(pn, BTBB_IS_ALIASED));
+
+	/* and ordinary hop reversal is unaffected */
+	CHECK(btbb_init_hop_reversal(0, pn) > 1);
+	CHECK(!btbb_piconet_get_flag(pn, BTBB_IS_ALIASED));
+	if (failures != 0)
+		printf("stdout was: %s\nstderr was: %s\n", out, err);
+	btbb_piconet_unref(pn);
+}
+
+/*
+ * A refused aliased request changes nothing, so a piconet already recovering
+ * its clock the ordinary way carries on: the candidates it has chosen, and
+ * the state it chose them under, are still its own.
+ */
+static void test_a_refused_aliased_request_leaves_recovery_alone(void)
+{
+	btbb_piconet *pn = discovered(NULL, 0);
+	uint32_t *candidates;
+	char out[4096], err[4096];
+	int count;
+
+	first_hop(pn, channel_at(pn, 0));
+	count = btbb_init_hop_reversal(0, pn);
+	CHECK(count > 1);
+	candidates = pn->clock_candidates;
+
+	if (capture_or_fail() != 0) {
+		btbb_piconet_unref(pn);
+		return;
+	}
+	CHECK_EQ(0, btbb_init_hop_reversal(1, pn));
+	capture_stop(out, sizeof(out), err, sizeof(err));
+
+	CHECK(strstr(err, "aliased hop reversal is not implemented") != NULL);
+	CHECK_EQ(count, pn->num_candidates);
+	CHECK(pn->clock_candidates == candidates);
+	CHECK(btbb_piconet_get_flag(pn, BTBB_HOP_REVERSAL_INIT));
+	/* and the hops that follow still narrow that list to the clock */
+	observe(pn, 100, channel_at(pn, 100));
+	CHECK(pn->num_candidates > 0);
+	CHECK(pn->num_candidates < count);
+	btbb_piconet_unref(pn);
+}
+
 int main(void)
 {
 	test_afh_candidates_fit_their_list();
@@ -1135,6 +1289,9 @@ int main(void)
 	test_an_allocation_failure_partway_through_the_list();
 	test_the_clock_is_confirmed_before_it_is_accepted();
 	test_a_wrong_clock_is_not_accepted_on_a_short_map();
+	test_discovery_notes_go_to_stderr();
+	test_discovery_complaints_go_to_stderr();
+	test_aliased_hop_reversal_is_refused();
 	test_the_clocks_of_the_device_and_the_observer_differ();
 	test_every_candidate_agrees_on_clk1_6();
 	test_a_run_of_header_failures_gives_up_the_clock();
@@ -1142,6 +1299,7 @@ int main(void)
 	test_a_header_that_checks_out_ends_the_run();
 	test_a_failed_payload_is_not_evidence();
 	test_a_clock_the_caller_set_is_kept();
+	test_a_refused_aliased_request_leaves_recovery_alone();
 
 	if (failures != 0) {
 		printf("%d check(s) failed\n", failures);

@@ -23,12 +23,32 @@
 #include "bluetooth_packet.h"
 #include "bluetooth_piconet.h"
 #include "uthash.h"
+#include <stdarg.h>
 #include <stdlib.h>
 #include <stdio.h>
 #include <string.h>
 
 int perm_table_initialized = 0;
 char perm_table[0x20][0x20][0x200];
+
+/* Report how UAP and clock discovery is getting on. These go to stderr so
+ * that a tool dumping capture data to stdout holds nothing but the dump,
+ * which is the rule the LE decode complaints follow too. What the caller
+ * asked to be printed, btbb_print_afh_map() below, still goes to stdout. */
+#ifdef __GNUC__
+__attribute__((format(printf, 1, 2)))
+#endif
+static void piconet_note(const char *fmt, ...)
+{
+	va_list ap;
+
+	/* keep the two streams in order when both are a terminal */
+	fflush(stdout);
+	va_start(ap, fmt);
+	vfprintf(stderr, fmt, ap);
+	va_end(ap);
+	fflush(stderr);
+}
 
 /* reset UAP/clock discovery */
 static void reset(btbb_piconet *pn);
@@ -340,6 +360,9 @@ char single_hop(int clock, btbb_piconet *pn)
 	base_f = (clock >> 3) & 0x1fffff0;
 	f = base_f % BT_NUM_CHANNELS;
 
+	/* Under AFH, CLK1 is masked off above, so y1 and y2 are zero and both
+	 * terms below drop out. They are kept so that this reads line for line
+	 * like next_hop() in the Ubertooth firmware. */
 	perm = fast_perm(
 		((x + a) % 32) ^ pn->b,
 		(y1 * 0x1f) ^ c,
@@ -356,20 +379,12 @@ char single_hop(int clock, btbb_piconet *pn)
 	return next_channel;
 }
 
-static char aliased_channel(char channel)
-{
-	return ((channel + 24) % ALIASED_CHANNELS) + 26;
-}
-
-/* The channel a CLK1-27 value hops to, as the receiver observes it. */
+/* The channel a CLK1-27 value hops to, which is the channel a packet sent at
+ * that clock is observed on. */
 static char observed_channel(uint32_t clk1_27, btbb_piconet *pn)
 {
 	/* single_hop() takes CLKN, which is CLK1-27 shifted up by one. */
-	char channel = single_hop((int) (clk1_27 << 1), pn);
-
-	if (pn->aliased)
-		return aliased_channel(channel);
-	return channel;
+	return single_hop((int) (clk1_27 << 1), pn);
 }
 
 /*
@@ -481,6 +496,21 @@ int btbb_init_hop_reversal(int aliased, btbb_piconet *pn)
 	int count;
 	int restarted = btbb_piconet_get_flag(pn, BTBB_HOP_REVERSAL_INIT);
 
+	/*
+	 * An aliased receiver observes the 79 channels folded into 25, so the
+	 * candidates would have to be chosen and winnowed against folded
+	 * channels. That is not implemented, and asking for it used to be
+	 * accepted and then quietly reversed as if unaliased, which chooses
+	 * the candidates against channels the receiver never reports.
+	 *
+	 * A refused request changes nothing, so a piconet already recovering
+	 * its clock the ordinary way carries on doing that.
+	 */
+	if (aliased) {
+		piconet_note("aliased hop reversal is not implemented\n");
+		return 0;
+	}
+
 	/* A second call replaces the candidates of the first. */
 	free(pn->clock_candidates);
 	pn->clock_candidates = NULL;
@@ -503,7 +533,9 @@ int btbb_init_hop_reversal(int aliased, btbb_piconet *pn)
 	channel_map(pn, pn->candidates_afh_map);
 	btbb_piconet_set_flag(pn, BTBB_HOP_REVERSAL_INIT, 1);
 	btbb_piconet_set_flag(pn, BTBB_CLK27_VALID, 0);
-	btbb_piconet_set_flag(pn, BTBB_IS_ALIASED, aliased);
+	/* the hops being reversed are the piconet's own, not an aliased
+	 * receiver's view of them */
+	btbb_piconet_set_flag(pn, BTBB_IS_ALIASED, 0);
 
 	/* The piconet's CLK1-6 when the first packet arrived: the observer's
 	 * own CLK1-27 at that moment, whose low 6 bits are its CLK1-6, plus
@@ -518,10 +550,11 @@ int btbb_init_hop_reversal(int aliased, btbb_piconet *pn)
 		pn->num_candidates = count;
 
 	if (restarted)
-		printf("%d CLK1-27 candidates for the new AFH map\n",
-		       pn->num_candidates);
+		piconet_note("%d CLK1-27 candidates for the new AFH map\n",
+			     pn->num_candidates);
 	else
-		printf("%d initial CLK1-27 candidates\n", pn->num_candidates);
+		piconet_note("%d initial CLK1-27 candidates\n",
+			     pn->num_candidates);
 
 	return pn->num_candidates;
 }
@@ -539,7 +572,7 @@ void try_hop(btbb_packet *pkt, btbb_piconet *pn)
 		 * btbb_uap_from_header(): start over rather than write past
 		 * the end of it. */
 		if (pn->packets_observed >= MAX_PATTERN_LENGTH) {
-			printf("Oops. More hops than we can remember.\n");
+			piconet_note("Oops. More hops than we can remember.\n");
 			reset(pn);
 			return;
 		}
@@ -553,15 +586,15 @@ void try_hop(btbb_packet *pkt, btbb_piconet *pn)
 		pn->total_packets_observed++;
 		btbb_winnow(pn);
 		if (btbb_piconet_get_flag(pn, BTBB_CLK27_VALID)) {
-			printf("got CLK1-27\n");
-			printf("clock offset = %d.\n", pn->clk_offset);
+			piconet_note("got CLK1-27\n");
+			piconet_note("clock offset = %d.\n", pn->clk_offset);
 		}
 	} else {
 		if (btbb_piconet_get_flag(pn, BTBB_CLK6_VALID)) {
 			btbb_uap_from_header(pkt, pn);
 			if (btbb_piconet_get_flag(pn, BTBB_CLK27_VALID)) {
-				printf("got CLK1-27\n");
-				printf("clock offset = %d.\n", pn->clk_offset);
+				piconet_note("got CLK1-27\n");
+				piconet_note("clock offset = %d.\n", pn->clk_offset);
 			}
 		} else {
 			if (btbb_uap_from_header(pkt, pn)) {
@@ -569,7 +602,7 @@ void try_hop(btbb_packet *pkt, btbb_piconet *pn)
 					btbb_init_hop_reversal(0, pn);
 					btbb_winnow(pn);
 				} else {
-					printf("failed to confirm UAP\n");
+					piconet_note("failed to confirm UAP\n");
 				}
 			}
 		}
@@ -581,7 +614,6 @@ void try_hop(btbb_packet *pkt, btbb_piconet *pn)
 	}
 }
 
-/* return the observable channel (26-50) for a given channel (0-78) */
 /* reset UAP/clock discovery */
 static void reset(btbb_piconet *pn)
 {
@@ -651,7 +683,11 @@ static int channel_winnow(int offset, char channel, btbb_piconet *pn)
 			 * shift both CLK1-27 values up by one. */
 			pn->clk_offset = (int) ((pn->clock_candidates[0] << 1) -
 						(pn->first_pkt_time << 1));
-			printf("\nAcquired CLK1-27 = 0x%07x\n", pn->clock_candidates[0]);
+			/* The leading newline this line used to carry broke it
+			 * out of the dump it landed in the middle of; on
+			 * stderr it is a blank line and nothing more. */
+			piconet_note("Acquired CLK1-27 = 0x%07x\n",
+				     pn->clock_candidates[0]);
 			btbb_piconet_set_flag(pn, BTBB_CLK27_VALID, 1);
 			/* The library's own, so the library may give it up
 			 * again if following it does not work out. */
@@ -716,8 +752,7 @@ int btbb_winnow(btbb_piconet *pn)
 	if (btbb_piconet_get_flag(pn, BTBB_HOP_REVERSAL_INIT) &&
 	    !btbb_piconet_get_flag(pn, BTBB_CLK27_VALID) &&
 	    candidates_superseded(pn)) {
-		new_count = btbb_init_hop_reversal(
-			btbb_piconet_get_flag(pn, BTBB_IS_ALIASED), pn);
+		new_count = btbb_init_hop_reversal(0, pn);
 		if (new_count == 0) {
 			reset(pn);
 			return 0;
@@ -749,7 +784,7 @@ int btbb_winnow(btbb_piconet *pn)
 			    && (index == last_index + 1)
 			    && (channel == last_channel)) {
 				btbb_piconet_set_flag(pn, BTBB_LOOKS_LIKE_AFH, 1);
-				printf("Hopping pattern appears to be AFH\n");
+				piconet_note("Hopping pattern appears to be AFH\n");
 			}
 		}
 	}
@@ -782,7 +817,7 @@ int btbb_uap_from_header(btbb_packet *pkt, btbb_piconet *pn)
 			clk1_27 - pn->first_pkt_time;
 		pn->pattern_channels[pn->packets_observed] = pkt->channel;
 	} else {
-		printf("Oops. More hops than we can remember.\n");
+		piconet_note("Oops. More hops than we can remember.\n");
 		reset(pn);
 		return 0; //FIXME ought to throw exception
 	}
@@ -826,11 +861,11 @@ int btbb_uap_from_header(btbb_packet *pkt, btbb_piconet *pn)
 			default: /* CRC success */
 				pn->clk6_offset = (count - (pn->first_pkt_time & 0x3f)) & 0x3f;
 				if (!btbb_piconet_get_flag(pn, BTBB_UAP_VALID))
-					printf("Correct CRC! UAP = 0x%x found after %d total packets.\n",
-						UAP, pn->total_packets_observed);
+					piconet_note("Correct CRC! UAP = 0x%x found after %d total packets.\n",
+						     UAP, pn->total_packets_observed);
 				else
-					printf("Correct CRC! CLK6 = 0x%x found after %d total packets.\n",
-						pn->clk6_offset, pn->total_packets_observed);
+					piconet_note("Correct CRC! CLK6 = 0x%x found after %d total packets.\n",
+						     pn->clk6_offset, pn->total_packets_observed);
 				pn->UAP = UAP;
 				btbb_piconet_set_flag(pn, BTBB_CLK6_VALID, 1);
 				btbb_piconet_set_flag(pn, BTBB_UAP_VALID, 1);
@@ -845,11 +880,13 @@ int btbb_uap_from_header(btbb_packet *pkt, btbb_piconet *pn)
 	if (remaining == 1) {
 		pn->clk6_offset = (first_clock - (pn->first_pkt_time & 0x3f)) & 0x3f;
 		if (!btbb_piconet_get_flag(pn, BTBB_UAP_VALID))
-			printf("UAP = 0x%x found after %d total packets.\n",
-				pn->clock6_candidates[first_clock], pn->total_packets_observed);
+			piconet_note("UAP = 0x%x found after %d total packets.\n",
+				     pn->clock6_candidates[first_clock],
+				     pn->total_packets_observed);
 		else
-			printf("CLK6 = 0x%x found after %d total packets.\n",
-				pn->clk6_offset, pn->total_packets_observed);
+			piconet_note("CLK6 = 0x%x found after %d total packets.\n",
+				     pn->clk6_offset,
+				     pn->total_packets_observed);
 		pn->UAP = pn->clock6_candidates[first_clock];
 		btbb_piconet_set_flag(pn, BTBB_CLK6_VALID, 1);
 		btbb_piconet_set_flag(pn, BTBB_UAP_VALID, 1);
@@ -992,7 +1029,7 @@ int btbb_process_packet(btbb_packet *pkt, btbb_piconet *pn) {
 			if(btbb_decode(pkt))
 				btbb_print_packet(pkt);
 			else
-				printf("Failed to decode packet\n");
+				piconet_note("Failed to decode packet\n");
 
 			/*
 			 * The header's HEC is the only thing here that says

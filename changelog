@@ -17,6 +17,27 @@ libbtbb (2020-12-R1+fork5) unstable; urgency=low
     connections in them. lell_pcapng_append_packet() now returns
     LELL_PCAPNG_CONNECT_INFO_NOT_RECORDED, a positive value where its errors
     are negative, so a capture tool can warn once.
+  * Decoding a packet no longer prints it. btbb_decode() wrote "Packet decoded
+    with clock 0x.. (rv=..)", which carries a number meaningful only inside the
+    library, and a dump of the packet, both to stdout, whenever a packet
+    decoded. A tool following a piconet had every packet printed twice, once
+    there and once where it asked for it; any other caller got a dump it had
+    not asked for at all. btbb_print_packet() prints a packet as it always
+    has.
+  * Progress and complaints from UAP and clock discovery go to stderr. About
+    twenty lines of running commentary ("1234 initial CLK1-27 candidates",
+    "Acquired CLK1-27 = 0x1234567", "failed to confirm UAP" and the rest) used
+    to go to stdout, so a tool dumping its capture there had them mixed into
+    the dump with nothing to tell them from capture data. The AFH map a caller
+    asks for with btbb_print_afh_map() is still printed on stdout.
+  * btbb_find_ac_n() searches a symbol stream whose length it is told, and
+    reads no further whatever search length it is given. btbb_find_ac(), whose
+    signature carries no length to check, is unchanged: it reads the
+    search_length + 63 symbols it always has.
+  * Asking for aliased hop reversal, where a receiver observes the 79 channels
+    folded into 25, is refused with a note on stderr. It used to be accepted
+    and then reversed as if unaliased, choosing clock candidates against
+    channels such a receiver never reports.
   * The hopping sequence notes ("Calculating complete hopping sequence.",
     "Hopping sequence calculated." and "Found hopping sequence in cache.") are
     gone, along with the sequence they announced. A tool streaming its capture
