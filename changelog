@@ -141,10 +141,11 @@ libbtbb (2020-12-R1+fork5) unstable; urgency=low
     int cannot hold a UAP of 0x80 or more shifted up 24 places, so predicting
     hops for one of those addresses was undefined behaviour, which the
     sanitizers report.
-  * Two symbols the library exported, hop() and get_hop_pattern(), are gone
-    with the hopping sequence. Neither is declared in btbb.h, so no documented
-    caller can be using them, but a program linked against an older libbtbb
-    that called them will not find them in this one.
+  * Three symbols the library exported, hop(), gen_hop_pattern() and
+    get_hop_pattern(), are gone with the hopping sequence. None of them is
+    declared in btbb.h, so no documented caller can be using them, but a
+    program linked against an older libbtbb that called them will not find
+    them in this one.
 
  -- Russell Wagner <152923636+SqueakyFloors@users.noreply.github.com>  27 Oct 2026 22:30:00 -0700
 
