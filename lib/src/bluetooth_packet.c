@@ -43,6 +43,17 @@
 /* Default access code, used for calculating syndromes */
 #define DEFAULT_AC 0xcc7b7268ff614e1bULL
 
+/*
+ * The packet header is 18 bits, and Vol 2, Part B, Section 7.2 runs the
+ * whitening generator over the header and the payload without reinitializing
+ * it in between, so a payload continues this far into the sequence.
+ */
+#define HEADER_WHITENING_BITS 18
+
+/* The DV packet's voice field comes before its data field and is whitened
+ * too (Vol 2, Part B, Section 6.5.2.4). */
+#define DV_VOICE_BITS 80
+
 /* index into whitening data array */
 static const uint8_t INDICES[] = {99, 85, 17, 50, 102, 58, 108, 45, 92, 62, 32, 118, 88, 11, 80, 2, 37, 69, 55, 8, 20, 40, 74, 114, 15, 106, 30, 78, 53, 72, 28, 26, 68, 7, 39, 113, 105, 77, 71, 25, 84, 49, 57, 44, 61, 117, 10, 1, 123, 124, 22, 125, 111, 23, 42, 126, 6, 112, 76, 24, 48, 43, 116, 0};
 
@@ -772,6 +783,12 @@ static int payload_crc(btbb_packet* pkt)
 	uint16_t crc;   /* CRC calculated from payload data */
 	uint16_t check; /* CRC supplied by packet */
 
+	/* A payload cannot be shorter than the two byte CRC it carries plus
+	 * the byte the CRC covers, so below that there is no CRC to check and
+	 * reading one would read from before the payload. */
+	if (pkt->payload_length < 3)
+		return 0;
+
 	crc = crcgen(pkt->payload, (pkt->payload_length - 2) * 8, pkt->UAP);
 	check = air_to_host16(&pkt->payload[(pkt->payload_length - 2) * 8], 16);
 
@@ -795,7 +812,8 @@ int fhs(int clock, btbb_packet* pkt)
 		return 0;
 
 	/* try to unwhiten with known clock bits */
-	unwhiten(corrected, pkt->payload, clock, pkt->payload_length * 8, 18, pkt);
+	unwhiten(corrected, pkt->payload, clock, pkt->payload_length * 8,
+		 HEADER_WHITENING_BITS, pkt);
 	if (payload_crc(pkt)) {
 		free(corrected);
 		return 1000;
@@ -803,7 +821,8 @@ int fhs(int clock, btbb_packet* pkt)
 
 	/* try all 32 possible X-input values instead */
 	for (clock = 32; clock < 64; clock++) {
-		unwhiten(corrected, pkt->payload, clock, pkt->payload_length * 8, 18, pkt);
+		unwhiten(corrected, pkt->payload, clock,
+			 pkt->payload_length * 8, HEADER_WHITENING_BITS, pkt);
 		if (payload_crc(pkt)) {
 			free(corrected);
 			return 1000;
@@ -815,7 +834,6 @@ int fhs(int clock, btbb_packet* pkt)
 	return 0;
 }
 
-/* decode payload header, return value indicates success */
 /*
  * Decode the payload header, return value indicates success.
  *
@@ -923,18 +941,18 @@ int DM(int clock, btbb_packet* pkt)
 	/* number of symbols remaining after access code and packet header */
 	int size = pkt->length - 122;
 	/* whitening bits the packet header has already used up */
-	int skip = 18;
+	int skip = HEADER_WHITENING_BITS;
 
 	switch(pkt->packet_type)
 	{
 		case PACKET_TYPE_DV:
-			/* skip 80 voice bits, then treat the rest like a DM1 */
-			stream += 80;
-			size -= 80;
+			/* skip the voice bits, then treat the rest like a DM1 */
+			stream += DV_VOICE_BITS;
+			size -= DV_VOICE_BITS;
 			header_bytes = 1;
 			/* the voice field is whitened too, so the data field
-			 * continues 80 bits further into the sequence */
-			skip += 80;
+			 * continues that much further into the sequence */
+			skip += DV_VOICE_BITS;
 			/* I don't think the length of the voice field ("synchronous data
 			 * field") is included in the length indicated by the payload
 			 * header in the data field ("asynchronous data field"), but I
@@ -1008,7 +1026,8 @@ int DH(int clock, btbb_packet* pkt)
 		default: /* not a DH1/3/5 */
 			return 0;
 	}
-	if(!decode_payload_header(stream, clock, header_bytes, size, 0, 18, pkt))
+	if(!decode_payload_header(stream, clock, header_bytes, size, 0,
+				  HEADER_WHITENING_BITS, pkt))
 		return 0;
 	/* check that the length indicated in the payload header is within spec */
 	if(pkt->payload_length > max_length)
@@ -1018,10 +1037,11 @@ int DH(int clock, btbb_packet* pkt)
 	if(bitlength > size)
 		return 1; //FIXME should throw exception
 
-	unwhiten(stream, pkt->payload, clock, bitlength, 18, pkt);
+	unwhiten(stream, pkt->payload, clock, bitlength,
+		 HEADER_WHITENING_BITS, pkt);
 
 	/* AUX1 has no CRC */
-	if (pkt->packet_type == 9)
+	if (pkt->packet_type == PACKET_TYPE_AUX1)
 		return 2;
 
 	if (payload_crc(pkt))
@@ -1043,7 +1063,7 @@ int EV3(int clock, btbb_packet* pkt)
 	int maxlength = 32;
 
 	/* the shortest eSCO payload is one information byte and the two byte
-	 * CRC (Vol 2, Part B, Section 6.5.3.2) */
+	 * CRC (Vol 2, Part B, Section 6.5.3.1) */
 	int minlength = 3;
 
 	/* number of bits we have decoded */
@@ -1062,9 +1082,14 @@ int EV3(int clock, btbb_packet* pkt)
 		bits = (pkt->payload_length - 1) * 8;
 
 		/* unwhiten next byte */
-		if ((bits + 8) > size)
+		if ((bits + 8) > size) {
+			/* the capture ran out, so the bytes decoded so far are
+			 * all the payload there is to report */
+			pkt->payload_length--;
 			return 1; //FIXME should throw exception
-		unwhiten(stream + bits, pkt->payload + bits, clock, 8, 18 + bits, pkt);
+		}
+		unwhiten(stream + bits, pkt->payload + bits, clock, 8,
+			 HEADER_WHITENING_BITS + bits, pkt);
 
 		if ((pkt->payload_length >= minlength) && (payload_crc(pkt)))
 				return 10;
@@ -1092,7 +1117,7 @@ int EV4(int clock, btbb_packet* pkt)
 	/* the shortest eSCO payload is one information byte and the two byte
 	 * CRC (Vol 2, Part B, Section 6.5.3.2), which comes to 45 symbols */
 	int minbytes = 3;
-	int minlength = 45;
+	int minlength = ((minbytes * 8 + 9) / 10) * 15;
 
 	int syms = 0; /* number of symbols we have decoded */
 	int bits = 0; /* number of payload bits we have decoded */
@@ -1111,7 +1136,8 @@ int EV4(int clock, btbb_packet* pkt)
 			else
 				return 1;
 		}
-		unwhiten(corrected, pkt->payload + bits, clock, 10, 18 + bits, pkt);
+		unwhiten(corrected, pkt->payload + bits, clock, 10,
+			 HEADER_WHITENING_BITS + bits, pkt);
 		free(corrected);
 
 		syms += 15;
@@ -1146,7 +1172,7 @@ int EV5(int clock, btbb_packet* pkt)
 	int maxlength = 182;
 
 	/* the shortest eSCO payload is one information byte and the two byte
-	 * CRC (Vol 2, Part B, Section 6.5.3.2) */
+	 * CRC (Vol 2, Part B, Section 6.5.3.3) */
 	int minlength = 3;
 
 	/* number of bits we have decoded */
@@ -1165,9 +1191,14 @@ int EV5(int clock, btbb_packet* pkt)
 		bits = (pkt->payload_length - 1) * 8;
 
 		/* unwhiten next byte */
-		if ((bits + 8) > size)
+		if ((bits + 8) > size) {
+			/* the capture ran out, so the bytes decoded so far are
+			 * all the payload there is to report */
+			pkt->payload_length--;
 			return 1; //FIXME should throw exception
-		unwhiten(stream + bits, pkt->payload + bits, clock, 8, 18 + bits, pkt);
+		}
+		unwhiten(stream + bits, pkt->payload + bits, clock, 8,
+			 HEADER_WHITENING_BITS + bits, pkt);
 
 		if ((pkt->payload_length >= minlength) && (payload_crc(pkt)))
 				return 10;
@@ -1199,7 +1230,9 @@ int HV(int clock, btbb_packet* pkt)
 				return 0;
 			pkt->payload_length = 10;
 			btbb_packet_set_flag(pkt, BTBB_HAS_PAYLOAD, 1);
-			unwhiten(corrected, pkt->payload, clock, pkt->payload_length*8, 18, pkt);
+			unwhiten(corrected, pkt->payload, clock,
+				 pkt->payload_length*8,
+				 HEADER_WHITENING_BITS, pkt);
 			}
 			break;
 		case PACKET_TYPE_HV2:
@@ -1209,14 +1242,18 @@ int HV(int clock, btbb_packet* pkt)
 				return 0;
 			pkt->payload_length = 20;
 			btbb_packet_set_flag(pkt, BTBB_HAS_PAYLOAD, 1);
-			unwhiten(corrected, pkt->payload, clock, pkt->payload_length*8, 18, pkt);
+			unwhiten(corrected, pkt->payload, clock,
+				 pkt->payload_length*8,
+				 HEADER_WHITENING_BITS, pkt);
 			free(corrected);
 			}
 			break;
 		case PACKET_TYPE_HV3:
 			pkt->payload_length = 30;
 			btbb_packet_set_flag(pkt, BTBB_HAS_PAYLOAD, 1);
-			unwhiten(stream, pkt->payload, clock, pkt->payload_length*8, 18, pkt);
+			unwhiten(stream, pkt->payload, clock,
+				 pkt->payload_length*8,
+				 HEADER_WHITENING_BITS, pkt);
 			break;
 	}
 

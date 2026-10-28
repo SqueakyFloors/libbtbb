@@ -703,7 +703,10 @@ static const struct {
 	{ "DH3",  PACKET_TYPE_DH3,  2, 183, 1, 0, 187 },
 	{ "DM5",  PACKET_TYPE_DM5,  2, 224, 1, 1, 228 },
 	{ "DH5",  PACKET_TYPE_DH5,  2, 339, 1, 0, 343 },
-	{ "AUX1", PACKET_TYPE_AUX1, 1,  29, 0, 0,  30 }
+	{ "AUX1", PACKET_TYPE_AUX1, 1,  29, 0, 0,  30 },
+	/* a short AUX1 too: at the longest body the clamp would hide a length
+	 * that wrongly counted a CRC this type does not carry */
+	{ "AUX1", PACKET_TYPE_AUX1, 1,   9, 0, 0,  10 }
 };
 
 #define N_ACL_TYPES ((int) (sizeof(ACL_TYPES) / sizeof(ACL_TYPES[0])))
@@ -773,7 +776,7 @@ static void test_acl_payload_lengths(void)
 	for (row = 0; row < N_ACL_TYPES; row++) {
 		char payload[MAX_SYMBOLS];
 		char stream[MAX_SYMBOLS];
-		char packed[343];
+		char packed[MAX_PAYLOAD_LENGTH / 8];
 		uint16_t header_data;
 		uint8_t hec;
 		btbb_packet *pkt;
@@ -839,7 +842,8 @@ static void test_acl_payload_length_clamped(void)
 		{ PACKET_TYPE_DM3, 2, 999, 125 },
 		{ PACKET_TYPE_DH3, 2, 999, 187 },
 		{ PACKET_TYPE_DM5, 2, 999, 228 },
-		{ PACKET_TYPE_DH5, 2, 999, 343 }
+		{ PACKET_TYPE_DH5, 2, 999, 343 },
+		{ PACKET_TYPE_AUX1, 1, 31,  30 }
 	};
 	size_t row;
 
@@ -973,7 +977,7 @@ static void test_esco_payload_lengths(void)
 		char bits[(180 + 2) * 8 + 10];
 		char payload[MAX_SYMBOLS];
 		char stream[MAX_SYMBOLS];
-		char packed[182];
+		char packed[MAX_PAYLOAD_LENGTH / 8];
 		uint16_t header_data;
 		btbb_packet *pkt;
 		int data_bits = (CASES[row].body + 2) * 8;
@@ -1041,12 +1045,12 @@ static void test_esco_payload_lengths(void)
  * the whole payload in one run without reinitializing the register, so the
  * data field continues from bit 98: 18 header bits and 80 voice bits.
  */
-static void test_dv_payload(void)
+static void test_dv_payload_at_clock(int clock)
 {
 	char bits[12 * 8 + 10];
 	char payload[80 + 15 * 10];
 	char stream[MAX_SYMBOLS];
-	char packed[12];
+	char packed[MAX_PAYLOAD_LENGTH / 8];
 	uint16_t header_data;
 	btbb_packet *pkt;
 	const int body = 9;
@@ -1054,7 +1058,6 @@ static void test_dv_payload(void)
 	int blocks = (data_bits + 9) / 10;
 	int length, i, bit;
 	uint16_t crc;
-	const int clock = 0x07;
 
 	memset(bits, 0, sizeof(bits));
 	/* a one byte payload header: logical channel 10, flow 1, length 9 */
@@ -1100,6 +1103,19 @@ static void test_dv_payload(void)
 		CHECK((uint8_t) packed[1 + i] == (uint8_t) (0x50 + i));
 
 	btbb_packet_unref(pkt);
+}
+
+/*
+ * Whether the data field is dewhitened from the right place shows at some
+ * clock values and not others, because at the rest the length field happens to
+ * come out the same either way, so every clock is tried.
+ */
+static void test_dv_payload(void)
+{
+	int clock;
+
+	for (clock = 0; clock < 64; clock++)
+		test_dv_payload_at_clock(clock);
 }
 
 /*
@@ -1156,6 +1172,36 @@ static void test_fhs_payload(void)
 	CHECK(uap_from_fhs(pkt) == uap);
 	CHECK(nap_from_fhs(pkt) == nap);
 	CHECK(clock_from_fhs(pkt) == clk2_27);
+
+	btbb_packet_unref(pkt);
+}
+
+/*
+ * A payload cannot be shorter than the two byte CRC it carries plus the byte
+ * that CRC covers, so there is no CRC to check below three bytes. Checking one
+ * there reads from before the payload, which is how the eSCO length search
+ * used to accept a packet it had not checked.
+ */
+static void test_payload_crc_needs_a_payload(void)
+{
+	btbb_packet *pkt = btbb_packet_new();
+
+	CHECK(pkt != NULL);
+	if (pkt == NULL)
+		return;
+	/*
+	 * A UAP of zero is the default check initialization of Section 1.2.1,
+	 * and it is also the case a length check has to catch: the CRC of no
+	 * data is then zero, and so is everything the check would be read
+	 * from, so without the length check the two match and the packet is
+	 * accepted having been checked against nothing.
+	 */
+	pkt->UAP = 0x00;
+	memset(pkt->payload, 0, sizeof(pkt->payload));
+
+	for (pkt->payload_length = 0; pkt->payload_length < 3;
+	     pkt->payload_length++)
+		CHECK(payload_crc(pkt) == 0);
 
 	btbb_packet_unref(pkt);
 }
@@ -1286,6 +1332,7 @@ int main(void)
 	test_sco_payload_lengths();
 	test_esco_payload_lengths();
 	test_dv_payload();
+	test_payload_crc_needs_a_payload();
 	test_fhs_payload();
 	test_packets_without_payload();
 	test_uap_and_clock_recovery();
