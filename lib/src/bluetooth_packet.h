@@ -102,6 +102,16 @@ struct btbb_packet {
 	uint32_t clkn;     /* CLK1-27 of the packet */
 	uint8_t ac_errors; /* Number of bit errors in the AC */
 
+	/* How many bits the forward error correction had to put right, which
+	* the capture file writers record. The header's count is over its 18
+	* bits, so 0 to 18. The payload's is over the payload that was
+	* decoded, and is only meaningful where the type carries FEC: 0 to 80
+	* bits for the rate 1/3 code, and one bit per 15-symbol block for the
+	* rate 2/3 code. Both are 0 until something is decoded.
+	*/
+	uint8_t corrected_header_bits;
+	int16_t corrected_payload_bits;
+
 	/* the raw symbol stream (less the preamble), one bit per char */
 	//FIXME maybe this should be a vector so we can grow it only
 	//to the size needed and later shrink it if we find we have

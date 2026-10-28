@@ -164,6 +164,37 @@ static size_t find_option(size_t block_off, size_t options_at, uint16_t code,
 	return 0;
 }
 
+/*
+ * Walk the records of a pcap file in capture[] and return how many whole ones
+ * it holds. A record is a 16-byte header whose third word is the length of
+ * the data after it, so a file that ends part way through a record ends on a
+ * length reaching past its last byte, which is what a reader chokes on.
+ * Returns -1 for such a file.
+ */
+static int count_pcap_records(void)
+{
+	size_t off = 24;	/* the file header */
+	int records = 0;
+
+	while (off < capture_len) {
+		size_t incl_len;
+
+		if (off + 16 > capture_len) {
+			printf("FAIL record header at %zu is cut short\n", off);
+			return -1;
+		}
+		incl_len = rd32(off + 8);
+		if (off + 16 + incl_len > capture_len) {
+			printf("FAIL record at %zu says %zu bytes, file has "
+			       "%zu\n", off, incl_len, capture_len - off - 16);
+			return -1;
+		}
+		off += 16 + incl_len;
+		records++;
+	}
+	return records;
+}
+
 /* ------------------------------ test packets ----------------------------- */
 
 /*
@@ -1019,6 +1050,183 @@ static void test_bredr_reused_packet(void)
 }
 
 /*
+ * A payload the decoder could not read is not reported as one. The flag the
+ * record writers and btbb_print_packet() read used to be set on every decode,
+ * so a packet whose payload did not decode was reported with whatever the
+ * last packet decoded into the same object had left behind.
+ */
+static void test_bredr_undecoded_payload_is_not_reported(void)
+{
+	char header_symbols[55];
+	char stream[1024];
+	btbb_packet *pkt = NULL;
+	int length, i;
+	int payload_is_clear = 1;
+
+	strcpy(header_symbols, SPEC_DH1_HEADER);
+	length = build_bredr_stream(stream, SPEC_DH1_LAP, header_symbols,
+				    SPEC_DH1_PAYLOAD);
+	CHECK(btbb_find_ac(stream, 1, SPEC_DH1_LAP, 0, &pkt) == 0);
+	CHECK(pkt != NULL);
+	if (pkt == NULL)
+		return;
+	btbb_packet_set_flag(pkt, BTBB_WHITENED, 0);
+	btbb_packet_set_flag(pkt, BTBB_CLK6_VALID, 1);
+	btbb_packet_set_uap(pkt, SPEC_DH1_UAP);
+
+	/* the whole packet first, so the object holds a decoded payload */
+	btbb_packet_set_data(pkt, stream, length, 0, 0);
+	CHECK(btbb_decode_header(pkt) == 1);
+	CHECK(btbb_decode_payload(pkt) == 10);
+	CHECK(btbb_packet_get_flag(pkt, BTBB_HAS_PAYLOAD) == 1);
+	CHECK(btbb_packet_get_payload_length(pkt) == 8);
+
+	/* the same object handed a capture that ends two bytes into the
+	   payload: the header still decodes, the payload cannot */
+	btbb_packet_set_data(pkt, stream, 122 + 16, 0, 0);
+	CHECK(btbb_decode_header(pkt) == 1);
+	CHECK(btbb_decode_payload(pkt) == 1);
+	CHECK(btbb_packet_get_payload_length(pkt) == 0);
+	CHECK(btbb_packet_get_flag(pkt, BTBB_HAS_PAYLOAD) == 0);
+
+	/* and the bytes of the first decode are no longer in the field */
+	for (i = 0; i < 8 * 8; i++) {
+		if (pkt->payload[i] != 0)
+			payload_is_clear = 0;
+	}
+	CHECK(payload_is_clear);
+
+	btbb_packet_unref(pkt);
+}
+
+/*
+ * The corrected-bits fields of a BR/EDR record. The format gives neither a
+ * validity flag, so a reader takes both at face value, and both writers used
+ * to fill them with 0 whatever the forward error correction had done.
+ *
+ * An HV1 is the case where both fields are interesting at once: its header
+ * and its payload are both carried by the rate 1/3 code, which corrects any
+ * single wrong symbol of a triple.
+ */
+static void test_bredr_corrected_bits(void)
+{
+	const char *filename = "test_capture_corrected.pcapng";
+	const char *pcap_name = "test_capture_corrected.pcap";
+	/* LT_ADDR 1, TYPE 5 (HV1) */
+	const uint16_t header_data = (uint16_t) (1 | (5 << 3));
+	/* the payload bytes an HV1 carries: 10, with no CRC */
+	static const uint8_t HV1_BYTES[10] = {
+		0x01, 0x02, 0x03, 0x04, 0x05, 0xf6, 0xa7, 0x18, 0x29, 0xbb
+	};
+	char header_symbols[55];
+	char payload[241];
+	char stream[1024];
+	btbb_packet *pkt;
+	size_t blk, data;
+	int hec, length, byte, bit, i, pass;
+
+	hec = hec_for(header_data, SPEC_DH1_UAP);
+	CHECK(hec >= 0);
+	if (hec < 0)
+		return;
+
+	/* each payload bit sent three times, least significant bit first */
+	for (byte = 0; byte < 10; byte++) {
+		for (bit = 0; bit < 8; bit++) {
+			char value = (char)
+				('0' + ((HV1_BYTES[byte] >> bit) & 1));
+			int at = (byte * 8 + bit) * 3;
+
+			payload[at] = value;
+			payload[at + 1] = value;
+			payload[at + 2] = value;
+		}
+	}
+	payload[240] = '\0';
+
+	/*
+	 * Twice: the packet as sent, and the same packet with one symbol of
+	 * the header and one of the payload wrong. The majority vote puts
+	 * both back, so the record carries the same payload either way and
+	 * only the counts differ.
+	 */
+	for (pass = 0; pass < 2; pass++) {
+		btbb_pcapng_handle *h = NULL;
+		btbb_pcap_handle *ph = NULL;
+		const uint8_t expected = pass == 0 ? 0 : 1;
+
+		encode_header_13(header_data, (uint8_t) hec, header_symbols);
+		if (pass == 1) {
+			header_symbols[1] = (char)
+				('0' + '1' - header_symbols[1]);
+			payload[4] = (char) ('0' + '1' - payload[4]);
+		}
+		length = build_bredr_stream(stream, SPEC_DH1_LAP,
+					    header_symbols, payload);
+		CHECK(length == 122 + 240);
+		pkt = decode_bredr(stream, length, SPEC_DH1_UAP);
+		CHECK(pkt != NULL);
+		if (pkt == NULL)
+			return;
+		CHECK(btbb_packet_get_type(pkt) == 5);		/* HV1 */
+		CHECK(btbb_packet_get_payload_length(pkt) == 10);
+		CHECK(pkt->corrected_header_bits == expected);
+		CHECK(pkt->corrected_payload_bits == expected);
+
+		unlink_quietly(filename);
+		CHECK(btbb_pcapng_create_file(filename, "test", &h) == 0);
+		if (h != NULL) {
+			CHECK(btbb_pcapng_append_packet(h, 23ull, -20, -80,
+							SPEC_DH1_LAP,
+							SPEC_DH1_UAP,
+							pkt) == 0);
+			(void) btbb_pcapng_close(h);
+		}
+		unlink_quietly(pcap_name);
+		CHECK(btbb_pcap_create_file(pcap_name, &ph) == 0);
+		if (ph != NULL) {
+			CHECK(btbb_pcap_append_packet(ph, 23ull, -20, -80,
+						      SPEC_DH1_LAP,
+						      SPEC_DH1_UAP,
+						      pkt) == 0);
+			CHECK(btbb_pcap_close(ph) == 0);
+		}
+		btbb_packet_unref(pkt);
+
+		/* the pcapng record */
+		CHECK(read_capture(filename));
+		unlink_quietly(filename);
+		if (capture_len == 0)
+			return;
+		blk = find_block(BLOCK_TYPE_ENHANCED_PACKET, 0);
+		CHECK(blk < capture_len);
+		if (blk >= capture_len)
+			return;
+		data = blk + 28;
+		CHECK(capture[data + 5] == expected);
+		CHECK(rd16(data + 6) == expected);
+		CHECK((rd16(data + 20) & BREDR_PAYLOAD_PRESENT) != 0);
+		for (i = 0; i < 10; i++)
+			CHECK(capture[data + 22 + i] == HV1_BYTES[i]);
+
+		/* and the plain pcap record, which has the same layout after
+		   its 16-byte record header */
+		if (ph != NULL) {
+			CHECK(read_capture(pcap_name));
+			unlink_quietly(pcap_name);
+			if (capture_len == 0)
+				return;
+			data = 24 + 16;
+			CHECK(capture[data + 5] == expected);
+			CHECK(rd16(data + 6) == expected);
+			for (i = 0; i < 10; i++)
+				CHECK(capture[data + 22 + i] ==
+				      HV1_BYTES[i]);
+		}
+	}
+}
+
+/*
  * The BD_ADDR and clock options a BR/EDR capture records, and what happens
  * when a capture records more options than the space set aside for them.
  */
@@ -1691,18 +1899,20 @@ static void test_write_errors(void)
 		unlink_quietly(full);
 	}
 
-	/* the plain pcap writer reports it too, through the buffered writes
-	   stdio makes on its behalf */
+	/* The plain pcap writer reports it too, and leaves the file ending on
+	   a whole record, as the pcapng writer does with a block. */
 	if (getrlimit(RLIMIT_FSIZE, &saved) == 0) {
 		const char *small = "test_capture_small.pcap";
 
 		limited = saved;
-		/* room for the 24-byte file header and one record, not more */
+		/* room for the 24-byte file header and one 46-byte record,
+		   and part of a second: the write that fails is one stdio
+		   has already put a prefix of on disk */
 		limited.rlim_cur = 100;
 		if (setrlimit(RLIMIT_FSIZE, &limited) == 0) {
 			void (*old_xfsz)(int) = signal(SIGXFSZ, SIG_IGN);
 			btbb_pcap_handle *ph = NULL;
-			int i, failed = 0;
+			int i, written = 0, failed = 0;
 
 			unlink_quietly(small);
 			CHECK(btbb_pcap_create_file(small, &ph) == 0);
@@ -1714,11 +1924,18 @@ static void test_write_errors(void)
 					failed = 1;
 					break;
 				}
+				written++;
 			}
 			CHECK(failed);
+			CHECK(written > 0);
 			if (ph != NULL) {
 				(void) btbb_pcap_close(ph);
 			}
+			/* nothing of the record that failed is in the file:
+			   the length is the file header and the records that
+			   were written whole */
+			CHECK(read_capture(small));
+			CHECK(count_pcap_records() == written);
 			unlink_quietly(small);
 			CHECK(setrlimit(RLIMIT_FSIZE, &saved) == 0);
 			(void) signal(SIGXFSZ, old_xfsz);
@@ -1772,6 +1989,8 @@ int main(void)
 	test_bredr_esco_crc_reported();
 	test_bredr_uap_search();
 	test_bredr_reused_packet();
+	test_bredr_undecoded_payload_is_not_reported();
+	test_bredr_corrected_bits();
 	test_bredr_interface_options();
 	test_bredr_pcap_record();
 	test_le_pcap_records();

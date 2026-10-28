@@ -514,6 +514,7 @@ static void test_fec13_single_symbol_correction(void)
 	static const uint32_t DATA[] = { 0x00000, 0x3ffff, 0x12345, 0x2aaaa };
 	size_t row;
 	int bit, position;
+	int corrected = -1;
 
 	for (row = 0; row < sizeof(DATA) / sizeof(DATA[0]); row++) {
 		char encoded[54];
@@ -527,12 +528,16 @@ static void test_fec13_single_symbol_correction(void)
 			encoded[bit * 3 + 2] = value;
 		}
 
-		CHECK(unfec13(encoded, decoded, 18));
+		CHECK(unfec13(encoded, decoded, 18, &corrected));
+		CHECK(corrected == 0);
 		CHECK(air_to_host32(decoded, 18) == (DATA[row] & 0x3ffff));
 
 		for (position = 0; position < 54; position++) {
 			encoded[position] ^= 1;
-			CHECK(unfec13(encoded, decoded, 18));
+			CHECK(unfec13(encoded, decoded, 18, &corrected));
+			/* whichever symbol of the triple it is, the bit it
+			 * belongs to is the one corrected */
+			CHECK(corrected == 1);
 			CHECK(air_to_host32(decoded, 18) ==
 			      (DATA[row] & 0x3ffff));
 			encoded[position] ^= 1;
@@ -638,7 +643,7 @@ static void test_dh1_sample_packet(void)
 	{
 		char decoded[18];
 
-		CHECK(unfec13(header_symbols, decoded, 18));
+		CHECK(unfec13(header_symbols, decoded, 18, NULL));
 		CHECK(air_to_host16(decoded, 10) == 0x123);
 		CHECK(air_to_host8(&decoded[10], 8) == 0x06);
 		CHECK(spec_hec(0x123, 0x47) == 0x06);
@@ -709,7 +714,7 @@ static void test_dm1_sample_packet(void)
 	{
 		char decoded[18];
 
-		CHECK(unfec13(header_symbols, decoded, 18));
+		CHECK(unfec13(header_symbols, decoded, 18, NULL));
 		CHECK(air_to_host16(decoded, 10) == 0x11b);
 		CHECK(air_to_host8(&decoded[10], 8) == 0x79);
 		CHECK(spec_hec(0x11b, 0x47) == 0x79);
@@ -750,6 +755,50 @@ static void test_dm1_sample_packet(void)
 	for (i = 0; i < 5; i++)
 		CHECK((uint8_t) packed[1 + i] == (uint8_t) (i + 1));
 
+	/* Nothing in this packet needed putting right, which is what a
+	 * capture file's corrected-bits fields then say. */
+	CHECK(pkt->corrected_header_bits == 0);
+	CHECK(pkt->corrected_payload_bits == 0);
+
+	btbb_packet_unref(pkt);
+
+	/*
+	 * One wrong data symbol in a rate 2/3 block: the code puts it back,
+	 * so the payload decodes the same and its CRC still comes out, and
+	 * the count is the one bit per block it had to correct.
+	 *
+	 * The first block carries the payload header, which the decoder reads
+	 * on its own before decoding the whole payload, so a correction there
+	 * is counted once rather than twice.
+	 */
+	for (i = 0; i < 7; i++) {
+		payload[i * 15 + 2] ^= 1;
+		length = build_packet(stream, 0x9e8b33, 0x11b, 0x79, payload,
+				      payload_symbols, 0, 0);
+		pkt = packet_for(stream, length, 0x47, 0, 0);
+		CHECK(pkt != NULL);
+		if (pkt == NULL)
+			return;
+		CHECK(btbb_decode_header(pkt) == 1);
+		CHECK(btbb_decode_payload(pkt) == 10);
+		CHECK(btbb_packet_get_payload_length(pkt) == 8);
+		CHECK(pkt->corrected_payload_bits == 1);
+		btbb_packet_unref(pkt);
+		payload[i * 15 + 2] ^= 1;
+	}
+
+	/* two blocks, two corrected bits */
+	payload[1 * 15 + 2] ^= 1;
+	payload[4 * 15 + 2] ^= 1;
+	length = build_packet(stream, 0x9e8b33, 0x11b, 0x79, payload,
+			      payload_symbols, 0, 0);
+	pkt = packet_for(stream, length, 0x47, 0, 0);
+	CHECK(pkt != NULL);
+	if (pkt == NULL)
+		return;
+	CHECK(btbb_decode_header(pkt) == 1);
+	CHECK(btbb_decode_payload(pkt) == 10);
+	CHECK(pkt->corrected_payload_bits == 2);
 	btbb_packet_unref(pkt);
 }
 
@@ -1103,6 +1152,7 @@ static void test_uncorrectable_payload_fec(void)
 		CHECK(btbb_decode_header(pkt) == 1);
 		CHECK(btbb_decode_payload(pkt) == 0);
 		CHECK(btbb_packet_get_payload_length(pkt) == 0);
+		CHECK(btbb_packet_get_flag(pkt, BTBB_HAS_PAYLOAD) == 0);
 		btbb_packet_unref(pkt);
 	}
 
@@ -1132,6 +1182,7 @@ static void test_uncorrectable_payload_fec(void)
 		CHECK(btbb_decode_header(pkt) == 1);
 		CHECK(btbb_decode_payload(pkt) == 0);
 		CHECK(btbb_packet_get_payload_length(pkt) == 0);
+		CHECK(btbb_packet_get_flag(pkt, BTBB_HAS_PAYLOAD) == 0);
 		btbb_packet_unref(pkt);
 	}
 
@@ -1886,6 +1937,9 @@ static void test_packets_without_payload(void)
 		CHECK(btbb_decode_header(pkt) == 1);
 		CHECK(btbb_decode_payload(pkt) == 1);
 		CHECK(btbb_packet_get_payload_length(pkt) == 0);
+		/* these types have no payload to report, which the flag the
+		 * writers read has to say as well as the length */
+		CHECK(btbb_packet_get_flag(pkt, BTBB_HAS_PAYLOAD) == 0);
 		btbb_packet_unref(pkt);
 	}
 

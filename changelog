@@ -150,6 +150,35 @@ libbtbb (2020-12-R1+fork5) unstable; urgency=low
     int cannot hold a UAP of 0x80 or more shifted up 24 places, so predicting
     hops for one of those addresses was undefined behaviour, which the
     sanitizers report.
+  * A packet whose payload did not decode no longer says it has one.
+    BTBB_HAS_PAYLOAD was set on every decode, and it is the flag the capture
+    writers and btbb_print_packet() read to decide whether there is a payload
+    to report, so a packet the decoder gave up on was reported with the
+    length and bytes the last packet decoded into the same object had left
+    behind - and btbb_find_ac() reuses one object across packets. The flag
+    now says only what was decoded, the payload field is cleared when nothing
+    was, and a packet with no payload still has its type and payload header
+    printed.
+  * BR/EDR records now carry the number of bits the forward error correction
+    put right, in both PCAP and PCAPNG files: the bits of the 18-bit packet
+    header whose three symbols disagreed, and one bit for each rate 2/3 block
+    of the payload whose check symbols did not match its data. Both fields
+    read 0 before, whatever the reception had been, and the format gives
+    neither a flag that would let a reader tell "none" from "not counted".
+  * A PCAP capture that cannot finish writing a record takes it back out, so
+    the file ends on a whole record rather than on a record header whose
+    length runs past the end of the file. The PCAPNG writer already did this
+    with a block. The PCAP writers also write straight through rather than
+    through a buffer, since a buffer cannot be discarded without being
+    flushed first, and each record was already flushed as it was written.
+  * Choosing the CLK1-27 candidates walks the clock values once instead of
+    twice. The walk is 2^21 values, each one's hop computed from the AFH map
+    as it stands, and it runs inside the packet callback of whatever is
+    capturing, every time the map gains a channel that changes the sequence.
+    Measured on an Apple silicon Mac, best of seven: 27-30 ms down to 8-11 ms
+    for the basic sequence, and 41-48 ms down to 21-25 ms with the 20 used
+    channels AFH permits. The candidates are the same ones, and the list is
+    grown as they are found, so they stay inside it however many there are.
   * Three symbols the library exported, hop(), gen_hop_pattern() and
     get_hop_pattern(), are gone with the hopping sequence. None of them is
     declared in btbb.h, so no documented caller can be using them, but a

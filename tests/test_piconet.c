@@ -49,12 +49,14 @@ static void *counted_malloc(size_t size);
 #undef malloc
 
 static size_t largest_request;	/* bytes, since it was last reset */
+static size_t last_request;	/* bytes asked for by the most recent call */
 static int refuse_allocations;
 
 static void *counted_malloc(size_t size)
 {
 	if (size > largest_request)
 		largest_request = size;
+	last_request = size;
 	if (refuse_allocations)
 		return NULL;
 	return malloc(size);
@@ -166,6 +168,10 @@ static void test_afh_candidates_fit_their_list(void)
 	count = btbb_init_hop_reversal(0, pn);
 	CHECK_EQ(count, pn->num_candidates);
 	CHECK(count > old_size);
+	/* The list handed back is exactly as long as the count beside it,
+	 * whatever the sizes it grew through on the way: the last allocation
+	 * made is that size. */
+	CHECK_EQ(sizeof(uint32_t) * (size_t) count, last_request);
 	/* Every candidate really does hop to the observed channel, so the list
 	 * was filled and not merely allocated large enough. */
 	for (i = 0; i < pn->num_candidates; i++)
@@ -336,26 +342,80 @@ static void test_candidates_rechosen_only_for_a_new_sequence(void)
 }
 
 /*
- * Filling the candidate list stops at the size it was given. The count the
- * size comes from is exact, so this cap is only the backstop that keeps a
- * future miscount from writing past the end.
+ * How the candidate list used to be chosen: one walk over the clock values to
+ * count the matches, then a second to write them into a list of exactly that
+ * size.  The library now makes a single walk, growing the list as it goes,
+ * and this is here to say that the candidates it ends up with are the same
+ * ones, in the same order.
  */
-static void test_candidate_fill_stops_at_the_size_given(void)
+static int reference_candidates(btbb_piconet *pn, char channel,
+				int known_clock_bits, uint32_t **out)
 {
-	btbb_piconet *pn = discovered(NULL, 0);
-	uint32_t room_for_eight[8];
-	int i, count;
+	uint32_t clk1_27;
+	int count = 0;
 
-	first_hop(pn, channel_at(pn, 0));
-	count = init_candidates(pn->pattern_channels[0], 0, pn, NULL, 0);
-	CHECK(count > 8);
-	memset(room_for_eight, 0, sizeof(room_for_eight));
-	CHECK_EQ(8, init_candidates(pn->pattern_channels[0], 0, pn,
-				    room_for_eight, 8));
-	for (i = 0; i < 8; i++)
-		CHECK_EQ(pn->pattern_channels[0],
-			 channel_at(pn, room_for_eight[i]));
-	btbb_piconet_unref(pn);
+	*out = NULL;
+	for (clk1_27 = (uint32_t) known_clock_bits; clk1_27 < SEQUENCE_LENGTH;
+	     clk1_27 += 0x40) {
+		if (observed_channel(clk1_27, pn) == channel)
+			count++;
+	}
+	if (count == 0)
+		return 0;
+	*out = (uint32_t *) malloc(sizeof(uint32_t) * (size_t) count);
+	if (*out == NULL)
+		return -1;
+	count = 0;
+	for (clk1_27 = (uint32_t) known_clock_bits; clk1_27 < SEQUENCE_LENGTH;
+	     clk1_27 += 0x40) {
+		if (observed_channel(clk1_27, pn) == channel)
+			(*out)[count++] = clk1_27;
+	}
+	return count;
+}
+
+/*
+ * The single walk finds exactly the candidates the two walks did, for the
+ * basic hopping sequence and for an adaptive one, where a single channel
+ * accounts for one in 20 of the clock values rather than one in 79 and the
+ * list grows several times over.
+ */
+static void test_one_walk_finds_the_same_candidates(void)
+{
+	static const int WITH_AFH[] = { 0, 1 };
+	size_t row;
+
+	for (row = 0; row < sizeof(WITH_AFH) / sizeof(WITH_AFH[0]); row++) {
+		int afh = WITH_AFH[row];
+		btbb_piconet *pn = discovered(afh ? MAP_20 : NULL, afh);
+		uint32_t *expected = NULL;
+		int expected_count;
+		int i;
+
+		first_hop(pn, channel_at(pn, 0));
+		expected_count = reference_candidates(pn,
+						      (char) pn->pattern_channels[0],
+						      0, &expected);
+		CHECK(expected_count > 0);
+		CHECK_EQ(expected_count, btbb_init_hop_reversal(0, pn));
+		CHECK_EQ(expected_count, pn->num_candidates);
+		if (expected == NULL || pn->clock_candidates == NULL) {
+			free(expected);
+			btbb_piconet_unref(pn);
+			continue;
+		}
+		for (i = 0; i < expected_count; i++) {
+			if (pn->clock_candidates[i] != expected[i]) {
+				printf("FAIL candidate %d is 0x%07x, "
+				       "expected 0x%07x\n", i,
+				       pn->clock_candidates[i], expected[i]);
+				++failures;
+				break;
+			}
+		}
+		free(expected);
+		btbb_piconet_unref(pn);
+	}
 }
 
 /*
@@ -584,7 +644,7 @@ int main(void)
 	test_two_hops_on_one_channel_look_like_afh();
 	test_candidates_follow_the_map_as_it_is_learned();
 	test_candidates_rechosen_only_for_a_new_sequence();
-	test_candidate_fill_stops_at_the_size_given();
+	test_one_walk_finds_the_same_candidates();
 	test_clk6_offset_fixes_the_known_clock_bits();
 	test_remembered_pattern_is_bounded();
 	test_set_afh_map_allocates_nothing();

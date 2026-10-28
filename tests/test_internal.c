@@ -97,12 +97,18 @@ static void test_unfec23(void)
 	for (i = 0; i < 20; ++i) {
 		char input[15];
 		char *output;
+		int corrected = -1;
 
 		memcpy(input, FEC23_INPUT[i], sizeof(input));
-		output = unfec23(input, 10);
+		output = unfec23(input, 10, &corrected);
 		CHECK(output != NULL);
 		if (output == NULL)
 			continue;
+
+		/* the first ten cases arrived intact; the last ten each have
+		 * one wrong data bit, which a capture file records as one
+		 * corrected bit */
+		CHECK(corrected == (i < 10 ? 0 : 1));
 
 		for (bit = 0; bit < 10; ++bit) {
 			if (output[bit] != FEC23_EXPECTED[i][bit]) {
@@ -150,15 +156,17 @@ static void test_fec23_round_trip(void)
 		uint16_t codeword = fec23(DATA[i]);
 		char block[15];
 		char *output;
+		int corrected = -1;
 
 		for (bit = 0; bit < 15; ++bit)
 			block[bit] = (char) ((codeword >> bit) & 1);
 
-		output = unfec23(block, 10);
+		output = unfec23(block, 10, &corrected);
 		CHECK(output != NULL);
 		if (output == NULL)
 			continue;
 
+		CHECK(corrected == 0);
 		for (bit = 0; bit < 10; ++bit)
 			CHECK(output[bit] == (char) ((DATA[i] >> bit) & 1));
 		free(output);
@@ -172,6 +180,7 @@ static void test_unfec23_multiple_blocks(void)
 	char blocks[30];
 	char *output;
 	int block, bit;
+	int corrected = -1;
 
 	for (block = 0; block < 2; ++block) {
 		uint16_t codeword = fec23(DATA[block]);
@@ -181,8 +190,9 @@ static void test_unfec23_multiple_blocks(void)
 				(char) ((codeword >> bit) & 1);
 	}
 
-	output = unfec23(blocks, 20);
+	output = unfec23(blocks, 20, &corrected);
 	CHECK(output != NULL);
+	CHECK(corrected == 0);
 	if (output != NULL) {
 		for (bit = 0; bit < 10; ++bit) {
 			CHECK(output[bit] == (char) ((DATA[0] >> bit) & 1));
@@ -193,8 +203,9 @@ static void test_unfec23_multiple_blocks(void)
 	}
 
 	/* 16 bits of data still means two blocks, padded out to 20 */
-	output = unfec23(blocks, 16);
+	output = unfec23(blocks, 16, &corrected);
 	CHECK(output != NULL);
+	CHECK(corrected == 0);
 	if (output != NULL) {
 		for (bit = 0; bit < 10; ++bit)
 			CHECK(output[bit] == (char) ((DATA[0] >> bit) & 1));
@@ -212,13 +223,16 @@ static void test_unfec23_check_bit_error(void)
 	char block[15];
 	char *output;
 	int bit;
+	int corrected = -1;
 
 	for (bit = 0; bit < 15; ++bit)
 		block[bit] = (char) ((codeword >> bit) & 1);
 	block[12] ^= 1;
 
-	output = unfec23(block, 10);
+	output = unfec23(block, 10, &corrected);
 	CHECK(output != NULL);
+	/* the wrong bit is still an errored bit the code dealt with */
+	CHECK(corrected == 1);
 	if (output != NULL) {
 		for (bit = 0; bit < 10; ++bit)
 			CHECK(output[bit] == (char) ((0x155 >> bit) & 1));
@@ -232,13 +246,16 @@ static void test_unfec23_rejects_two_bit_errors(void)
 	uint16_t codeword = fec23(0x155);
 	char block[15];
 	int bit;
+	int corrected = -1;
 
 	for (bit = 0; bit < 15; ++bit)
 		block[bit] = (char) ((codeword >> bit) & 1);
 	block[0] ^= 1;
 	block[1] ^= 1;
 
-	CHECK(unfec23(block, 10) == NULL);
+	CHECK(unfec23(block, 10, &corrected) == NULL);
+	/* nothing came out, so there is nothing to report corrected */
+	CHECK(corrected == 0);
 }
 
 /*
@@ -288,6 +305,7 @@ static void test_header_decode(void)
 		char stream[HEADER_OFFSET + HEADER_SYMBOLS];
 		char header[18];
 		btbb_packet *pkt;
+		int corrected = -1;
 
 		memset(stream, 0, sizeof(stream));
 		for (digit = 0; digit < 18; ++digit) {
@@ -298,7 +316,9 @@ static void test_header_decode(void)
 		}
 
 		/* the FEC and the HEC, one step at a time */
-		CHECK(unfec13(stream + HEADER_OFFSET, header, 18));
+		CHECK(unfec13(stream + HEADER_OFFSET, header, 18,
+			      &corrected));
+		CHECK(corrected == 0);
 		CHECK(air_to_host16(header, 10) == HEADERS[row].data);
 		CHECK(air_to_host8(&header[10], 8) == HEADERS[row].hec);
 		CHECK(uap_from_hec(HEADERS[row].data, HEADERS[row].hec) ==
@@ -322,17 +342,29 @@ static void test_header_decode(void)
 		      ((HEADERS[row].data >> 3) & 0xf));
 		CHECK(btbb_packet_get_header_flags(pkt) ==
 		      ((HEADERS[row].data >> 7) & 0x7));
+		/* an intact header, so no bit of it was corrected */
+		CHECK(pkt->corrected_header_bits == 0);
 
 		/*
 		 * One wrong symbol in a triple is outvoted by the other two,
-		 * wherever in the triple it is: first, middle and last.
+		 * wherever in the triple it is: first, middle and last. Three
+		 * triples are wrecked here, one bit each, which is what a
+		 * capture file records as three corrected header bits.
 		 */
 		stream[HEADER_OFFSET + 0] ^= 1;
 		stream[HEADER_OFFSET + 4] ^= 1;
 		stream[HEADER_OFFSET + 8] ^= 1;
-		CHECK(unfec13(stream + HEADER_OFFSET, header, 18));
+		CHECK(unfec13(stream + HEADER_OFFSET, header, 18,
+			      &corrected));
+		CHECK(corrected == 3);
 		CHECK(air_to_host16(header, 10) == HEADERS[row].data);
 		CHECK(air_to_host8(&header[10], 8) == HEADERS[row].hec);
+
+		/* and the packet carries that count for the writers */
+		btbb_packet_set_data(pkt, stream, (int) sizeof(stream), 0, 0);
+		CHECK(btbb_decode_header(pkt) == 1);
+		CHECK(pkt->corrected_header_bits == 3);
+
 		stream[HEADER_OFFSET + 0] ^= 1;
 		stream[HEADER_OFFSET + 4] ^= 1;
 		stream[HEADER_OFFSET + 8] ^= 1;
