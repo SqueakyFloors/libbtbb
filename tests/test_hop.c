@@ -37,6 +37,7 @@
 
 #include <stdio.h>
 #include <string.h>
+#include <unistd.h>
 
 #include "bluetooth_piconet.h"
 
@@ -57,6 +58,15 @@ static int failures = 0;
 		if (e_ != a_) {                                            \
 			printf("FAIL %s:%d: %s is %d, expected %d\n",      \
 			       __FILE__, __LINE__, #actual, a_, e_);       \
+			++failures;                                        \
+		}                                                          \
+	} while (0)
+
+#define CHECK_SILENT(which, text)                                          \
+	do {                                                               \
+		if ((text)[0] != '\0') {                                   \
+			printf("FAIL %s:%d: %s has \"%s\"\n", __FILE__,    \
+			       __LINE__, (which), (text));                 \
 			++failures;                                        \
 		}                                                          \
 	} while (0)
@@ -363,6 +373,136 @@ static void test_generated_sequence_matches_single_hop(void)
 	btbb_piconet_unref(pn);
 }
 
+/* An address no other test uses, so the first call below has to build it. */
+#define SILENT_TEST_LAP 0x9abcde
+
+/*
+ * Read a captured stream into buf as a string, and close the capture. A read
+ * that fails returns no bytes, which would look like a silent stream, so it
+ * is reported.
+ */
+static void read_capture(FILE *capture, char *buf, size_t buflen)
+{
+	size_t got;
+
+	rewind(capture);
+	got = fread(buf, 1, buflen - 1, capture);
+	if (ferror(capture)) {
+		printf("FAIL: could not read a capture file\n");
+		++failures;
+	}
+	buf[got] = '\0';
+	fclose(capture);
+}
+
+/* Run get_hop_pattern() with stdout and stderr redirected into out and err. */
+static int capture_get_hop_pattern(btbb_piconet *pn,
+				   char *out, size_t outlen,
+				   char *err, size_t errlen)
+{
+	FILE *out_capture, *err_capture;
+	int saved_out, saved_err;
+	int restored;
+
+	out[0] = '\0';
+	err[0] = '\0';
+
+	out_capture = tmpfile();
+	err_capture = tmpfile();
+	if (out_capture == NULL || err_capture == NULL) {
+		if (out_capture != NULL)
+			fclose(out_capture);
+		if (err_capture != NULL)
+			fclose(err_capture);
+		printf("FAIL: could not open a capture file\n");
+		++failures;
+		return -1;
+	}
+
+	fflush(stdout);
+	fflush(stderr);
+	saved_out = dup(fileno(stdout));
+	saved_err = dup(fileno(stderr));
+	if (saved_out < 0 || saved_err < 0 ||
+	    dup2(fileno(out_capture), fileno(stdout)) < 0 ||
+	    dup2(fileno(err_capture), fileno(stderr)) < 0) {
+		/* put back whatever was redirected before giving up */
+		if (saved_out >= 0) {
+			dup2(saved_out, fileno(stdout));
+			close(saved_out);
+		}
+		if (saved_err >= 0) {
+			dup2(saved_err, fileno(stderr));
+			close(saved_err);
+		}
+		fclose(out_capture);
+		fclose(err_capture);
+		printf("FAIL: could not redirect the output\n");
+		++failures;
+		return -1;
+	}
+
+	get_hop_pattern(pn);
+	fflush(stdout);
+	fflush(stderr);
+
+	/* Both streams are put back before anything is reported, so that the
+	 * report does not go into a capture file itself. A stream left
+	 * redirected would swallow the rest of the test's output, so it counts
+	 * as a failure rather than passing quietly. */
+	restored = dup2(saved_out, fileno(stdout)) >= 0;
+	restored &= dup2(saved_err, fileno(stderr)) >= 0;
+	close(saved_out);
+	close(saved_err);
+	if (!restored) {
+		printf("FAIL: could not restore the output\n");
+		++failures;
+	}
+
+	read_capture(out_capture, out, outlen);
+	read_capture(err_capture, err, errlen);
+	return 0;
+}
+
+/*
+ * What get_hop_pattern() has to say is progress, not what the caller asked
+ * for: a tool streaming its capture to standard output would get the note
+ * mixed into the dump, where a script reading the stream cannot tell it from
+ * capture data. Both paths through the function are taken here, building a
+ * sequence for an address the cache has not seen and then reusing it.
+ */
+static void test_get_hop_pattern_writes_nothing_to_stdout(void)
+{
+	btbb_piconet *pn = btbb_piconet_new();
+	char out[4096], err[4096];
+	char *built;
+
+	btbb_init_piconet(pn, SILENT_TEST_LAP);
+	btbb_piconet_set_uap(pn, TEST_UAP);
+
+	if (capture_get_hop_pattern(pn, out, sizeof(out),
+				    err, sizeof(err)) != 0)
+		return;
+	CHECK_SILENT("stdout", out);
+	built = pn->sequence;
+	CHECK(built != NULL);
+	/* the wait is still announced, on the stream notes belong on */
+	CHECK(strstr(err, "Calculating complete hopping sequence.") != NULL);
+	CHECK(strstr(err, "Hopping sequence calculated.") != NULL);
+
+	/* The second call reuses what the first built: it says nothing on
+	 * either stream, and hands back the same buffer rather than a newly
+	 * allocated one. */
+	if (capture_get_hop_pattern(pn, out, sizeof(out),
+				    err, sizeof(err)) != 0)
+		return;
+	CHECK_SILENT("stdout", out);
+	CHECK_SILENT("stderr", err);
+	CHECK(pn->sequence == built);
+
+	btbb_piconet_unref(pn);
+}
+
 int main(void)
 {
 	test_basic_hops_match_reference();
@@ -374,6 +514,7 @@ int main(void)
 	test_reserved_map_bit_is_not_counted();
 	test_set_afh_map_rebuilds_the_table();
 	test_generated_sequence_matches_single_hop();
+	test_get_hop_pattern_writes_nothing_to_stdout();
 
 	if (failures != 0) {
 		printf("%d check(s) failed\n", failures);

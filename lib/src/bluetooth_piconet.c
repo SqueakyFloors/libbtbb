@@ -383,14 +383,17 @@ static void gen_hops(btbb_piconet *pn)
 /* Fill a sequence buffer this piconet already owns. */
 static void fill_hop_pattern(btbb_piconet *pn, char *sequence)
 {
-	printf("\nCalculating complete hopping sequence.\n");
+	/* Building the sequence takes seconds, so say so, but on stderr:
+	 * standard output carries only what the caller asked for, which for a
+	 * tool streaming a capture there is the capture. */
+	fprintf(stderr, "\nCalculating complete hopping sequence.\n");
 	pn->sequence = sequence;
 
 	precalc(pn);
 	address_precalc(((pn->UAP<<24) | pn->LAP) & 0xfffffff, pn);
 	gen_hops(pn);
 
-	printf("Hopping sequence calculated.\n");
+	fprintf(stderr, "Hopping sequence calculated.\n");
 }
 
 /* Function to calculate piconet hopping patterns and add to hash map */
@@ -450,7 +453,6 @@ void get_hop_pattern(btbb_piconet *pn)
 		memcpy(s->afh_map, pn->afh_map, sizeof(s->afh_map));
 		fill_hop_pattern(pn, s->sequence);
 	} else {
-		printf("\nFound hopping sequence in cache.\n");
 		pn->sequence = s->sequence;
 	}
 }

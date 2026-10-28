@@ -283,9 +283,22 @@ lell_packet_unref(lell_packet *pkt)
 		free(pkt);
 }
 
+/*
+ * The channel index for a frequency in MHz. 2402 MHz is advertising channel
+ * 37, 2426 MHz is 38 and 2480 MHz is 39; the data channels 0 to 36 fill the
+ * 2 MHz steps between them.
+ *
+ * A frequency outside 2402-2480 MHz is not an LE channel at all, so it takes
+ * the index of the nearest one: anything at or below 2402 MHz is 37, as
+ * anything at or above 2480 MHz is 39. Both ends need bounding because the
+ * index is kept in a uint8_t. 2400 MHz would otherwise compute -2 and be
+ * stored as 254, which is no channel at all, and a frequency far enough below
+ * the band wraps into the 0 to 36 that lell_packet_is_data() reads as a data
+ * channel.
+ */
 static uint8_t le_channel_index(uint16_t phys_channel) {
 	uint8_t ret;
-	if (phys_channel == 2402) {
+	if (phys_channel <= 2402) {
 		ret = 37;
 	} else if (phys_channel < 2426) { // 0 - 10
 		ret = (phys_channel - 2404) / 2;
@@ -315,7 +328,19 @@ void lell_allocate_and_decode_n(const uint8_t *stream, size_t stream_len,
 		memcpy((*pkt)->symbols, stream, copy_len);
 
 	(*pkt)->channel_idx = le_channel_index(phys_channel);
-	(*pkt)->channel_k = (phys_channel-2402)/2;
+	/* k is the RF channel a PCAP record carries: 0 to 39, the 2 MHz steps
+	 * from 2402 MHz up, which a reader turns back into a frequency as
+	 * 2402 + 2k. Outside the band it is bounded to that range, as the
+	 * index is, but for a different reason at each end. Above 2480 MHz the
+	 * count is simply past the last channel. Below 2402 MHz it is
+	 * negative, and a byte stores it as a large one: 2400 MHz would be
+	 * recorded as 2912 MHz. */
+	if (phys_channel <= 2402)
+		(*pkt)->channel_k = 0;
+	else if (phys_channel >= 2480)
+		(*pkt)->channel_k = 39;
+	else
+		(*pkt)->channel_k = (uint8_t) ((phys_channel - 2402) / 2);
 	(*pkt)->clk100ns = clk100ns;
 
 	/* the casts keep the shift out of a signed int, where it would

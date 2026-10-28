@@ -1,5 +1,6 @@
 /*
- * Smoke test: link the library and decode one known packet of each kind.
+ * Smoke test: link the library, decode one known packet of each kind, and
+ * check the channel each frequency of the LE band decodes as.
  *
  * It works through the public API in btbb.h, except that it reads a couple of
  * packet fields the public API has no getter for straight out of the
@@ -104,6 +105,90 @@ static void test_le_advertising_packet(void)
 	lell_packet_unref(pkt);
 }
 
+/*
+ * The channel a frequency in MHz decodes as. 2402 MHz is advertising channel
+ * 37, 2426 MHz is 38 and 2480 MHz is 39, with the data channels 0 to 36 in
+ * the 2 MHz steps between them; k counts those steps up from 2402 MHz, and a
+ * PCAP reader turns it back into a frequency as 2402 + 2k.
+ *
+ * Every frequency the band covers is decoded here, with the two below the
+ * lowest LE channel and two above the highest. An index outside 0 to 39 is
+ * no channel at all, and because it is kept in a byte, a frequency outside
+ * the band computes one that wraps: far enough below, into the 0 to 36 that
+ * lell_packet_is_data() reads as a data channel.
+ */
+static void test_le_channel_index(void)
+{
+	static const struct {
+		uint16_t mhz;
+		unsigned idx;
+		unsigned k;
+	} CHANNELS[] = {
+		{ 2400, 37, 0 },	/* below the band: the lowest channel */
+		{ 2401, 37, 0 },
+		{ 2402, 37, 0 },
+		{ 2404,  0, 1 },
+		{ 2424, 10, 11 },
+		{ 2426, 38, 12 },
+		{ 2428, 11, 13 },
+		{ 2478, 36, 38 },
+		{ 2480, 39, 39 },
+		{ 2482, 39, 39 },	/* above it: the highest channel */
+		{ 3000, 39, 39 },
+	};
+	char seen[40];
+	size_t i;
+	uint16_t mhz;
+
+	for (i = 0; i < sizeof(CHANNELS) / sizeof(CHANNELS[0]); ++i) {
+		lell_packet *pkt = NULL;
+
+		lell_allocate_and_decode(ADV_IND_PACKET, CHANNELS[i].mhz, 0,
+					 &pkt);
+		CHECK(pkt != NULL);
+		if (pkt == NULL)
+			return;
+		if (lell_get_channel_index(pkt) != CHANNELS[i].idx ||
+		    lell_get_channel_k(pkt) != CHANNELS[i].k) {
+			printf("FAIL %s:%d: %u MHz is channel %u k %u, "
+			       "expected channel %u k %u\n",
+			       __FILE__, __LINE__, CHANNELS[i].mhz,
+			       lell_get_channel_index(pkt),
+			       lell_get_channel_k(pkt),
+			       CHANNELS[i].idx, CHANNELS[i].k);
+			++failures;
+		}
+		lell_packet_unref(pkt);
+	}
+
+	/*
+	 * The 40 even frequencies of the band are the 40 channels, each once,
+	 * and every frequency in it, odd ones included, decodes as some
+	 * channel.
+	 */
+	memset(seen, 0, sizeof(seen));
+	for (mhz = 2400; mhz <= 2480; ++mhz) {
+		lell_packet *pkt = NULL;
+		unsigned idx;
+
+		lell_allocate_and_decode(ADV_IND_PACKET, mhz, 0, &pkt);
+		CHECK(pkt != NULL);
+		if (pkt == NULL)
+			return;
+		idx = lell_get_channel_index(pkt);
+		if (idx > 39) {
+			printf("FAIL %s:%d: %u MHz is channel index %u\n",
+			       __FILE__, __LINE__, mhz, idx);
+			++failures;
+		} else if (mhz >= 2402 && mhz % 2 == 0) {
+			++seen[idx];
+		}
+		lell_packet_unref(pkt);
+	}
+	for (i = 0; i < sizeof(seen); ++i)
+		CHECK(seen[i] == 1);
+}
+
 #define SEARCH_LENGTH 24
 /* how far into the symbol stream below the sync word starts */
 #define PACKET_OFFSET 10
@@ -161,6 +246,7 @@ int main(void)
 {
 	test_version_strings();
 	test_le_advertising_packet();
+	test_le_channel_index();
 	test_bredr_syncword();
 
 	if (failures != 0) {
