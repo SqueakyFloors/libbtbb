@@ -1132,6 +1132,293 @@ static void test_a_clock_the_caller_set_is_kept(void)
 }
 
 /*
+ * A piconet following a clock the library accepted, set up directly instead
+ * of by hop reversal. The follow path reads the clock offset, the UAP and
+ * whether the clock is the library's own, and nothing else; hop reversal is a
+ * walk over 2^21 clock values, so the tests below that only need a lock to
+ * lose set one up this way.
+ */
+static void follow_a_clock(btbb_piconet *pn, int clk_offset)
+{
+	btbb_piconet_set_uap(pn, TEST_UAP);
+	btbb_piconet_set_flag(pn, BTBB_CLK6_VALID, 1);
+	btbb_piconet_set_clk_offset(pn, clk_offset);
+	btbb_piconet_set_flag(pn, BTBB_CLK27_VALID, 1);
+	btbb_piconet_set_flag(pn, BTBB_FOLLOWING, 1);
+	pn->clock_recovered = 1;
+	pn->lock_worked = 0;
+}
+
+static btbb_piconet *following_clock_offset(int clk_offset)
+{
+	btbb_piconet *pn = discovered(NULL, 0);
+
+	follow_a_clock(pn, clk_offset);
+	return pn;
+}
+
+/*
+ * Feed one failing header after another until the clock is given up, and
+ * return how many it took. Each one arrives slots_apart 625 us slots after
+ * the last, which is what decides whether the time bound or the count of
+ * failures gets there first.
+ */
+static int headers_until_the_clock_is_given_up(btbb_piconet *pn,
+					       btbb_packet *pkt,
+					       uint32_t slots_apart)
+{
+	int sent;
+
+	for (sent = 1; sent <= 2 * FOLLOW_HEADER_FAILURES; sent++) {
+		/* the clock the packet arrived at, which is where the library
+		 * reads the time from */
+		pkt->clkn = (uint32_t) (sent - 1) * slots_apart;
+		if (btbb_process_packet(pkt, pn) == BTBB_PROCESS_LOCK_LOST)
+			return sent;
+	}
+	return 0;
+}
+
+/*
+ * A clock that was given up is not chosen again. Discovery starting over used
+ * to have no memory of it, so the same wrong clock could be accepted again,
+ * fail to decode again, and go round that loop for as long as the capture
+ * ran. What is remembered is the offset between the two clocks, because a
+ * candidate CLK1-27 value means nothing after a restart: it is the piconet's
+ * clock at the first packet of an attempt, and the next attempt has a
+ * different first packet.
+ */
+static void test_a_clock_that_never_worked_is_not_chosen_again(void)
+{
+	btbb_piconet *pn = following_a_recovered_clock();
+	btbb_packet *pkt = failed_header_packet();
+	int with_it, without_it;
+	int i;
+
+	CHECK(pkt != NULL);
+	if (pkt == NULL) {
+		btbb_piconet_unref(pn);
+		return;
+	}
+	/* the clock it recovered is the observer's own, so the offset is 0 */
+	CHECK_EQ(0, btbb_piconet_get_clk_offset(pn));
+	for (i = 0; i < FOLLOW_HEADER_FAILURES - 1; i++)
+		CHECK_EQ(0, btbb_process_packet(pkt, pn));
+	CHECK_EQ(BTBB_PROCESS_LOCK_LOST, btbb_process_packet(pkt, pn));
+	CHECK_EQ(1, pn->num_rejected);
+	CHECK_EQ(0, pn->rejected_offsets[0]);
+
+	/* Discovery again, from the state it started in, with the same first
+	 * packet: the clock just given up is not a candidate this time. */
+	btbb_piconet_set_uap(pn, TEST_UAP);
+	btbb_piconet_set_flag(pn, BTBB_CLK6_VALID, 1);
+	btbb_piconet_set_flag(pn, BTBB_GOT_FIRST_PACKET, 1);
+	pn->first_pkt_time = 0;
+	first_hop(pn, channel_at(pn, 0));
+	with_it = btbb_init_hop_reversal(0, pn);
+	CHECK(with_it > 1);
+	CHECK(!candidate_listed(pn, 0));
+
+	/* and nothing else went with it: the same search with nothing
+	 * rejected finds exactly that one clock more */
+	pn->num_rejected = 0;
+	without_it = btbb_init_hop_reversal(0, pn);
+	CHECK_EQ(with_it + 1, without_it);
+	CHECK(candidate_listed(pn, 0));
+	btbb_packet_unref(pkt);
+	btbb_piconet_unref(pn);
+}
+
+/*
+ * A clock that did decode a header is given up when it stops working, but it
+ * is not ruled out: it was the piconet's at least once, so it may be the
+ * piconet's still, on a link that has gone bad or quiet. Ruling it out on
+ * that evidence would keep the library from ever locking it again.
+ */
+static void test_a_clock_that_worked_is_not_ruled_out(void)
+{
+	btbb_piconet *pn = following_clock_offset(0);
+	btbb_packet *good = decodable_packet();
+	btbb_packet *bad = failed_header_packet();
+
+	CHECK(good != NULL);
+	CHECK(bad != NULL);
+	if (good == NULL || bad == NULL) {
+		btbb_piconet_unref(pn);
+		return;
+	}
+	CHECK_EQ(0, btbb_process_packet(good, pn));
+	CHECK_EQ(1, pn->lock_worked);
+	CHECK_EQ(FOLLOW_HEADER_FAILURES,
+		 headers_until_the_clock_is_given_up(pn, bad, 1));
+	CHECK_EQ(0, pn->num_rejected);
+	btbb_packet_unref(good);
+	btbb_packet_unref(bad);
+	btbb_piconet_unref(pn);
+}
+
+/*
+ * How long the clock is kept is bounded in time, not only in packets. On a
+ * busy link the full count of failures arrives in a few tens of milliseconds;
+ * on a quiet one it could take minutes, and all that time the caller's
+ * receiver hops on an offset that has never decoded anything. Once the run
+ * has been failing for FOLLOW_FAILURE_SLOTS, the failures it already holds
+ * are enough.
+ */
+static void test_a_wrong_clock_is_given_up_within_a_few_seconds(void)
+{
+	/* 400 slots is a quarter of a second between headers: quiet for a
+	 * followed link, and slow enough that the time bound is reached
+	 * before the full count of failures is. */
+	const uint32_t quiet = 400;
+	btbb_piconet *busy_pn = following_clock_offset(0);
+	btbb_piconet *quiet_pn = following_clock_offset(0);
+	btbb_packet *pkt = failed_header_packet();
+	char out[4096], err[4096];
+	int busy_headers, quiet_headers;
+
+	CHECK(pkt != NULL);
+	if (pkt == NULL || capture_or_fail() != 0) {
+		btbb_piconet_unref(busy_pn);
+		btbb_piconet_unref(quiet_pn);
+		return;
+	}
+	/* a packet every slot pair, which is a link carrying traffic */
+	busy_headers = headers_until_the_clock_is_given_up(busy_pn, pkt, 2);
+	quiet_headers = headers_until_the_clock_is_given_up(quiet_pn, pkt,
+							    quiet);
+	capture_stop(out, sizeof(out), err, sizeof(err));
+
+	/* On the busy link the count of failures gets there first, and the
+	 * whole run took 38 slots, 23 ms. */
+	CHECK_EQ(FOLLOW_HEADER_FAILURES, busy_headers);
+	/* On the quiet link the time bound does, after the failures needed to
+	 * reach it. */
+	CHECK_EQ(FOLLOW_FAILURES_IN_TIME, quiet_headers);
+	CHECK(quiet_headers < FOLLOW_HEADER_FAILURES);
+	/* and the run that ended it had been failing for 3600 slots, 2250 ms,
+	 * which the note reports */
+	CHECK(strstr(err, "over 23 ms") != NULL);
+	CHECK(strstr(err, "over 2250 ms") != NULL);
+	if (failures != 0)
+		printf("stderr was: %s\n", err);
+	btbb_packet_unref(pkt);
+	btbb_piconet_unref(busy_pn);
+	btbb_piconet_unref(quiet_pn);
+}
+
+/*
+ * The clocks given up belong to the LAP they were given up for. Another LAP
+ * is another piconet, whose clock has nothing to do with them, and a tool
+ * that reuses one piconet object for a second address would otherwise start
+ * the new search with clocks ruled out for no reason.
+ */
+static void test_rejected_clocks_are_forgotten_with_the_lap(void)
+{
+	btbb_piconet *pn = following_clock_offset(0x80);
+	btbb_packet *pkt = failed_header_packet();
+
+	CHECK(pkt != NULL);
+	if (pkt == NULL) {
+		btbb_piconet_unref(pn);
+		return;
+	}
+	CHECK(headers_until_the_clock_is_given_up(pn, pkt, 1) > 0);
+	CHECK_EQ(1, pn->num_rejected);
+	CHECK_EQ(0x40, pn->rejected_offsets[0]);	/* in slots */
+
+	/* the same piconet, still */
+	btbb_init_piconet(pn, TEST_LAP);
+	CHECK_EQ(1, pn->num_rejected);
+	CHECK_EQ(1, pn->lock_losses);
+
+	/* a different one */
+	btbb_init_piconet(pn, TEST_LAP ^ 0xff);
+	CHECK_EQ(0, pn->num_rejected);
+	CHECK_EQ(0, pn->lock_losses);
+	btbb_packet_unref(pkt);
+	btbb_piconet_unref(pn);
+}
+
+/*
+ * The list of rejected clocks is short and bounded: once it is full the
+ * oldest goes, because the clock a restart would otherwise choose again is
+ * the one most recently given up. A clock is rejected on the evidence of one
+ * follow attempt, which says the clock or the UAP was wrong without saying
+ * which, so a long memory of them would risk ruling out a clock that was
+ * right under the UAP found next time.
+ */
+static void test_the_rejected_clocks_are_a_short_list(void)
+{
+	btbb_piconet *pn = discovered(NULL, 0);
+	btbb_packet *pkt = failed_header_packet();
+	const int losses = MAX_REJECTED_CLOCKS + 4;
+	int i;
+
+	CHECK(pkt != NULL);
+	if (pkt == NULL) {
+		btbb_piconet_unref(pn);
+		return;
+	}
+	/* a different clock each time round, each given up in turn */
+	for (i = 1; i <= losses; i++) {
+		follow_a_clock(pn, i * 2);
+		CHECK(headers_until_the_clock_is_given_up(pn, pkt, 1) > 0);
+	}
+	CHECK_EQ(losses, pn->lock_losses);
+	CHECK_EQ(MAX_REJECTED_CLOCKS, pn->num_rejected);
+	/* the last MAX_REJECTED_CLOCKS of them, in the order they failed */
+	for (i = 0; i < MAX_REJECTED_CLOCKS; i++)
+		CHECK_EQ(losses - MAX_REJECTED_CLOCKS + 1 + i,
+			 pn->rejected_offsets[i]);
+	btbb_packet_unref(pkt);
+	btbb_piconet_unref(pn);
+}
+
+/*
+ * A piconet that has ended or left range never gives the library a clock that
+ * works, and the search goes round again for every clock that is left. It
+ * says so once and then keeps looking quietly, rather than reporting the same
+ * loss for as long as the capture runs.
+ */
+static void test_giving_up_is_reported_once(void)
+{
+	btbb_piconet *pn = discovered(NULL, 0);
+	btbb_packet *pkt = failed_header_packet();
+	char out[4096], err[4096];
+	const char *at;
+	int given_up = 0, said_so = 0;
+	int i;
+
+	CHECK(pkt != NULL);
+	if (pkt == NULL || capture_or_fail() != 0) {
+		btbb_piconet_unref(pn);
+		return;
+	}
+	for (i = 1; i <= LOCK_LOSS_TRIES + 2; i++) {
+		follow_a_clock(pn, i * 2);
+		(void) headers_until_the_clock_is_given_up(pn, pkt, 1);
+	}
+	capture_stop(out, sizeof(out), err, sizeof(err));
+
+	for (at = err; (at = strstr(at, "giving up this clock")) != NULL; at++)
+		given_up++;
+	for (at = err; (at = strstr(at, "Still listening")) != NULL; at++)
+		said_so++;
+	/* one line per clock up to the point where it says it cannot find
+	 * one, and nothing after that */
+	CHECK_EQ(LOCK_LOSS_TRIES, given_up);
+	CHECK_EQ(1, said_so);
+	CHECK_EQ(LOCK_LOSS_TRIES + 2, pn->lock_losses);
+	/* and nothing of it on stdout */
+	CHECK_EQ(0, (int) strlen(out));
+	if (failures != 0)
+		printf("stderr was: %s\n", err);
+	btbb_packet_unref(pkt);
+	btbb_piconet_unref(pn);
+}
+
+/*
  * Everything UAP and clock discovery has to say about its progress goes to
  * stderr. A tool that dumps its capture to stdout would otherwise have these
  * lines in the dump, with nothing to tell them from capture data.
@@ -1299,6 +1586,12 @@ int main(void)
 	test_a_header_that_checks_out_ends_the_run();
 	test_a_failed_payload_is_not_evidence();
 	test_a_clock_the_caller_set_is_kept();
+	test_a_clock_that_never_worked_is_not_chosen_again();
+	test_a_clock_that_worked_is_not_ruled_out();
+	test_a_wrong_clock_is_given_up_within_a_few_seconds();
+	test_rejected_clocks_are_forgotten_with_the_lap();
+	test_the_rejected_clocks_are_a_short_list();
+	test_giving_up_is_reported_once();
 	test_a_refused_aliased_request_leaves_recovery_alone();
 
 	if (failures != 0) {

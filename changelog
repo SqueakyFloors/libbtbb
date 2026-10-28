@@ -1,4 +1,21 @@
 libbtbb (2020-12-R1+fork5) unstable; urgency=low
+  * A clock the library gave up is not chosen again. Discovery starting over
+    had no memory of the clock that had just failed, so a piconet could lock
+    the same wrong clock, decode nothing, give it up, and go round that loop
+    for as long as the capture ran. Each piconet now remembers the clocks it
+    has given up for its LAP, cleared when the LAP changes, and the search
+    skips them, so each attempt rules one more out. A clock that did decode a
+    header before it stopped working is given up but not ruled out, so a link
+    that goes bad does not cost the clock that was right.
+  * A clock whose headers all fail is given up within a few seconds rather
+    than after a fixed number of packets. Twenty failed headers arrive in
+    24 ms on a link carrying traffic, but on a quiet one they can take
+    minutes, and all that time the receiver hops on an offset that has never
+    decoded anything: ten failures that have already spanned two seconds are
+    now enough. The library also says once when several clocks have been
+    given up for a piconet, which a piconet that has ended or left range
+    leads to, and then keeps looking quietly instead of reporting every loss
+    for as long as the capture runs.
   * btaptap decodes keystrokes again. It read every byte of a capture through
     ord(), which python 3 raises a TypeError for, and the read loop treated
     any TypeError as the end of the capture, so the tool printed nothing and

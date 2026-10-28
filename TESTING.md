@@ -69,7 +69,8 @@ linkage, and `tests/CMakeLists.txt` says which tests do it.
 | `spec_hop` | Connection-state hop selection: the basic kernel, the AFH re-mapping function, the AFH same channel mechanism, and the Nmin fallback | Vol 2, Part G, Section 2: three addresses, the basic sequence and four channel maps each, 512 clock values per table. 7680 vectors, transcribed from the published tables |
 | `spec_le` | Low Energy link layer: physical channel indices, advertising and data PDU headers including Data Length Extension lengths up to 251, and the access address rules | Vol 6, Part B, Sections 1.4.1, 2.1.2, 2.3 and 2.4. The CRC-24, the per-channel whitening and the channel selection algorithms are not in this library, so they have no vectors here |
 | `hop` | `single_hop()` with and without AFH, and `get_hop_pattern()`'s streams and cache | The Ubertooth project's `firmware/tests/test_bluetooth_hop.c`, an independent transcription of Vol 2, Part B, Section 2.6 computed outside either code base. Using them here pins the host's predictions and the channels the board tunes to against one source of truth |
-| `piconet` | Clock recovery (hop reversal): the CLK1-27 candidate list, winnowing it against observed hops, the AFH detector, and the confirmation rule | The hops are produced by `single_hop()`, which `hop` and `spec_hop` pin against the specification, so a "truth" piconet standing in for the device under observation hops the way a real one does |
+| `piconet` | Clock recovery (hop reversal): the CLK1-27 candidate list, winnowing it against observed hops, the AFH detector, the confirmation rule, and giving up a clock whose headers keep failing without choosing it again | The hops are produced by `single_hop()`, which `hop` and `spec_hop` pin against the specification, so a "truth" piconet standing in for the device under observation hops the way a real one does |
+| `clock_sweep` | What clock recovery does over a range of true-clock values: how often it locks the piconet's clock, a wrong one or none at all; what following each lock does with it; how long a clock whose headers all fail is kept, and whether the search that follows ends up back on it; and how often a header fails its HEC while the clock and the UAP are right | The hops come from `single_hop()`, as `piconet`'s do. The packets are built in the test and found by the library's own access code search, with bit errors applied symbol by symbol at a given rate |
 | `internal` | The FEC 2/3 code, the sync word syndrome tables, and the packet header decode through both the pieces and `btbb_decode_header()` | The 20 FEC 2/3 blocks and two syndrome values from upstream's `test_fec23.c` (2012) and `test_syndromes.c` (2012), plus the table of 20 UAP, header and HEC rows that was the only real content of upstream's `test_header.c` (2015), whose program never compiled |
 | `esco` | The length an eSCO payload is decoded at, and the HV3 voice packet that shares a type code with an EV3: a payload three lengths agree with, a payload whose own CRC ends in a zero byte so that the length one short agrees too, captures of noise and of zeros past the packet, a length the caller gives, and a voice payload with no CRC at all | Payloads built in the test, each carrying the CRC the library's own `crcgen()` computes - which `spec_bredr` pins against the specification's sample data first - so the lengths that agree are known before the decoder is asked |
 | `capture` | What reaches a capture file: block and option layout, record fields, the four snapshot lengths, header block padding, the option-space limit, and a write to a closed descriptor and to a file at `RLIMIT_FSIZE` | The pcapng specification and the published `LINKTYPE_BLUETOOTH_BREDR_BB` and `LINKTYPE_BLUETOOTH_LE_LL_WITH_PHDR` layouts. Every record is read back out of the file by a small block and option walker rather than compared with the struct that wrote it, so a field at the wrong offset shows up |
@@ -159,6 +160,8 @@ vectors.
 | `channel_winnow()`'s look-back was guarded by `packets_observed > 0`, which is always true inside that loop, so the first packet read `pattern_indices[-1]` | about one attempt in 79 announced "Hopping pattern appears to be AFH" off the first packet alone and then searched a sequence the piconet was not using | `piconet` (UndefinedBehaviorSanitizer reports the revert) | #34 | #19 |
 | Predictions came from a hopping sequence generated once, when recovery started | every channel seen for the first time afterwards left the predictions describing a map the library no longer held, so the true clock was dropped with the wrong candidates and discovery started over | `piconet` | #34 | #12 |
 | `try_hop()` wrote `pattern_indices[packets_observed]` with no bound, unlike the sibling path that checks and resets | writing past the end of the array after 1000 packets | `piconet` | #34 | #23 |
+| Discovery starting over had no memory of the clock it had just given up | a piconet could lock the same wrong clock, decode nothing, give it up and go round that loop for as long as the capture ran: in the sweep below, 90 of 90 restarts ended back on the clock that had just failed | `piconet`, `clock_sweep` | #62 | #44 |
+| A clock whose headers all failed was given up after a fixed count of headers, however long they took to arrive | on a link at four packets a second the receiver stayed on an offset that had never decoded anything for 4.75 s, and on a quieter one for minutes | `piconet`, `clock_sweep` | #62 | #44 |
 | One public `clk_offset` field carried 312.5 µs CLKN ticks from one writer and 6-bit 625 µs slots from another | a caller reading it between CLK1-6 and CLK1-27 being found got a number in the wrong unit | `piconet` | #34 | #23 |
 | `btbb_piconet_unref()` did not free the candidate list, and `btbb_init_hop_reversal()` leaked a previous call's | a piconet released during recovery leaked its candidates | `piconet` | #34 | — |
 | A candidate CLK1-27 was accepted as soon as it was the last one left | `ubertooth-rx` reported it had the clock, started following, and decoded nothing, with no way back, because while the AFH map is still being learned a clock that is not the piconet's can match every hop observed so far | `piconet`, a synthetic sequence where the observer is one channel short of the device's map | #49 | #44 |
@@ -186,6 +189,19 @@ vectors.
 | Records written while the library was still guessing a piconet's upper address part carried a rejected candidate clock's payload and CRC answer | a capture claimed results about traffic that had not been decoded | `capture` | #36 | — |
 | The captured and original lengths in LE PCAP and PCAPNG records were the wrong way round | a reader saw the two lengths swapped | `le_long`, both files read back | #2 | — |
 | `btbb_pcapng_close()` and `lell_pcapng_close()` reported a failure on every close and could not report a real one | a caller could not tell a closed file from a failed one | `capture` | #36 | — |
+
+One BR/EDR record field is written outside the range its published
+description gives, on purpose. The corrected-payload-bits count is recorded as
+the decoder made it: the rate 2/3 code corrects one bit per 15-symbol block,
+and the longest payload it carries is a DM5's 228 bytes, which is 183 blocks,
+so a reception marginal enough to need a correction in every block records
+183 where
+[LINKTYPE_BLUETOOTH_BREDR_BB](https://www.tcpdump.org/linktypes/LINKTYPE_BLUETOOTH_BREDR_BB.html)
+describes the field as running to +180. The field is a signed 16-bit integer
+that holds it, and neither Wireshark's dissector nor this repository's own
+plugin range-checks it, so a reader is better served by the real number than
+by one capped to a description three short of the format's own definition.
+`spec_bredr` pins that case; decided in #53.
 
 ### Output streams
 
@@ -251,6 +267,9 @@ map changes, and the replaced allocator.
 | The same 400: no lock within the hops observed, which is recoverable | 194 | 276 | PR #49. This is what the wrong locks were traded for |
 | The same 400: the true clock found | 84 | 88 | PR #49 |
 | Cost of the confirmation rule where the predictions are exact | — | four more packets to lock (10.7 → 14.7, 45.3 → 49.3, 34.2 → 38.2 over three scenarios) | PR #49, both reviewers independently |
+| A clock given up, then the same search run again: restarts that ended back on the clock that had just failed, 90 locks over 400 true-clock values | 90 of 90 | 0 of 90 | PR #62, the recovery sweep in `tests/test_clock_sweep.c` at 400 trials. The "forgotten" rows of that run are the old behavior, reproduced by clearing the clocks the piconet remembers giving up |
+| Giving up a clock whose headers all fail, on a link at four packets a second | 20 headers, 4750 ms | 10 headers, 2250 ms | PR #62, the same run. On a link carrying a packet every slot pair both rules take 20 headers, 24 ms, so nothing changes there |
+| Which clocks that sweep locks: true, wrong, dropped, undecided of 400 | 68, 22, 280, 30 | the same | PR #62, `test_clock_sweep 400` on `master` at `622b6c2` and on the branch. Winnowing is untouched; the 22 wrong locks carry discovery's CLK1-6, so they decode every header they hear and no run of failures ever arrives. Following all 90 locks for 1000 slot pairs each confirms it: 68 of 68 correct locks survived, 0 false drops, and all 22 wrong ones stayed |
 | Candidate lists rebuilt during a four-minute follow of a non-adaptive piconet, 26,634 candidates each time | 12 | 0 | PR #34, lab board against live traffic |
 | LE symbol storage, and the length the decoder reads | 64 bytes, 5 bits of the field | 260 bytes, all 8 bits, clamped to the 251 the specification allows | PR #2. On air, a packet whose length field claimed more than one record's worth came out whole, where the old library showed 46 bytes |
 | Wrong length reported for an eSCO payload at the longest length its type carries, 20,000 random payloads per type | EV3 79, EV5 132, EV4 117 | EV3 1, EV5 0, EV4 0 | PR #61, `test_length_sweep()` in `tests/test_esco.c` with `SWEEP_TRIALS` raised to 20,000, run on this tree and on a copy with the three decode hunks reverted. The sweep builds payloads the way the air carries them: whitened, FEC encoded for an EV4, at a clock that changes from one to the next, with a tail of noise after the packet. The committed test runs the same sweep at 2,000 and pins its counts |
@@ -281,8 +300,9 @@ what has been checked on hardware, is
 
 Waiting on Classic hardware (for example a phone and a headset):
 
-- AFH hop selection and clock recovery: PR #11 and PR #34, and the confirmation
-  rule in PR #49. The results are statistical, so this needs many follow runs
+- AFH hop selection and clock recovery: PR #11 and PR #34, the confirmation
+  rule in PR #49, and giving a clock up and not choosing it again in PR #59
+  and PR #62. The results are statistical, so this needs many follow runs
   compared against the previous pin rather than one pass or fail.
 - BR/EDR capture records: the HEC and CRC flags (#27) and the padding (#22).
 - The eSCO payload decode (#16) over a headset link.

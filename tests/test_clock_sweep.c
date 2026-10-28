@@ -1,28 +1,38 @@
 /*
- * Two measurements of clock recovery, kept as a test so the numbers quoted in
- * issues #44, #49 and #50 can be reproduced and do not quietly drift.
+ * Three measurements of clock recovery, kept as a test so the numbers quoted
+ * in issues #44, #49 and #50 can be reproduced and do not quietly drift.
  *
  * The sweep: a device hops on a 40-channel AFH map; the observer has seen all
  * of it but one channel.  The observer catches one packet every four slots, up
  * to 40 of them, and tries to recover the device's CLK1-27.  Each true clock
  * value is one trial, ending in a true lock, a wrong lock, every candidate
  * ruled out so discovery starts over, or still undecided after 40 packets.
- * It runs twice: once with the observer's clock reading the same as the
- * device's, which is how every other test has it, and once with the two a
- * long way apart.  A clock read in the wrong unit anywhere in recovery would
- * move every prediction in the second run and not the first, so the two
- * agreeing is what pins the unit (#50).
+ * Each lock is then followed with the packets the observer's receiver would
+ * really hear on that offset, so a trial also says whether the clock survived
+ * being followed.  It runs twice: once with the observer's clock reading the
+ * same as the device's, which is how every other test has it, and once with
+ * the two a long way apart.  A clock read in the wrong unit anywhere in
+ * recovery would move every prediction in the second run and not the first,
+ * so the two agreeing is what pins the unit (#50).
+ *
+ * The recovery: the other way into the same dead end, and the one the library
+ * can see - a CLK1-6 or a UAP accepted by elimination rather than by a CRC,
+ * under which every header fails its HEC.  This measures how long the library
+ * takes to give that clock up, at a busy and at a quiet packet rate, and
+ * whether the discovery that follows ends up back on the same clock.  It runs
+ * twice as well: once with the clocks already given up remembered, and once
+ * with them forgotten, which is what the library did before (#44).
  *
  * The false drops: how often a header fails its HEC while the clock and the
  * UAP are right, which is what btbb_process_packet() counts towards giving a
  * clock up.  Packets are run through the access code search at a range of bit
  * error rates, as a receiver's would be, and only those it finds are decoded.
  * FOLLOW_HEADER_FAILURES of those failures in a row gives up the clock, so
- * the conditional rate to the twentieth power is the chance of dropping a
- * clock that was right (#44).
+ * the conditional rate to that power is the chance of dropping a clock that
+ * was right (#44).
  *
- * Both are slow enough to be run small by default: "test_clock_sweep 400" is
- * the full sweep the issues quote.
+ * All three are slow enough to be run small by default: "test_clock_sweep
+ * 400" is the full sweep the issues quote.
  *
  * This file is part of libbtbb
  *
@@ -48,6 +58,7 @@
 
 #include "bluetooth_packet.c"
 #include "bluetooth_piconet.c"
+#include "stream_capture.h"
 
 static int failures = 0;
 
@@ -62,6 +73,9 @@ static int failures = 0;
 
 #define TEST_LAP 0x345678
 #define TEST_UAP 0x02
+/* The UAP a header built for another piconet checks out against, and never
+ * this piconet's: a header carrying it fails this piconet's HEC check. */
+#define OTHER_UAP (TEST_UAP ^ 0xff)
 
 /* channels 0-39, and the same without channel 7 */
 static const uint8_t MAP_DEVICE[10] = {0xff, 0xff, 0xff, 0xff, 0xff};
@@ -102,6 +116,79 @@ static uint8_t channel_at(btbb_piconet *pn, uint32_t clk1_27)
 	return (uint8_t) single_hop((int) (clk1_27 << 1), pn);
 }
 
+/* ---------------------------- packets of this piconet -------------------- */
+
+/* The access code search allows this many bit errors in the 64-bit code,
+ * which is what ubertooth-rx passes by default. */
+#define MAX_AC_ERRORS 2
+/* An lt_addr of 1 and the packet type NULL, which has no payload. */
+#define NULL_HEADER (1 | (PACKET_TYPE_NULL << 3))
+
+static uint8_t hec_for(uint16_t data, uint8_t uap)
+{
+	int hec;
+
+	for (hec = 0; hec < 256; hec++) {
+		if (uap_from_hec(data, (uint8_t) hec) == uap)
+			return (uint8_t) hec;
+	}
+	return 0;
+}
+
+/* One packet of this piconet: the access code, its trailer, and the 18 header
+ * bits each sent three times. */
+static void build_packet(char *stream, size_t size, uint8_t hec)
+{
+	uint64_t syncword = btbb_gen_syncword(TEST_LAP);
+	uint32_t header = (uint32_t) NULL_HEADER | ((uint32_t) hec << 10);
+	int i;
+
+	memset(stream, 0, size);
+	for (i = 0; i < 64; i++)
+		stream[i] = (char) ((syncword >> i) & 1);
+	for (i = 0; i < 4; i++)
+		stream[64 + i] = (char) (((syncword >> 63) ^ (i + 1)) & 1);
+	for (i = 0; i < 18; i++) {
+		char bit = (char) ((header >> i) & 1);
+
+		stream[68 + i * 3] = bit;
+		stream[69 + i * 3] = bit;
+		stream[70 + i * 3] = bit;
+	}
+}
+
+/*
+ * The same packet as one reaches btbb_process_packet() while a piconet is
+ * being followed: found by the access code search, which is what gives it its
+ * LAP, and not whitened, so its header reads back as it was built whatever
+ * clock the decoder is given.
+ */
+static btbb_packet *packet_with_hec(uint8_t hec)
+{
+	char stream[200];
+	btbb_packet *pkt = NULL;
+
+	build_packet(stream, sizeof(stream), hec);
+	if (btbb_find_ac(stream, 1, TEST_LAP, 0, &pkt) != 0 || pkt == NULL)
+		return NULL;
+	btbb_packet_set_data(pkt, stream, 122, 0, 0);
+	btbb_packet_set_flag(pkt, BTBB_WHITENED, 0);
+	return pkt;
+}
+
+/* A header that checks out under this piconet's UAP, and one that does not. */
+static btbb_packet *decodable_packet(void)
+{
+	return packet_with_hec(hec_for(NULL_HEADER, TEST_UAP));
+}
+
+static btbb_packet *failing_header_packet(void)
+{
+	return packet_with_hec(hec_for(NULL_HEADER, OTHER_UAP));
+}
+
+/* ------------------------------- the sweep ------------------------------- */
+
 enum outcome { TRUE_LOCK, WRONG_LOCK, DROPPED, UNDECIDED, OUTCOMES };
 static const char *NAMES[OUTCOMES] = {"true lock", "wrong lock",
 				      "dropped", "undecided"};
@@ -134,27 +221,40 @@ struct totals {
 	int wrong_locks_with_another_clk1_6;
 	long wrong_lock_slots;
 	long true_lock_slots;
+	/* what following each lock did with it */
+	int correct;
+	int wrong_recovered;
+	int wrong_stuck;
+	int false_drops;
 };
 
-static enum outcome trial(btbb_piconet *device, uint32_t true_clock,
-			  uint32_t apart, struct totals *t)
+/*
+ * One attempt at CLK1-27 on a piconet that has its LAP, its UAP and its
+ * CLK1-6: the state discovery leaves behind, and where hop reversal starts
+ * whether this is the first attempt or one after a clock was given up.
+ */
+static enum outcome attempt(btbb_piconet *pn, btbb_piconet *device,
+			    uint32_t true_clock, uint32_t apart,
+			    struct totals *t)
 {
-	btbb_piconet *pn = discovered(MAP_OBSERVER);
 	uint32_t first_pkt_time = true_clock - apart;
 	uint32_t offset;
 	enum outcome result = UNDECIDED;
 
+	btbb_piconet_set_uap(pn, TEST_UAP);
+	btbb_piconet_set_flag(pn, BTBB_CLK6_VALID, 1);
+	btbb_piconet_set_flag(pn, BTBB_GOT_FIRST_PACKET, 1);
+	btbb_piconet_set_flag(pn, BTBB_IS_AFH, 1);
 	pn->first_pkt_time = first_pkt_time;
 	pn->clk6_offset = (int) (apart & 0x3f);
 	pn->pattern_indices[0] = 0;
 	pn->pattern_channels[0] = channel_at(device, true_clock);
 	btbb_piconet_set_channel_seen(pn, pn->pattern_channels[0]);
 	pn->packets_observed = 1;
+	pn->winnowed = 0;
 
-	if (btbb_init_hop_reversal(0, pn) == 0) {
-		btbb_piconet_unref(pn);
+	if (btbb_init_hop_reversal(0, pn) == 0)
 		return DROPPED;
-	}
 
 	for (offset = SLOTS_APART; offset <= SLOTS_APART * PACKETS;
 	     offset += SLOTS_APART) {
@@ -198,26 +298,89 @@ static enum outcome trial(btbb_piconet *device, uint32_t true_clock,
 		}
 	}
 
-	btbb_piconet_unref(pn);
 	return result;
+}
+
+/*
+ * Follow a lock the way the caller does: the receiver sits on the offset the
+ * library gave it and hops from there, so the observer hears a packet only in
+ * the slot pairs where that lands on the device's channel.  Every header it
+ * does hear checks out, because every candidate carries the CLK1-6 discovery
+ * found and dewhitening and the HEC use nothing else.  Returns 1 if the
+ * library gave the clock up.
+ */
+static int follow_the_lock(btbb_piconet *pn, btbb_piconet *device,
+			   btbb_packet *good, uint32_t true_clock)
+{
+	uint32_t locked = (pn->first_pkt_time + followed_offset(pn)) &
+			  (SEQUENCE_LENGTH - 1);
+	int lost = 0;
+	int i;
+
+	btbb_piconet_set_flag(pn, BTBB_FOLLOWING, 1);
+	for (i = 0; i < FOLLOWED_SLOT_PAIRS && !lost; i++) {
+		uint32_t step = (uint32_t) (i * 2);
+
+		if (channel_at(device, locked + step) !=
+		    channel_at(device, true_clock + step))
+			continue;	/* the receiver is on another channel */
+		good->clkn = true_clock + step;
+		lost = btbb_process_packet(good, pn) == BTBB_PROCESS_LOCK_LOST;
+	}
+	return lost;
 }
 
 static void sweep(const char *label, uint32_t apart, int trials, int step)
 {
 	btbb_piconet *device = discovered(MAP_DEVICE);
+	btbb_packet *good = decodable_packet();
 	struct totals t;
+	/* Over a sweep the library writes thousands of progress notes and
+	 * dumps every packet it decodes.  Swallowed: the counts below are
+	 * what this test reports. */
+	char swallowed[256];
 	int i;
 
 	memset(&t, 0, sizeof(t));
-	for (i = 0; i < trials; i++)
-		t.counts[trial(device,
-			       FIRST_CLOCK + (uint32_t) (i * step), apart,
-			       &t)]++;
+	CHECK(good != NULL);
+	if (good == NULL || capture_start() != 0) {
+		btbb_piconet_unref(device);
+		return;
+	}
+	for (i = 0; i < trials; i++) {
+		uint32_t true_clock = FIRST_CLOCK + (uint32_t) (i * step);
+		btbb_piconet *pn = discovered(MAP_OBSERVER);
+		enum outcome result = attempt(pn, device, true_clock, apart,
+					      &t);
+		int lost;
+
+		t.counts[result]++;
+		if (result == TRUE_LOCK || result == WRONG_LOCK) {
+			lost = follow_the_lock(pn, device, good, true_clock);
+			if (result == TRUE_LOCK) {
+				if (lost)
+					t.false_drops++;
+				else
+					t.correct++;
+			} else if (lost) {
+				t.wrong_recovered++;
+			} else {
+				t.wrong_stuck++;
+			}
+		}
+		btbb_piconet_unref(pn);
+	}
+	capture_stop(swallowed, sizeof(swallowed), swallowed,
+		     sizeof(swallowed));
 
 	fprintf(stderr, "%-8s %d clocks from 0x%07x step %d, observer clock %u slots away\n",
 		label, trials, FIRST_CLOCK, step, apart);
 	for (i = 0; i < OUTCOMES; i++)
 		fprintf(stderr, "  %-11s %4d\n", NAMES[i], t.counts[i]);
+	fprintf(stderr, "  followed for %d slot pairs: correct %d, wrong and stuck %d, "
+		"wrong then recovered %d, false drops %d\n",
+		FOLLOWED_SLOT_PAIRS, t.correct, t.wrong_stuck,
+		t.wrong_recovered, t.false_drops);
 	if (t.counts[WRONG_LOCK] > 0)
 		fprintf(stderr, "  wrong lock: %.2f%% of the next %d slot pairs on the device's channel\n",
 			100.0 * (double) t.wrong_lock_slots /
@@ -235,16 +398,153 @@ static void sweep(const char *label, uint32_t apart, int trials, int step)
 	/* Not one wrong lock changes the CLK1-6 a receiver dewhitens with, so
 	 * a run of failed headers cannot be what finds them. */
 	CHECK(t.wrong_locks_with_another_clk1_6 == 0);
+	/* Which is what the follow phase says as well: a wrong CLK1-27
+	 * decodes every header it hears, so nothing in the library sees it,
+	 * and a clock that is right is never dropped. */
+	CHECK(t.wrong_stuck == t.counts[WRONG_LOCK]);
+	CHECK(t.wrong_recovered == 0);
+	CHECK(t.correct == t.counts[TRUE_LOCK]);
+	CHECK(t.false_drops == 0);
+	btbb_packet_unref(good);
+	btbb_piconet_unref(device);
+}
+
+/* ----------------- recovering from a clock that never decodes ------------ */
+
+/*
+ * How far apart the failing headers arrive, in 625 us slots: a link carrying
+ * traffic, where a packet comes every slot pair, and a quiet one at four
+ * packets a second.
+ */
+#define BUSY_SLOTS 2
+#define QUIET_SLOTS 400
+
+struct recovery {
+	int locks;		/* attempts that accepted a clock */
+	int lost;		/* locks the failing headers gave up */
+	int recovered;		/* restarts that did not choose it again */
+	int stuck;		/* restarts that did */
+	long headers;		/* headers to give one up, summed */
+	long slots;		/* and the slots they spanned */
+};
+
+/*
+ * Follow a clock whose headers all fail, which is what a CLK1-6 or a UAP
+ * accepted by elimination rather than by a CRC comes to.  Returns how many
+ * headers it took for the library to give the clock up, with the slots they
+ * spanned in *slots, or 0 if it never did.
+ */
+static int lose_the_clock(btbb_piconet *pn, btbb_packet *bad,
+			  uint32_t first_clkn, uint32_t slots_apart,
+			  uint32_t *slots)
+{
+	int sent;
+
+	btbb_piconet_set_flag(pn, BTBB_FOLLOWING, 1);
+	for (sent = 1; sent <= 4 * FOLLOW_HEADER_FAILURES; sent++) {
+		uint32_t span = (uint32_t) (sent - 1) * slots_apart;
+
+		bad->clkn = first_clkn + span;
+		if (btbb_process_packet(bad, pn) == BTBB_PROCESS_LOCK_LOST) {
+			*slots = span;
+			return sent;
+		}
+	}
+	*slots = 0;
+	return 0;
+}
+
+/*
+ * A clock given up, and then the same attempt again from the channels that
+ * were known when the first one started.  With the clocks it has given up
+ * remembered, the library cannot end up back on the one that failed; with
+ * them forgotten, which is what it did before, the same inputs give the same
+ * wrong clock every time.
+ */
+static void recovery_sweep(const char *label, int trials, int step,
+			   uint32_t slots_apart, int remember)
+{
+	btbb_piconet *device = discovered(MAP_DEVICE);
+	btbb_packet *bad = failing_header_packet();
+	struct recovery r;
+	struct totals ignored;
+	char swallowed[256];
+	int i;
+
+	memset(&r, 0, sizeof(r));
+	memset(&ignored, 0, sizeof(ignored));
+	CHECK(bad != NULL);
+	if (bad == NULL || capture_start() != 0) {
+		btbb_piconet_unref(device);
+		return;
+	}
+	for (i = 0; i < trials; i++) {
+		uint32_t true_clock = FIRST_CLOCK + (uint32_t) (i * step);
+		btbb_piconet *pn = discovered(MAP_OBSERVER);
+		enum outcome first = attempt(pn, device, true_clock, 0,
+					     &ignored);
+		enum outcome second;
+		uint32_t offset, slots = 0;
+		int headers;
+
+		if (first != TRUE_LOCK && first != WRONG_LOCK) {
+			btbb_piconet_unref(pn);
+			continue;
+		}
+		r.locks++;
+		offset = followed_offset(pn);
+		headers = lose_the_clock(pn, bad, true_clock, slots_apart,
+					 &slots);
+		if (headers == 0) {
+			btbb_piconet_unref(pn);
+			continue;
+		}
+		r.lost++;
+		r.headers += headers;
+		r.slots += slots;
+		if (!remember)
+			pn->num_rejected = 0;
+		memcpy(pn->afh_map, MAP_OBSERVER, sizeof(pn->afh_map));
+		precalc(pn);
+		second = attempt(pn, device, true_clock, 0, &ignored);
+		if ((second == TRUE_LOCK || second == WRONG_LOCK) &&
+		    followed_offset(pn) == offset)
+			r.stuck++;
+		else
+			r.recovered++;
+		btbb_piconet_unref(pn);
+	}
+	capture_stop(swallowed, sizeof(swallowed), swallowed,
+		     sizeof(swallowed));
+
+	fprintf(stderr, "%-24s %d locks, %d given up, %d recovered, %d stuck",
+		label, r.locks, r.lost, r.recovered, r.stuck);
+	if (r.lost > 0)
+		fprintf(stderr, ", after %.1f headers over %.0f ms",
+			(double) r.headers / (double) r.lost,
+			0.625 * (double) r.slots / (double) r.lost);
+	fprintf(stderr, "\n");
+
+	/* The scenario has to produce locks to lose, and every one of them
+	 * has to be given up: that part is #59's and is measured here only so
+	 * the time it takes is. */
+	CHECK(r.locks > 0);
+	CHECK(r.lost == r.locks);
+	/* And then the whole point: a clock that never decoded a header is
+	 * not chosen again, where before the same search ended on it. */
+	if (remember) {
+		CHECK(r.recovered == r.lost);
+		CHECK(r.stuck == 0);
+	} else {
+		CHECK(r.stuck == r.lost);
+		CHECK(r.recovered == 0);
+	}
+	btbb_packet_unref(bad);
 	btbb_piconet_unref(device);
 }
 
 /* ------------------------- false drops on a good clock ------------------- */
 
-/* The access code search allows this many bit errors in the 64-bit code,
- * which is what ubertooth-rx passes by default. */
-#define MAX_AC_ERRORS 2
-/* An lt_addr of 1 and the packet type NULL, which has no payload. */
-#define NULL_HEADER (1 | (PACKET_TYPE_NULL << 3))
 #define BER_TRIALS 20000
 
 static uint32_t rng_state = 12345;
@@ -254,39 +554,6 @@ static double urand(void)
 {
 	rng_state = rng_state * 1103515245u + 12345u;
 	return (double) ((rng_state >> 8) & 0xffffff) / 16777216.0;
-}
-
-static uint8_t hec_for(uint16_t data, uint8_t uap)
-{
-	int hec;
-
-	for (hec = 0; hec < 256; hec++) {
-		if (uap_from_hec(data, (uint8_t) hec) == uap)
-			return (uint8_t) hec;
-	}
-	return 0;
-}
-
-/* One packet of this piconet: the access code, its trailer, and the 18 header
- * bits each sent three times. */
-static void build_packet(char *stream, size_t size, uint8_t hec)
-{
-	uint64_t syncword = btbb_gen_syncword(TEST_LAP);
-	uint32_t header = (uint32_t) NULL_HEADER | ((uint32_t) hec << 10);
-	int i;
-
-	memset(stream, 0, size);
-	for (i = 0; i < 64; i++)
-		stream[i] = (char) ((syncword >> i) & 1);
-	for (i = 0; i < 4; i++)
-		stream[64 + i] = (char) (((syncword >> 63) ^ (i + 1)) & 1);
-	for (i = 0; i < 18; i++) {
-		char bit = (char) ((header >> i) & 1);
-
-		stream[68 + i * 3] = bit;
-		stream[69 + i * 3] = bit;
-		stream[70 + i * 3] = bit;
-	}
 }
 
 static double false_drop_rate(double ber, int trials)
@@ -337,16 +604,23 @@ static double false_drop_rate(double ber, int trials)
 		double cond = checked ? (double) failed / (double) checked
 				      : 0.0;
 		double chance = 1.0;
+		double in_time = 1.0;
 		int k;
 
-		for (k = 0; k < FOLLOW_HEADER_FAILURES; k++)
+		for (k = 0; k < FOLLOW_HEADER_FAILURES; k++) {
 			chance *= cond;
+			if (k < FOLLOW_FAILURES_IN_TIME)
+				in_time *= cond;
+		}
 		fprintf(stderr, "  ber %.3f: %ld found, %ld checked, %ld failed, "
-			"%.4f of them, longest run %ld, %d in a row %.3g\n",
+			"%.4f of them, longest run %ld, %d in a row %.3g, "
+			"%d in a row %.3g\n",
 			ber, found, checked, failed, cond, longest,
-			FOLLOW_HEADER_FAILURES, chance);
-		/* Nowhere near the run that gives a clock up. */
-		CHECK(longest < FOLLOW_HEADER_FAILURES);
+			FOLLOW_HEADER_FAILURES, chance,
+			FOLLOW_FAILURES_IN_TIME, in_time);
+		/* Nowhere near either run that gives a clock up: the full
+		 * count, or the shorter one the time bound accepts. */
+		CHECK(longest < FOLLOW_FAILURES_IN_TIME);
 		return cond;
 	}
 }
@@ -362,6 +636,18 @@ int main(int argc, char **argv)
 	}
 	sweep("aligned", 0, trials, step);
 	sweep("offset", CLOCKS_APART, trials, step);
+
+	fprintf(stderr, "a clock whose headers all fail, and the search that follows:\n");
+	recovery_sweep("busy link, remembered", trials, step, BUSY_SLOTS, 1);
+	recovery_sweep("busy link, forgotten", trials, step, BUSY_SLOTS, 0);
+	recovery_sweep("quiet link, remembered", trials, step, QUIET_SLOTS, 1);
+	recovery_sweep("quiet link, forgotten", trials, step, QUIET_SLOTS, 0);
+	/* What the quiet link cost before the time bound, which is the rule
+	 * it replaced rather than a run of this program: the full count of
+	 * failures, at the same packet rate. */
+	fprintf(stderr, "%-24s %d headers over %.0f ms\n",
+		"quiet, before the bound", FOLLOW_HEADER_FAILURES,
+		0.625 * (double) ((FOLLOW_HEADER_FAILURES - 1) * QUIET_SLOTS));
 
 	fprintf(stderr, "headers that fail their HEC under the right clock and UAP:\n");
 	(void) false_drop_rate(0.005, BER_TRIALS);
