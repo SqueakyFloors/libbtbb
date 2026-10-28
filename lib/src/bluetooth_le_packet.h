@@ -30,6 +30,13 @@
 /* Access address (4) + PDU header (2) + max DLE payload (251) + CRC (3). */
 #define MAX_LE_SYMBOLS 260
 
+/* The longest payload the symbol buffer can hold, since the access address,
+ * the PDU header and the CRC take 9 of its bytes. It is also the longest
+ * payload a data channel PDU may carry. Not to be confused with
+ * pcap-common.h's LE_MAX_PAYLOAD, which is the whole 260-byte frame a
+ * capture record holds. */
+#define MAX_LE_PAYLOAD_LENGTH (MAX_LE_SYMBOLS - 9)
+
 /* How many bytes lell_allocate_and_decode() reads. It takes no length, and
  * this is what it has always read, so its callers all pass a buffer at least
  * this long. New callers should use lell_allocate_and_decode_n() instead. */

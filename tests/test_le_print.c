@@ -388,13 +388,12 @@ static void test_well_formed_values_keep_their_indent(void)
 }
 
 /*
- * An advertising PDU may claim a longer payload than the capture holds: the
- * length field is six bits, so up to 63 bytes, where a 64-byte capture can
- * hold 55 after the access address, the header and the CRC.  The claim used
- * to be taken at face value, and the three bytes printed as the CRC came
- * from past the end of the symbol buffer - the packet structure's own next
- * fields, which is how the access address and channel index of the packet
- * being printed came out as its CRC.
+ * An advertising PDU may claim a longer payload than the capture holds: here
+ * 63 bytes, where a 64-byte capture can hold 55 after the access address,
+ * the header and the CRC.  The claim used to be taken at face value, and the
+ * three bytes printed as the CRC came from past the end of the symbol buffer
+ * - the packet structure's own next fields, which is how the access address
+ * and channel index of the packet being printed came out as its CRC.
  *
  * The bytes the capture holds are printed, and no others. An ADV_DIRECT_IND
  * is used because its two addresses are read from fixed offsets rather than
@@ -428,6 +427,40 @@ static void test_an_over_claimed_advertising_length(void)
 	/* the access address, which is what used to be printed from past the
 	 * end of the buffer */
 	CHECK_LACKS(out, "d6 be 89 8e");
+	CHECK_EQUALS(err, "");
+}
+
+/*
+ * An extended advertising PDU on a primary channel goes past 63 payload
+ * octets, where a legacy one stops at 37. Only six bits of the length field
+ * were read, so a 64-octet PDU came out as 0 bytes and none of its payload
+ * was dumped.
+ */
+static void test_an_extended_advertising_length(void)
+{
+	uint8_t packet[6 + 64 + 3];
+	char out[8192], err[1024];
+	int i;
+
+	packet[0] = 0xd6;
+	packet[1] = 0xbe;
+	packet[2] = 0x89;
+	packet[3] = 0x8e;
+	packet[4] = 0x07;		/* ADV_EXT_IND */
+	packet[5] = 64;
+	/* a byte's own index, so that each one printed can be placed */
+	for (i = 6; i < (int) sizeof(packet); i++)
+		packet[i] = (uint8_t) i;
+
+	if (decode_n_and_capture(packet, sizeof(packet), 2402,
+				 out, sizeof(out), err, sizeof(err)) != 0)
+		return;
+
+	CHECK_CONTAINS(out, "Advertising / AA 8e89bed6 (valid)/ 64 bytes");
+	/* the first payload bytes, the last of them, then the CRC */
+	CHECK_CONTAINS(out, "\n    Data:  06 07 08");
+	CHECK_CONTAINS(out, " 42 43 44 45\n");
+	CHECK_CONTAINS(out, "\n    CRC:   46 47 48\n");
 	CHECK_EQUALS(err, "");
 }
 
@@ -541,6 +574,7 @@ int main(void)
 	test_diagnostics_go_to_stderr();
 	test_well_formed_values_keep_their_indent();
 	test_an_over_claimed_advertising_length();
+	test_an_extended_advertising_length();
 	test_a_payload_too_short_for_its_type();
 	test_a_truncated_capture();
 	test_an_empty_ll_control_pdu();

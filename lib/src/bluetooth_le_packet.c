@@ -359,20 +359,34 @@ void lell_allocate_and_decode_n(const uint8_t *stream, size_t stream_len,
 	if (copy_len >= 9)
 		captured_len = (unsigned)(copy_len - 9);
 
+	/* The second header octet is the whole Length field, in both kinds of
+	 * PDU: 1 to 255 octets for an advertising channel PDU, and 0 to 251
+	 * for a data channel PDU, where Data Length Extension widened it.
+	 *
+	 * Only six bits of it used to be read on an advertising channel, which
+	 * was the Core 4.x header. Legacy advertising PDUs stay at or below 37
+	 * octets, so they were unaffected, but an extended advertising PDU on
+	 * a primary channel goes past 63: its extended header alone is up to
+	 * 63 octets after the octet that gives their length, so 64 octets came
+	 * out as 0. */
+	if (copy_len >= 6)
+		declared_len = (*pkt)->symbols[5];
+
+	/* A Length of up to 255 is more payload than the symbol buffer holds,
+	 * so the claim is capped at what it holds, as a data channel PDU's
+	 * already was. This states the buffer's limit rather than adding one:
+	 * captured_len below cannot exceed it either, because the copy into
+	 * the buffer is what it is counted from. */
+	if (declared_len > MAX_LE_PAYLOAD_LENGTH)
+		declared_len = MAX_LE_PAYLOAD_LENGTH;
+
+	/* The length is what arrived, not what the sender claimed. */
+	(*pkt)->length = declared_len < captured_len ? declared_len : captured_len;
+
 	if (lell_packet_is_data(*pkt)) {
-		/* BT 4.2 Data Length Extension uses the full octet (0..251). */
-		if (copy_len >= 6)
-			declared_len = (*pkt)->symbols[5];
-		if (declared_len > 251)
-			declared_len = 251;
-		(*pkt)->length = declared_len < captured_len ? declared_len : captured_len;
 		(*pkt)->access_address_offenses = aa_data_channel_offenses((*pkt)->access_address);
 		(*pkt)->flags.as_bits.access_address_ok = (*pkt)->access_address_offenses ? 0 : 1;
 	} else {
-		/* Legacy advertising PDU length remains a 6-bit field. */
-		if (copy_len >= 6)
-			declared_len = (*pkt)->symbols[5] & 0x3f;
-		(*pkt)->length = declared_len < captured_len ? declared_len : captured_len;
 		if (copy_len >= 5) {
 			(*pkt)->adv_type = (*pkt)->symbols[4] & 0xf;
 			(*pkt)->adv_tx_add = (*pkt)->symbols[4] & 0x40 ? 1 : 0;
