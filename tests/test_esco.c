@@ -187,9 +187,11 @@ static void check_payload_bytes(const btbb_packet *pkt, const char *sent,
 }
 
 /*
- * The search for an eSCO length keeps going to the end and reports the
- * longest length whose CRC agreed. The first one that agrees is not the
- * payload: here it is 5 bytes of a 30 byte payload.
+ * The search for an eSCO length keeps going to the end rather than stopping
+ * at the first length whose CRC agrees, which here is 5 bytes of a 30 byte
+ * payload. Each of the lengths that agree here adds bytes of its own, so the
+ * longest is the answer; the next test covers the lengths that add nothing
+ * but zeros.
  */
 static void test_esco_search_reports_the_longest_match(void)
 {

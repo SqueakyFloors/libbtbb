@@ -82,8 +82,8 @@ clang, with the `esco` test counted the same way when it was added:
 | | Count | How it was counted |
 |---|---|---|
 | Tests in the build | 13 | `ctest` case count; 12 C programs and one CMake script test |
-| Assertion sites | 858 | 844 `CHECK`, `CHECK_EQ`, `CHECK_EQUALS`, `CHECK_CONTAINS`, `CHECK_LACKS` and `XFAIL` call sites across the eleven programs that use those macros, plus the 14 explicit failure conditions in `test_le_long.c`, which checks with plain `if` |
-| Assertions executed per run | 176,042 | a scratch copy of the tree with a counter added to each `CHECK` macro body and reported from a destructor, then every test binary run once and the counts summed. The macros do not nest, so nothing is double counted. `test_le_long` is not in this figure |
+| Assertion sites | 870 | 856 `CHECK`, `CHECK_EQ`, `CHECK_EQUALS`, `CHECK_CONTAINS`, `CHECK_LACKS` and `XFAIL` call sites across the eleven programs that use those macros, plus the 14 explicit failure conditions in `test_le_long.c`, which checks with plain `if` |
+| Assertions executed per run | 176,054 | a scratch copy of the tree with a counter added to each `CHECK` macro body and reported from a destructor, then every test binary run once and the counts summed. The macros do not nest, so nothing is double counted. `test_le_long` is not in this figure |
 | Published spec vectors | 7680 hop frequencies | 15 tables of `TABLE_ENTRIES` (512) in `tests/test_spec_hop.c`: three addresses, the basic sequence and four channel maps each |
 
 Where the assertions are:
@@ -97,8 +97,8 @@ Where the assertions are:
 | `spec_le` | 984 |
 | `internal` | 457 |
 | `hop` | 221 |
-| `smoke` | 157 |
-| `esco` | 108 |
+| `smoke` | 161 |
+| `esco` | 116 |
 | `le_print` | 82 |
 | `capture_internal` | 78 |
 
@@ -123,7 +123,7 @@ vectors.
 | `EV4()` checked the payload CRC at a length of 1, indexing `payload[-8]`, where `crcgen()` with a negative length returns a constant that reads as "CRC good" 1 time in 65536 | no EV4 payload decoded, and a packet could be reported as CRC-verified without being checked | `spec_bredr` | #28 | #17 |
 | All three eSCO types only tried a candidate length once a further byte had been decoded | no eSCO payload at the longest length its type allows could ever be found | `spec_bredr`, each type at its shortest, longest and a middle length | #28 | #16 |
 | The eSCO length search stopped at the first length whose CRC agreed, and one payload in 256 ends its CRC in a zero byte, which leaves the CRC register at zero a byte early and makes the length one short of the payload agree as well | an eSCO payload came out one byte short, its last information byte read as part of the CRC: 79 of 20,000 random EV3 payloads at the length a link normally sets up | `esco` | #61 | #40 |
-| `btbb_decode_payload()` chose between an HV3 and an EV3 by decoding as EV3 and falling back only when the capture ran out before the search had finished, which a real capture does not | every HV3 voice packet was reported as 32 bytes of EV3: its 30 voice bytes and two bytes that were not part of the packet | `esco` | #61 | #39 |
+| `btbb_decode_payload()` chose between an HV3 and an EV3 by decoding as EV3 and falling back only when the capture ran out before the search had finished | an HV3 voice packet in a capture that holds 16 or more symbols past it, which a real capture does, was reported as 32 bytes of EV3: its 30 voice bytes and two bytes that were not part of the packet | `esco` | #61 | #39 |
 | A DV packet's data field was dewhitened from bit 18, where the payload header starts on every other type, instead of continuing past the 80-bit voice field at bit 98 | the length, the data and the CRC of every DV packet were wrong | `spec_bredr`, every clock | #28 | #24 |
 | `DM()` and `fhs()` compared a bit count against the symbols they had, and a rate 2/3 FEC payload arrives in half again as many symbols as it has bits | a capture that ended partway through a packet decoded a payload out of symbols that were not there | `spec_bredr`, every truncation of a DM1, DH1, DM3, DH5, FHS and DV | #28 | #13 |
 | `btbb_decode_header()` and `try_clock()` read the 122 symbols of the access code and header with no check that the packet held them, and the header's majority vote covers for the missing ones | a capture cut one symbol short still decoded to a header that looked good | `spec_bredr` | #28 | #13 |

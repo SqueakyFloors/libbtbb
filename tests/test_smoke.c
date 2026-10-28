@@ -236,6 +236,27 @@ static void test_bredr_syncword(void)
 	}
 }
 
+/* The eSCO length a caller can give the decoder, through the library: what
+   it does with it is tests/test_esco.c's subject, which compiles the decoder
+   itself, so this is here to catch the pair not being exported. */
+static void test_esco_length_accessors(void)
+{
+	btbb_packet *pkt = btbb_packet_new();
+
+	CHECK(pkt != NULL);
+	if (pkt == NULL)
+		return;
+
+	/* nothing said about the link yet */
+	CHECK(btbb_packet_get_esco_length(pkt) == 0);
+	btbb_packet_set_esco_length(pkt, 30);
+	CHECK(btbb_packet_get_esco_length(pkt) == 30);
+	btbb_packet_set_esco_length(pkt, 0);
+	CHECK(btbb_packet_get_esco_length(pkt) == 0);
+
+	btbb_packet_unref(pkt);
+}
+
 static void test_version_strings(void)
 {
 	CHECK(btbb_get_version() != NULL && btbb_get_version()[0] != '\0');
@@ -248,6 +269,7 @@ int main(void)
 	test_le_advertising_packet();
 	test_le_channel_index();
 	test_bredr_syncword();
+	test_esco_length_accessors();
 
 	if (failures != 0) {
 		printf("%d check(s) failed\n", failures);
