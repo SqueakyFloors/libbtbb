@@ -130,7 +130,8 @@ char *tun_format(btbb_packet* p);
  * sets resultant packet_type and UAP, returns UAP.
  *
  * A packet of fewer than 122 symbols holds no header to read, so for one of
- * those this sets nothing and returns 0.
+ * those this sets nothing and returns 0, which a caller cannot tell from a
+ * header that decoded to a UAP of 0x00.
  */
 uint8_t try_clock(int clock, btbb_packet* p);
 

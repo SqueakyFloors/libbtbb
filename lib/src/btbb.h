@@ -120,6 +120,11 @@ uint8_t btbb_packet_get_ac_errors(const btbb_packet *pkt);
 uint32_t btbb_packet_get_clkn(const btbb_packet *pkt);
 uint32_t btbb_packet_get_header_packed(const btbb_packet* pkt);
 
+/* Copy the symbols of a packet in. This is the length every decode
+ * works from, so a packet holding fewer symbols than a field needs is
+ * decoded as far as the symbols go and no further. A length below zero
+ * is taken as none, and one above the longest packet, 3125 symbols, as
+ * that. */
 void btbb_packet_set_data(btbb_packet *pkt,
 			  char *syms,      // Symbol data
 			  int length,      // Number of symbols

@@ -50,8 +50,9 @@
  */
 #define HEADER_WHITENING_BITS 18
 
-/* The DV packet's voice field comes before its data field and is whitened
- * too (Vol 2, Part B, Section 6.5.2.4). */
+/* The DV packet's voice field comes before its data field (Vol 2, Part B,
+ * Section 6.5.2.4), and Section 7.2 whitens it along with the rest, so the
+ * data field continues this much further into the sequence. */
 #define DV_VOICE_BITS 80
 
 /* index into whitening data array */
@@ -484,6 +485,13 @@ void btbb_packet_set_data(btbb_packet *pkt, char *data, int length,
 {
 	int i;
 
+	/* The symbol count is stored unsigned, so a negative one would come
+	 * back out as a very large count and tell every decoder there are
+	 * symbols here that the caller never provided. A caller that worked
+	 * one out by subtraction can land here with one.
+	 */
+	if (length < 0)
+		length = 0;
 	if (length > MAX_SYMBOLS)
 		length = MAX_SYMBOLS;
 	for (i = 0; i < length; i++)
@@ -829,8 +837,12 @@ int fhs(int clock, btbb_packet* pkt)
 	}
 
 	char *corrected = unfec23(stream, pkt->payload_length * 8);
-	if (!corrected)
+	if (!corrected) {
+		/* a block the error correction could not put right, so
+		 * nothing is decoded to report */
+		pkt->payload_length = 0;
 		return 0;
+	}
 
 	/* try to unwhiten with known clock bits */
 	unwhiten(corrected, pkt->payload, clock, pkt->payload_length * 8,
@@ -1015,8 +1027,12 @@ int DM(int clock, btbb_packet* pkt)
 	}
 
 	char *corrected = unfec23(stream, bitlength);
-	if (!corrected)
+	if (!corrected) {
+		/* a block the error correction could not put right, so
+		 * nothing is decoded to report */
+		pkt->payload_length = 0;
 		return 0;
+	}
 	unwhiten(corrected, pkt->payload, clock, bitlength, skip, pkt);
 	free(corrected);
 
@@ -1223,10 +1239,11 @@ int HV(int clock, btbb_packet* pkt)
 	int size = pkt->length - 122;
 
 	pkt->payload_header_length = 0;
-	if(size < 240) {
-		pkt->payload_length = 0;
+	/* nothing is decoded yet, so each case below sets the length once it
+	 * has decoded a payload and the failure paths report none */
+	pkt->payload_length = 0;
+	if(size < 240)
 		return 1; //FIXME should throw exception
-	}
 
 	switch (pkt->packet_type) {
 		case PACKET_TYPE_HV1:
