@@ -529,13 +529,16 @@ static void test_bredr_pcapng_empty_payload(void)
 static void test_bredr_failed_checks(void)
 {
 	const char *filename = "test_capture_bad.pcapng";
+	const char *pcap_name = "test_capture_bad.pcap";
 	char header_symbols[55];
 	char payload[sizeof(SPEC_DH1_PAYLOAD)];
 	char stream[1024];
 	btbb_pcapng_handle *h = NULL;
+	btbb_pcap_handle *ph = NULL;
 	btbb_packet *pkt;
 	size_t blk, data;
 	int length, hec;
+	uint16_t expected_flags;
 
 	/* A DH1 with one payload byte altered, so the CRC it carries no
 	   longer matches. */
@@ -560,7 +563,31 @@ static void test_bredr_failed_checks(void)
 	CHECK(btbb_pcapng_append_packet(h, 11ull, -20, -80, SPEC_DH1_LAP,
 					SPEC_DH1_UAP, pkt) == 0);
 	(void) btbb_pcapng_close(h);
+
+	/* the same record through the pcap writer */
+	unlink_quietly(pcap_name);
+	CHECK(btbb_pcap_create_file(pcap_name, &ph) == 0);
+	if (ph != NULL) {
+		CHECK(btbb_pcap_append_packet(ph, 11ull, -20, -80,
+					      SPEC_DH1_LAP, SPEC_DH1_UAP,
+					      pkt) == 0);
+		CHECK(btbb_pcap_close(ph) == 0);
+	}
 	btbb_packet_unref(pkt);
+
+	expected_flags = BREDR_DEWHITENED | BREDR_SIGPOWER_VALID |
+		BREDR_NOISEPOWER_VALID | BREDR_REFLAP_VALID |
+		BREDR_REFUAP_VALID | BREDR_PAYLOAD_PRESENT |
+		BREDR_HEC_CHECKED | BREDR_HEC_VALID | BREDR_CRC_CHECKED;
+
+	if (ph != NULL) {
+		CHECK(read_capture(pcap_name));
+		unlink_quietly(pcap_name);
+		if (capture_len != 0) {
+			CHECK(rd16(24 + 16 + 20) == expected_flags);
+			CHECK((rd16(24 + 16 + 20) & BREDR_CRC_VALID) == 0);
+		}
+	}
 
 	CHECK(read_capture(filename));
 	unlink_quietly(filename);
@@ -569,12 +596,7 @@ static void test_bredr_failed_checks(void)
 		CHECK(blk < capture_len);
 		if (blk < capture_len) {
 			data = blk + 28;
-			CHECK(rd16(data + 20) ==
-			      (BREDR_DEWHITENED | BREDR_SIGPOWER_VALID |
-			       BREDR_NOISEPOWER_VALID | BREDR_REFLAP_VALID |
-			       BREDR_REFUAP_VALID | BREDR_PAYLOAD_PRESENT |
-			       BREDR_HEC_CHECKED | BREDR_HEC_VALID |
-			       BREDR_CRC_CHECKED));
+			CHECK(rd16(data + 20) == expected_flags);
 			CHECK((rd16(data + 20) & BREDR_CRC_VALID) == 0);
 			CHECK(capture[data + 23] == 0x00);
 		}
@@ -698,64 +720,97 @@ static void test_bredr_voice_payload_has_no_crc(void)
  * claim a CRC was checked. This is what `ubertooth-rx -q` does on every
  * packet until it finds the address part.
  */
-static void test_bredr_uap_search_records_no_check(void)
+static void test_bredr_uap_search(void)
 {
 	const char *filename = "test_capture_search.pcapng";
 	char header_symbols[55];
+	char payload[sizeof(SPEC_DH1_PAYLOAD)];
 	char stream[1024];
-	btbb_pcapng_handle *h = NULL;
-	btbb_piconet *pn;
-	btbb_packet *pkt = NULL;
-	size_t blk, data;
-	int length;
+	int pass;
 
-	unlink_quietly(filename);
 	strcpy(header_symbols, SPEC_DH1_HEADER);
-	length = build_bredr_stream(stream, SPEC_DH1_LAP, header_symbols,
-				    SPEC_DH1_PAYLOAD);
 
-	/* the LAP is known, the address part is not: the same state
-	   btbb_process_packet() is in before it starts following */
-	pn = btbb_piconet_new();
-	CHECK(pn != NULL);
-	if (pn == NULL)
-		return;
-	btbb_init_piconet(pn, SPEC_DH1_LAP);
-	CHECK(btbb_find_ac(stream, 1, SPEC_DH1_LAP, 0, &pkt) == 0);
-	CHECK(pkt != NULL);
-	if (pkt == NULL) {
-		btbb_piconet_unref(pn);
-		return;
-	}
-	btbb_packet_set_data(pkt, stream, length, 0, 0);
-	btbb_packet_set_flag(pkt, BTBB_WHITENED, 0);
-	CHECK(btbb_process_packet(pkt, pn) == 0);
-	CHECK(btbb_packet_get_flag(pkt, BTBB_CRC_CHECKED) == 0);
-	CHECK(btbb_packet_get_flag(pkt, BTBB_HEC_CHECKED) == 0);
+	/*
+	 * Twice: once with the specification's DH1, whose CRC comes out and
+	 * so settles the address part, and once with a payload byte altered,
+	 * where every candidate is rejected and the search goes on.
+	 */
+	for (pass = 0; pass < 2; pass++) {
+		btbb_pcapng_handle *h = NULL;
+		btbb_piconet *pn;
+		btbb_packet *pkt = NULL;
+		size_t blk, data;
+		int length, found;
 
-	CHECK(btbb_pcapng_create_file(filename, "test", &h) == 0);
-	if (h == NULL) {
+		unlink_quietly(filename);
+		strcpy(payload, SPEC_DH1_PAYLOAD);
+		if (pass == 1) {
+			CHECK(payload[8] == '1');
+			payload[8] = '0';
+		}
+		length = build_bredr_stream(stream, SPEC_DH1_LAP,
+					    header_symbols, payload);
+
+		/* the LAP is known, the address part is not: the state
+		   btbb_process_packet() is in before it starts following */
+		pn = btbb_piconet_new();
+		CHECK(pn != NULL);
+		if (pn == NULL)
+			return;
+		btbb_init_piconet(pn, SPEC_DH1_LAP);
+		CHECK(btbb_find_ac(stream, 1, SPEC_DH1_LAP, 0, &pkt) == 0);
+		CHECK(pkt != NULL);
+		if (pkt == NULL) {
+			btbb_piconet_unref(pn);
+			return;
+		}
+		btbb_packet_set_data(pkt, stream, length, 0, 0);
+		btbb_packet_set_flag(pkt, BTBB_WHITENED, 0);
+		CHECK(btbb_process_packet(pkt, pn) == 0);
+		found = btbb_piconet_get_flag(pn, BTBB_UAP_VALID);
+		CHECK(found == (pass == 0));
+		/* the CRC answer stays on the packet only when it is the one
+		   that settled the address part */
+		CHECK(btbb_packet_get_flag(pkt, BTBB_CRC_CHECKED) == found);
+		CHECK(btbb_packet_get_flag(pkt, BTBB_CRC_CORRECT) == found);
+		/* the header is only decoded once the clock is known, so the
+		   HEC is not checked either way */
+		CHECK(btbb_packet_get_flag(pkt, BTBB_HEC_CHECKED) == 0);
+
+		CHECK(btbb_pcapng_create_file(filename, "test", &h) == 0);
+		if (h == NULL) {
+			btbb_packet_unref(pkt);
+			btbb_piconet_unref(pn);
+			return;
+		}
+		CHECK(btbb_pcapng_append_packet(h, 17ull, -20, -80,
+						SPEC_DH1_LAP, UAP_ANY,
+						pkt) == 0);
+		(void) btbb_pcapng_close(h);
 		btbb_packet_unref(pkt);
 		btbb_piconet_unref(pn);
-		return;
-	}
-	CHECK(btbb_pcapng_append_packet(h, 17ull, -20, -80, SPEC_DH1_LAP,
-					UAP_ANY, pkt) == 0);
-	(void) btbb_pcapng_close(h);
-	btbb_packet_unref(pkt);
-	btbb_piconet_unref(pn);
 
-	CHECK(read_capture(filename));
-	unlink_quietly(filename);
-	if (capture_len == 0)
-		return;
-	blk = find_block(BLOCK_TYPE_ENHANCED_PACKET, 0);
-	CHECK(blk < capture_len);
-	if (blk >= capture_len)
-		return;
-	data = blk + 28;
-	CHECK((rd16(data + 20) & (BREDR_HEC_CHECKED | BREDR_HEC_VALID |
-				  BREDR_CRC_CHECKED | BREDR_CRC_VALID)) == 0);
+		CHECK(read_capture(filename));
+		unlink_quietly(filename);
+		if (capture_len == 0)
+			return;
+		blk = find_block(BLOCK_TYPE_ENHANCED_PACKET, 0);
+		CHECK(blk < capture_len);
+		if (blk >= capture_len)
+			return;
+		data = blk + 28;
+		CHECK((rd16(data + 20) &
+		       (BREDR_HEC_CHECKED | BREDR_HEC_VALID)) == 0);
+		if (found) {
+			CHECK((rd16(data + 20) &
+			       (BREDR_CRC_CHECKED | BREDR_CRC_VALID)) ==
+			      (BREDR_CRC_CHECKED | BREDR_CRC_VALID));
+		}
+		else {
+			CHECK((rd16(data + 20) &
+			       (BREDR_CRC_CHECKED | BREDR_CRC_VALID)) == 0);
+		}
+	}
 }
 
 /*
@@ -1355,7 +1410,7 @@ int main(void)
 	test_bredr_pcapng_empty_payload();
 	test_bredr_failed_checks();
 	test_bredr_voice_payload_has_no_crc();
-	test_bredr_uap_search_records_no_check();
+	test_bredr_uap_search();
 	test_bredr_interface_options();
 	test_bredr_pcap_record();
 	test_le_connect_ind_option();

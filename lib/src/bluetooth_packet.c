@@ -751,10 +751,10 @@ int crc_check(int clock, btbb_packet* pkt)
 
 	/* This is how the library guesses a piconet's upper address part: it
 	 * decodes the same packet at up to 64 candidate clocks and sees which
-	 * one makes the CRC come out. A failure here says the guess was wrong,
-	 * not that the air traffic was corrupt, so put the packet's own
-	 * HEC and CRC answers back before returning. A capture file would
-	 * otherwise report a CRC failure for a payload nothing ever decoded. */
+	 * one makes the CRC come out. Keep the packet's own HEC and CRC
+	 * answers so they can be put back when a trial comes to nothing; a
+	 * capture file would otherwise report a CRC failure for a payload
+	 * nothing ever decoded. */
 	int hec_checked = btbb_packet_get_flag(pkt, BTBB_HEC_CHECKED);
 	int hec_valid = btbb_packet_get_flag(pkt, BTBB_HEC_VALID);
 	int crc_checked = btbb_packet_get_flag(pkt, BTBB_CRC_CHECKED);
@@ -797,11 +797,6 @@ int crc_check(int clock, btbb_packet* pkt)
 		default:
 			break;
 	}
-	btbb_packet_set_flag(pkt, BTBB_HEC_CHECKED, hec_checked);
-	btbb_packet_set_flag(pkt, BTBB_HEC_VALID, hec_valid);
-	btbb_packet_set_flag(pkt, BTBB_CRC_CHECKED, crc_checked);
-	btbb_packet_set_flag(pkt, BTBB_CRC_CORRECT, crc_correct);
-
 	/*
 	 * never return a zero result unless this is a FHS, DM1, or HV1.  any
 	 * other type could have actually been something else (another logical
@@ -809,11 +804,25 @@ int crc_check(int clock, btbb_packet* pkt)
 	 */
 	if (retval == 0 && (pkt->packet_type != 2 && pkt->packet_type != 3 &&
 			pkt->packet_type != 5))
-		return 1;
+		retval = 1;
 
 	/* EV3 and EV5 have a relatively high false positive rate */
 	if (retval > 1 && (pkt->packet_type == 7 || pkt->packet_type == 13))
-		return 1;
+		retval = 1;
+
+	/* More than 2 is a CRC that came out, which is the result the caller
+	 * accepts as the address part and clock of this piconet. That answer
+	 * is about this packet, so leave it on it. Anything else is a trial
+	 * the caller goes on from: 2 means the CRC did not come out but the
+	 * logical transport may have been guessed wrong, and 0 and 1 are a
+	 * failure and an inconclusive result. Put the packet's own answers
+	 * back for those. */
+	if (retval <= 2) {
+		btbb_packet_set_flag(pkt, BTBB_HEC_CHECKED, hec_checked);
+		btbb_packet_set_flag(pkt, BTBB_HEC_VALID, hec_valid);
+		btbb_packet_set_flag(pkt, BTBB_CRC_CHECKED, crc_checked);
+		btbb_packet_set_flag(pkt, BTBB_CRC_CORRECT, crc_correct);
+	}
 
 	return retval;
 }
