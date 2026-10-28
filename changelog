@@ -58,9 +58,10 @@ libbtbb (2020-12-R1+fork5) unstable; urgency=low
     never decoded.
   * A packet cut short by the end of a capture no longer decodes a payload, or
     a packet header, out of symbols the capture did not hold, and reports no
-    payload rather than the length the payload header claimed. The types that
-    carry error correction were the ones affected, because their payload
-    arrives in half again as many symbols as it has bits.
+    payload rather than the length the payload header claimed. A packet whose
+    payload carries error correction was decoded from symbols past the end of
+    the capture as well, because its payload arrives in half again as many
+    symbols as it has bits and only the bits were counted.
   * A packet whose payload the error correction cannot recover, which is what
     noise does to a capture, no longer reports the length its payload header
     claimed along with bytes left from whatever was decoded before it.

@@ -888,7 +888,7 @@ static int decode_payload_header(char *stream, int clock, int header_bytes, int 
 		if(size < 16)
 			return 0; //FIXME should throw exception
 		if(fec) {
-			if(size < 30)
+			if(size < fec23_symbols(16))
 				return 0; //FIXME should throw exception
 			char *corrected = unfec23(stream, 16);
 			if (!corrected)
@@ -904,7 +904,7 @@ static int decode_payload_header(char *stream, int clock, int header_bytes, int 
 		if(size < 8)
 			return 0; //FIXME should throw exception
 		if(fec) {
-			if(size < 15)
+			if(size < fec23_symbols(8))
 				return 0; //FIXME should throw exception
 			char *corrected = unfec23(stream, 8);
 			if (!corrected)
@@ -1151,9 +1151,11 @@ static int esco_payload(int clock, btbb_packet* pkt, int maxlength)
 
 int EV3(int clock, btbb_packet* pkt)
 {
-	/* maximum payload length is 30 bytes + 2 bytes CRC
+	/* 30 information bytes and a two byte CRC
 	 * (Vol 2, Part B, Section 6.5.3.1) */
-	return esco_payload(clock, pkt, 32);
+	int maxbytes = 30 + 2;
+
+	return esco_payload(clock, pkt, maxbytes);
 }
 
 int EV4(int clock, btbb_packet* pkt)
@@ -1166,10 +1168,9 @@ int EV4(int clock, btbb_packet* pkt)
 	/* number of symbols remaining after access code and packet header */
 	int size = pkt->length - 122;
 
-	/* maximum payload length is 120 bytes + 2 bytes CRC
-	 * (Vol 2, Part B, Section 6.5.3.2), which rate 2/3 FEC turns into 98
-	 * blocks of 15 symbols */
-	int maxbytes = 122;
+	/* 120 information bytes and a two byte CRC (Vol 2, Part B, Section
+	 * 6.5.3.2), which rate 2/3 FEC turns into 98 blocks of 15 symbols */
+	int maxbytes = 120 + 2;
 	int maxsymbols = fec23_symbols(maxbytes * 8);
 
 	/* the shortest payload is one information byte and the two byte CRC,
@@ -1193,12 +1194,17 @@ int EV4(int clock, btbb_packet* pkt)
 		}
 		corrected = unfec23(stream + syms, 10);
 		if (!corrected) {
+			if (syms < minsymbols) {
+				/* what is here is shorter than the shortest
+				 * payload this type carries, so it is not one
+				 * of these packets and there is no payload to
+				 * report */
+				pkt->payload_length = 0;
+				return 0;
+			}
 			/* this block is lost, so the payload ends before it */
 			pkt->payload_length = bits / 8;
-			if (syms < minsymbols)
-				return 0;
-			else
-				return 1;
+			return 1;
 		}
 		unwhiten(corrected, pkt->payload + bits, clock, 10,
 			 HEADER_WHITENING_BITS + bits, pkt);
@@ -1225,9 +1231,11 @@ int EV4(int clock, btbb_packet* pkt)
 
 int EV5(int clock, btbb_packet* pkt)
 {
-	/* maximum payload length is 180 bytes + 2 bytes CRC
+	/* 180 information bytes and a two byte CRC
 	 * (Vol 2, Part B, Section 6.5.3.3) */
-	return esco_payload(clock, pkt, 182);
+	int maxbytes = 180 + 2;
+
+	return esco_payload(clock, pkt, maxbytes);
 }
 
 /* HV packet type payload parser */

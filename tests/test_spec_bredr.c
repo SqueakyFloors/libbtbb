@@ -1172,32 +1172,43 @@ static void test_uncorrectable_payload_fec(void)
 	/*
 	 * An EV4 decodes block by block and has no payload header to tell it
 	 * the length, so a lost block ends the payload: the bytes before it
-	 * are decoded and are all there is to report.
+	 * are decoded and are all there is to report. Lost early enough, what
+	 * is left is shorter than the shortest payload the type carries, so it
+	 * is no payload at all.
 	 */
-	{
-		char bits[(120 + 2) * 8 + 10];
+	for (i = 0; i < 2; i++) {
+		enum { EV4_BYTES = 122, EV4_BLOCKS = 98 };
+		char bits[EV4_BLOCKS * 10];
+		const int lost = i == 0 ? 3 : 1;
 		int bit;
 
 		memset(bits, 0, sizeof(bits));
-		spec_whiten(bits, 122 * 8, clock, 18);
-		for (bit = 122 * 8; bit < 98 * 10; bit++)
+		spec_whiten(bits, EV4_BYTES * 8, clock, 18);
+		for (bit = EV4_BYTES * 8; bit < EV4_BLOCKS * 10; bit++)
 			bits[bit] = 0;
-		spec_fec23(bits, payload, 98 * 10);
-		wreck_fec23_block(payload, 3);
+		spec_fec23(bits, payload, EV4_BLOCKS * 10);
+		wreck_fec23_block(payload, lost);
 
 		header_data = (uint16_t) (1 | (PACKET_TYPE_EV4 << 3));
 		length = build_packet(stream, 0x9e8b33, header_data,
 				      spec_hec(header_data, 0x47), payload,
-				      98 * 15, clock, 1);
+				      EV4_BLOCKS * 15, clock, 1);
 		pkt = packet_for(stream, length, 0x47, clock, 1);
 		CHECK(pkt != NULL);
 		if (pkt == NULL)
 			return;
 		seed_stale_payload_length(pkt);
 		CHECK(btbb_decode_header(pkt) == 1);
-		CHECK(EV4(clock, pkt) == 1);
-		/* three blocks decoded, 30 bits, so three whole bytes */
-		CHECK(btbb_packet_get_payload_length(pkt) == 3);
+		if (lost == 3) {
+			/* three blocks decoded, 30 bits, three whole bytes */
+			CHECK(EV4(clock, pkt) == 1);
+			CHECK(btbb_packet_get_payload_length(pkt) == 3);
+		} else {
+			/* one block is 10 bits, short of the three byte
+			 * minimum, so this is not an EV4 */
+			CHECK(EV4(clock, pkt) == 0);
+			CHECK(btbb_packet_get_payload_length(pkt) == 0);
+		}
 		btbb_packet_unref(pkt);
 	}
 }
@@ -1210,14 +1221,12 @@ static void test_uncorrectable_payload_fec(void)
 static void test_esco_no_length_matches(void)
 {
 	static const struct {
-		const char *name;
 		uint8_t type;
 		int bytes;
-		int fec23;
 	} CASES[] = {
-		{ "EV3", PACKET_TYPE_HV3,  32, 0 },
-		{ "EV4", PACKET_TYPE_EV4, 122, 1 },
-		{ "EV5", PACKET_TYPE_EV5, 182, 0 }
+		{ PACKET_TYPE_HV3,  32 },
+		{ PACKET_TYPE_EV4, 122 },
+		{ PACKET_TYPE_EV5, 182 }
 	};
 	size_t row;
 
@@ -1227,6 +1236,7 @@ static void test_esco_no_length_matches(void)
 		char stream[MAX_SYMBOLS];
 		uint16_t header_data;
 		btbb_packet *pkt;
+		int fec23 = CASES[row].type == PACKET_TYPE_EV4;
 		int data_bits = CASES[row].bytes * 8;
 		int payload_symbols, length, i, rv;
 		const int clock = 0x33;
@@ -1238,7 +1248,7 @@ static void test_esco_no_length_matches(void)
 			bits[i] = 1;
 		spec_whiten(bits, data_bits, clock, 18);
 
-		if (CASES[row].fec23) {
+		if (fec23) {
 			int blocks = (data_bits + 9) / 10;
 
 			for (i = data_bits; i < blocks * 10; i++)
@@ -1260,7 +1270,7 @@ static void test_esco_no_length_matches(void)
 			return;
 		CHECK(btbb_decode_header(pkt) == 1);
 
-		if (CASES[row].type == PACKET_TYPE_EV4)
+		if (fec23)
 			rv = EV4(clock, pkt);
 		else if (CASES[row].type == PACKET_TYPE_EV5)
 			rv = EV5(clock, pkt);
@@ -1604,18 +1614,16 @@ static void test_esco_truncated_capture(void)
  * the whole payload in one run without reinitializing the register, so the
  * data field continues from bit 98: 18 header bits and 80 voice bits.
  */
-static void test_dv_payload_at_clock(int clock)
+#define DV_BODY 9
+
+static int build_dv_packet(char *stream, int clock)
 {
-	char bits[12 * 8 + 10];
+	char bits[(1 + DV_BODY + 2) * 8 + 10];
 	char payload[80 + 15 * 10];
-	char stream[MAX_SYMBOLS];
-	char packed[MAX_PAYLOAD_LENGTH / 8];
 	uint16_t header_data;
-	btbb_packet *pkt;
-	const int body = 9;
-	int data_bits = (1 + body + 2) * 8;
+	int data_bits = (1 + DV_BODY + 2) * 8;
 	int blocks = (data_bits + 9) / 10;
-	int length, i, bit;
+	int i, bit;
 	uint16_t crc;
 
 	memset(bits, 0, sizeof(bits));
@@ -1623,16 +1631,16 @@ static void test_dv_payload_at_clock(int clock)
 	bits[1] = 1;
 	bits[2] = 1;
 	for (bit = 0; bit < 5; bit++)
-		bits[3 + bit] = (char) ((body >> bit) & 1);
-	for (i = 0; i < body; i++) {
+		bits[3 + bit] = (char) ((DV_BODY >> bit) & 1);
+	for (i = 0; i < DV_BODY; i++) {
 		uint8_t value = (uint8_t) (0x50 + i);
 
 		for (bit = 0; bit < 8; bit++)
 			bits[(1 + i) * 8 + bit] = (char) ((value >> bit) & 1);
 	}
-	crc = crcgen(bits, (1 + body) * 8, 0x47);
+	crc = crcgen(bits, (1 + DV_BODY) * 8, 0x47);
 	for (bit = 0; bit < 16; bit++)
-		bits[(1 + body) * 8 + bit] = (char) ((crc >> bit) & 1);
+		bits[(1 + DV_BODY) * 8 + bit] = (char) ((crc >> bit) & 1);
 
 	/* the voice field comes first and is whitened too, so it is 80 bits of
 	 * whitening the data field must not reuse */
@@ -1643,9 +1651,18 @@ static void test_dv_payload_at_clock(int clock)
 	spec_fec23(bits, payload + 80, blocks * 10);
 
 	header_data = (uint16_t) (1 | (PACKET_TYPE_DV << 3) | (3 << 7));
-	length = build_packet(stream, 0x9e8b33, header_data,
-			      spec_hec(header_data, 0x47), payload,
-			      80 + blocks * 15, clock, 1);
+	return build_packet(stream, 0x9e8b33, header_data,
+			    spec_hec(header_data, 0x47), payload,
+			    80 + blocks * 15, clock, 1);
+}
+
+static void test_dv_payload_at_clock(int clock)
+{
+	char stream[MAX_SYMBOLS];
+	char packed[MAX_PAYLOAD_LENGTH / 8];
+	btbb_packet *pkt;
+	int length = build_dv_packet(stream, clock);
+	int i;
 
 	pkt = packet_for(stream, length, 0x47, clock, 1);
 	CHECK(pkt != NULL);
@@ -1655,13 +1672,48 @@ static void test_dv_payload_at_clock(int clock)
 	CHECK(btbb_decode_header(pkt) == 1);
 	CHECK(btbb_packet_get_type(pkt) == PACKET_TYPE_DV);
 	CHECK(btbb_decode_payload(pkt) == 10);
-	CHECK(btbb_packet_get_payload_length(pkt) == 1 + body + 2);
-	CHECK(btbb_get_payload_packed(pkt, packed) == 1 + body + 2);
+	CHECK(btbb_packet_get_payload_length(pkt) == 1 + DV_BODY + 2);
+	CHECK(btbb_get_payload_packed(pkt, packed) == 1 + DV_BODY + 2);
 	CHECK((uint8_t) packed[0] == 0x4e);
-	for (i = 0; i < body; i++)
+	for (i = 0; i < DV_BODY; i++)
 		CHECK((uint8_t) packed[1 + i] == (uint8_t) (0x50 + i));
 
 	btbb_packet_unref(pkt);
+}
+
+/*
+ * A DV packet's data field sits 80 symbols further in than every other type's
+ * payload, so the symbols its decode needs are 80 more than the data field
+ * alone, and a capture that stops inside the voice field or the data field
+ * holds no payload to report.
+ */
+static void test_dv_truncated_capture(void)
+{
+	char stream[MAX_SYMBOLS];
+	const int clock = 0x11;
+	int length = build_dv_packet(stream, clock);
+	int cut;
+
+	for (cut = 122; cut < length; cut++) {
+		btbb_packet *pkt = packet_for(stream, cut, 0x47, clock, 1);
+		int rv;
+
+		CHECK(pkt != NULL);
+		if (pkt == NULL)
+			return;
+		seed_stale_payload_length(pkt);
+		CHECK(btbb_decode_header(pkt) == 1);
+
+		rv = btbb_decode_payload(pkt);
+		if (rv == 10 || btbb_packet_get_payload_length(pkt) != 0) {
+			printf("FAIL %s:%d: DV cut to %d of %d symbols "
+			       "decodes to %d and reports %d bytes\n",
+			       __FILE__, __LINE__, cut, length, rv,
+			       btbb_packet_get_payload_length(pkt));
+			++failures;
+		}
+		btbb_packet_unref(pkt);
+	}
 }
 
 /*
@@ -1693,7 +1745,7 @@ static void test_fhs_payload(void)
 	const uint8_t uap = 0x89;
 	const uint16_t nap = 0xabcd;
 	const uint32_t clk2_27 = 0x2345678;
-	int length, bit;
+	int length, bit, cut;
 	uint16_t crc;
 	const int clock = 0x11;
 
@@ -1733,6 +1785,32 @@ static void test_fhs_payload(void)
 	CHECK(clock_from_fhs(pkt) == clk2_27);
 
 	btbb_packet_unref(pkt);
+
+	/*
+	 * The FHS length is fixed, so the decoder sets it before checking
+	 * that the capture holds the payload: a capture that stops short must
+	 * not leave that length behind as a payload it never decoded.
+	 */
+	for (cut = 122; cut < length; cut++) {
+		int rv;
+
+		pkt = packet_for(stream, cut, 0x47, clock, 1);
+		CHECK(pkt != NULL);
+		if (pkt == NULL)
+			return;
+		seed_stale_payload_length(pkt);
+		CHECK(btbb_decode_header(pkt) == 1);
+
+		rv = btbb_decode_payload(pkt);
+		if (rv > 1 || btbb_packet_get_payload_length(pkt) != 0) {
+			printf("FAIL %s:%d: FHS cut to %d of %d symbols "
+			       "decodes to %d and reports %d bytes\n",
+			       __FILE__, __LINE__, cut, length, rv,
+			       btbb_packet_get_payload_length(pkt));
+			++failures;
+		}
+		btbb_packet_unref(pkt);
+	}
 }
 
 /*
@@ -1898,6 +1976,7 @@ int main(void)
 	test_esco_payload_lengths();
 	test_esco_truncated_capture();
 	test_dv_payload();
+	test_dv_truncated_capture();
 	test_payload_crc_needs_a_payload();
 	test_fhs_payload();
 	test_packets_without_payload();
