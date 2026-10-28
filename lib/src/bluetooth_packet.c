@@ -817,6 +817,12 @@ static int payload_crc(btbb_packet* pkt)
 	crc = crcgen(pkt->payload, (pkt->payload_length - 2) * 8, pkt->UAP);
 	check = air_to_host16(&pkt->payload[(pkt->payload_length - 2) * 8], 16);
 
+	/* Record the answer on the packet, so a capture file can say whether
+	   the CRC was checked and whether it passed. Types without a CRC never
+	   reach here, and so stay "not checked". */
+	btbb_packet_set_flag(pkt, BTBB_CRC_CHECKED, 1);
+	btbb_packet_set_flag(pkt, BTBB_CRC_CORRECT, crc == check);
+
 	return (crc == check);
 }
 
@@ -1343,6 +1349,12 @@ int btbb_decode_header(btbb_packet* pkt)
 		uint16_t hdr_data = air_to_host16(pkt->packet_header, 10);
 		uint8_t hec = air_to_host8(&pkt->packet_header[10], 8);
 		UAP = uap_from_hec(hdr_data, hec);
+
+		/* Record the answer on the packet, so a capture file can say
+		   whether the HEC was checked and whether it passed. */
+		btbb_packet_set_flag(pkt, BTBB_HEC_CHECKED, 1);
+		btbb_packet_set_flag(pkt, BTBB_HEC_VALID, UAP == pkt->UAP);
+
 		if (UAP == pkt->UAP) {
 			pkt->packet_lt_addr = air_to_host8(&pkt->packet_header[0], 3);
 			pkt->packet_type = air_to_host8(&pkt->packet_header[3], 4);

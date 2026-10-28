@@ -140,7 +140,9 @@ assemble_pcapng_bredr_packet( pcap_bredr_packet * pkt,
 	uint32_t pcap_caplen = sizeof(pcap_bluetooth_bredr_bb_header) -
 				sizeof(pkt->bredr_bb_header.bredr_payload) 
 				+ caplen;
-	uint32_t reflapuap = (ref_lap&0xffffff) | (ref_uap<<24);
+	/* The cast keeps the shift out of a signed int, where a reference UAP
+	   of 0x80 or above would overflow into the sign bit. */
+	uint32_t reflapuap = (ref_lap&0xffffff) | ((uint32_t) ref_uap << 24);
 
 	pkt->pcap_header.ts_sec  = ns / 1000000000ull;
 	pkt->pcap_header.ts_usec = ns % 1000000000ull;
@@ -176,15 +178,22 @@ btbb_pcap_append_packet(btbb_pcap_handle * h, const uint64_t ns,
 			const btbb_packet *pkt)
 {
 	if (h && h->pcap_file) {
-		uint16_t flags = BREDR_DEWHITENED | BREDR_SIGPOWER_VALID |
-			((noisedbm < sigdbm) ? BREDR_NOISEPOWER_VALID : 0) |
-			((reflap != LAP_ANY) ? BREDR_REFLAP_VALID : 0) |
-			((refuap != UAP_ANY) ? BREDR_REFUAP_VALID : 0);
-		uint32_t caplen = (uint32_t) btbb_packet_get_payload_length(pkt);
-		uint8_t payload_bytes[caplen];
-		btbb_get_payload_packed( pkt, (char *) &payload_bytes[0] );
-		caplen = MIN(BREDR_MAX_PAYLOAD, caplen);
+		uint16_t flags = bredr_record_flags( sigdbm, noisedbm, reflap, refuap, pkt );
+		/* A NULL or POLL packet has no payload, so the length is 0 and
+		   a buffer sized from it would be a zero-length array, which
+		   C does not define. The record holds BREDR_MAX_PAYLOAD
+		   bytes, and the decoder never produces more than a DH5's
+		   343, so size the buffer for the record and leave a longer
+		   payload unrecorded rather than overrun it. */
+		uint8_t payload_bytes[BREDR_MAX_PAYLOAD];
+		int payload_length = btbb_packet_get_payload_length(pkt);
+		uint32_t caplen = 0;
 		pcap_bredr_packet pcap_pkt;
+
+		if ((payload_length > 0) && (payload_length <= BREDR_MAX_PAYLOAD)) {
+			caplen = (uint32_t) btbb_get_payload_packed( pkt, (char *) &payload_bytes[0] );
+		}
+
 		assemble_pcapng_bredr_packet( &pcap_pkt,
 					      0,
 					      ns,

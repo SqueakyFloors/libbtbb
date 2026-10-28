@@ -42,6 +42,13 @@
 #define BTBB_IS_ALIASED        13
 #define BTBB_FOLLOWING         14
 
+/* Whether the header's HEC and the payload's CRC were checked, and what the
+   HEC check said. The CRC's answer is BTBB_CRC_CORRECT above. A capture file
+   records all four, so a reader can tell a verified payload from a guess. */
+#define BTBB_HEC_CHECKED 15
+#define BTBB_HEC_VALID   16
+#define BTBB_CRC_CHECKED 17
+
 /* Payload modulation */
 #define BTBB_MOD_GFSK              0x00
 #define BTBB_MOD_PI_OVER_2_DQPSK   0x01

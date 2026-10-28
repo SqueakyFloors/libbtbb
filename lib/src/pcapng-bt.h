@@ -39,11 +39,34 @@ typedef struct __attribute__((packed)) {
 
 #define PCAPNG_BT_WIDEBAND_RF_INFO 0xd300
 
+/* Size of a pcapng enhanced packet block with nothing in it: the 28-byte
+   block header, the 4-byte options word and the 4-byte trailing length.
+   NOTE: the Bluetooth pseudoheader counts as part of the block's packet
+   data, so it is not included here. */
+#define PCAPNG_ENHANCED_BLK_SZ 36
+
+/* The length of the longest block a record of this kind can build, rounded
+   up to the 4-byte boundary pcapng blocks end on. */
+#define PCAPNG_MAX_BLOCK_LENGTH(packet_data_size) \
+  (4*((PCAPNG_ENHANCED_BLK_SZ + (packet_data_size) + 3)/4))
+
 /* --------------------------------- BR/EDR ----------------------------- */
 
 typedef struct __attribute__((packed)) {
   enhanced_packet_block blk_header;
   pcap_bluetooth_bredr_bb_header bredr_bb_header;
+
+  /* The block header, the pseudoheader and BREDR_MAX_PAYLOAD together come
+     to 2 more than a multiple of 4, so these two bytes round the record up
+     to a 4-byte boundary. A longer BREDR_MAX_PAYLOAD would need this
+     adjusted, or the longest block would run past the end of this struct. */
+  uint8_t pad[2];
+
+  /* Room for the options word and the trailing block length. They are
+     written at the aligned end of the record actually built, which for a
+     payload shorter than the maximum is before these two members. */
+  uint32_t options;
+  uint32_t blk_tot_length;
 } pcapng_bredr_packet;
 
 typedef struct __attribute__((packed)) {
@@ -118,5 +141,22 @@ typedef struct __attribute__((packed)) {
 } le_ll_connection_info_option;
 
 #define PCAPNG_LE_LL_CONNECTION_INFO 0xd380
+
+/* The number of bytes of LLData a CONNECT_IND carries: InitA and AdvA, 6
+   bytes each, then the 22 bytes of connection parameters. It is also the
+   payload length the specification gives the PDU. */
+#define LE_CONNECT_IND_PDU_LENGTH 34
+
+/* The writers build a block at the start of one of these records, so each
+   record must be long enough for the longest block of its kind. Raising a
+   maximum payload without widening the record would otherwise write past
+   the end of a stack object. */
+typedef char pcapng_bredr_packet_is_long_enough[
+  (sizeof(pcapng_bredr_packet) >=
+   PCAPNG_MAX_BLOCK_LENGTH(sizeof(pcap_bluetooth_bredr_bb_header))) ? 1 : -1];
+typedef char pcapng_le_packet_is_long_enough[
+  (sizeof(pcapng_le_packet) >=
+   PCAPNG_MAX_BLOCK_LENGTH(sizeof(pcap_bluetooth_le_ll_header) +
+			   LE_MAX_PAYLOAD)) ? 1 : -1];
 
 #endif /* PCAPNG_BT_DOT_H */

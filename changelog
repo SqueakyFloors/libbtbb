@@ -62,8 +62,37 @@ libbtbb (2020-12-R1+fork5) unstable; urgency=low
     given no offsets to search. The length its caller has to provide is now
     documented as the one it actually reads, 63 symbols past the search
     window rather than 72.
+  * The connection parameters a PCAPNG file records for a CONNECT_IND are now
+    the ones the packet carried. They were taken six bytes early, so the
+    access address was the first four bytes of the advertiser's address, the
+    hop increment came from the supervision timeout, and the last six bytes
+    were not recorded at all, leaving a reader unable to follow the
+    connection.
+  * BR/EDR records now say whether the header's HEC and the payload's CRC were
+    checked and whether they held, in both PCAP and PCAPNG files. Every packet
+    read as "neither checked" before, so nothing downstream could tell a
+    verified payload from a guess.
+  * A failed or incomplete write to a PCAPNG file is reported to the caller
+    instead of returning success, and only the bytes that reached the file are
+    counted into the section length, so a capture that runs out of disk space
+    is noticed rather than silently truncated.
+  * A BR/EDR PCAPNG record no longer carries up to three bytes of whatever the
+    caller's memory held in the padding that rounds the record to a 4-byte
+    boundary.
+  * The interface options a PCAPNG file records for a CONNECT_IND, a BD_ADDR
+    and a clock now carry the length of their contents, four bytes shorter
+    than before, so a reader walking the options stays in step with them.
+  * The spare room in a PCAPNG header block is filled with as many padding
+    options as it takes. On a host with 64 kB memory pages one option could
+    not cover it and the length written was truncated, leaving the block
+    malformed.
+  * A capture that records more interface options than the space set aside for
+    them now refuses the extra ones instead of writing past the end of the
+    header block.
+  * Writing a record for a packet with no payload, and recording a reference
+    UAP of 0x80 or above, no longer rely on behaviour C leaves undefined.
 
- -- Russell Wagner <152923636+SqueakyFloors@users.noreply.github.com>  27 Oct 2026 21:00:00 -0700
+ -- Russell Wagner <152923636+SqueakyFloors@users.noreply.github.com>  27 Oct 2026 20:20:00 -0700
 
 libbtbb (2020-12-R1+fork4) unstable; urgency=low
   * LE packets from Bluetooth 4.2 and later devices keep their whole payload.
