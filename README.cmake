@@ -16,6 +16,9 @@ The following are flags that may be of use when configuing this project.
     moved into place. Nothing above that prefix is looked in, so an
     INSTALL_DEFAULT_BINDIR deeper than one directory does not find the
     module this way.
+ * INSTALL_DEFAULT_BINDIR
+  * The directory the tools are installed in, under the install prefix.
+    It defaults to bin.
  * RELEASE_STRING
   * The version the library reports. It defaults to the current git commit,
     or to the latest release when the source is not a git checkout.

@@ -81,7 +81,15 @@ add_custom_target(pcapdump ALL DEPENDS ${OUTPUT}/timestamp)
 # The module is installed where the install prefix says, which the
 # interpreter searches only when that prefix is its own, so btaptap looks
 # there itself. This checks that it does, on an install of its own.
-if(BUILD_TESTING)
+#
+# btaptap looks one directory above itself and no further, so a binary
+# directory deeper inside the prefix does not find the module - as
+# README.cmake says - and there is nothing to test for.
+if(INSTALL_DEFAULT_BINDIR MATCHES "/")
+	message(STATUS
+	        "INSTALL_DEFAULT_BINDIR is more than one directory deep - "
+	        "btaptap will not find the pcapdump module of its install")
+elseif(BUILD_TESTING)
 	add_test(NAME btaptap_install_prefix COMMAND ${CMAKE_COMMAND}
 	         -DPYTHON=${Python3_EXECUTABLE}
 	         -DBTAPTAP=${CMAKE_CURRENT_SOURCE_DIR}/btaptap
