@@ -32,7 +32,7 @@
 #include <assert.h>
 
 /* generic section options indicating libbtbb */
-const struct {
+static const struct {
 	struct {
 		option_header hdr;
 		char libname[8];

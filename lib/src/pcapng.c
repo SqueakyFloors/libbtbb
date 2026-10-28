@@ -360,8 +360,8 @@ PCAPNG_RESULT pcapng_append_packet( PCAPNG_HANDLE * handle,
 			   out and leave the capture ending on the last whole
 			   block. The caller is told either way, so it can
 			   stop capturing rather than keep trying. */
-			if ((result > 0) && (before != (off_t) -1)) {
-				(void) ftruncate( handle->fd, before );
+			if ((result > 0) && (before != (off_t) -1) &&
+			    (ftruncate( handle->fd, before ) == 0)) {
 				(void) lseek( handle->fd, before, SEEK_SET );
 			}
 			retval = PCAPNG_FILE_WRITE_ERROR;
