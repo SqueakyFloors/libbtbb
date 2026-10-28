@@ -691,6 +691,74 @@ static void test_bredr_voice_payload_has_no_crc(void)
 }
 
 /*
+ * While the library is still guessing a piconet's upper address part it
+ * decodes the same packet at up to 64 candidate clocks and keeps the one
+ * whose CRC comes out. Those failures say the guess was wrong, not that the
+ * air traffic was corrupt, so a record written during that search must not
+ * claim a CRC was checked. This is what `ubertooth-rx -q` does on every
+ * packet until it finds the address part.
+ */
+static void test_bredr_uap_search_records_no_check(void)
+{
+	const char *filename = "test_capture_search.pcapng";
+	char header_symbols[55];
+	char stream[1024];
+	btbb_pcapng_handle *h = NULL;
+	btbb_piconet *pn;
+	btbb_packet *pkt = NULL;
+	size_t blk, data;
+	int length;
+
+	unlink_quietly(filename);
+	strcpy(header_symbols, SPEC_DH1_HEADER);
+	length = build_bredr_stream(stream, SPEC_DH1_LAP, header_symbols,
+				    SPEC_DH1_PAYLOAD);
+
+	/* the LAP is known, the address part is not: the same state
+	   btbb_process_packet() is in before it starts following */
+	pn = btbb_piconet_new();
+	CHECK(pn != NULL);
+	if (pn == NULL)
+		return;
+	btbb_init_piconet(pn, SPEC_DH1_LAP);
+	CHECK(btbb_find_ac(stream, 1, SPEC_DH1_LAP, 0, &pkt) == 0);
+	CHECK(pkt != NULL);
+	if (pkt == NULL) {
+		btbb_piconet_unref(pn);
+		return;
+	}
+	btbb_packet_set_data(pkt, stream, length, 0, 0);
+	btbb_packet_set_flag(pkt, BTBB_WHITENED, 0);
+	CHECK(btbb_process_packet(pkt, pn) == 0);
+	CHECK(btbb_packet_get_flag(pkt, BTBB_CRC_CHECKED) == 0);
+	CHECK(btbb_packet_get_flag(pkt, BTBB_HEC_CHECKED) == 0);
+
+	CHECK(btbb_pcapng_create_file(filename, "test", &h) == 0);
+	if (h == NULL) {
+		btbb_packet_unref(pkt);
+		btbb_piconet_unref(pn);
+		return;
+	}
+	CHECK(btbb_pcapng_append_packet(h, 17ull, -20, -80, SPEC_DH1_LAP,
+					UAP_ANY, pkt) == 0);
+	(void) btbb_pcapng_close(h);
+	btbb_packet_unref(pkt);
+	btbb_piconet_unref(pn);
+
+	CHECK(read_capture(filename));
+	unlink_quietly(filename);
+	if (capture_len == 0)
+		return;
+	blk = find_block(BLOCK_TYPE_ENHANCED_PACKET, 0);
+	CHECK(blk < capture_len);
+	if (blk >= capture_len)
+		return;
+	data = blk + 28;
+	CHECK((rd16(data + 20) & (BREDR_HEC_CHECKED | BREDR_HEC_VALID |
+				  BREDR_CRC_CHECKED | BREDR_CRC_VALID)) == 0);
+}
+
+/*
  * The BD_ADDR and clock options a BR/EDR capture records, and what happens
  * when a capture records more options than the space set aside for them.
  */
@@ -909,6 +977,9 @@ static void test_le_connect_ind_option(void)
 	CHECK(rd32(value + 4) == 0);
 	for (i = 0; i < LE_CONNECT_IND_PDU_LENGTH; i++)
 		CHECK(capture[value + 8 + i] == CONNECT_IND[6 + i]);
+	/* a 42-byte value is rounded up to 44, so two bytes of option padding
+	   follow it, and they have to be zero like any other padding */
+	CHECK(all_zero(value + 42, 2));
 
 	/* the fields a reader needs to follow the connection, at the offsets
 	   the option gives them */
@@ -1103,6 +1174,65 @@ static void test_padding_beyond_one_option(void)
 	CHECK(off + 4 >= end);
 }
 
+/* A section option beyond the space set aside for it is refused, as an
+   interface option is. */
+static void test_section_option_limit(void)
+{
+	const char *filename = "test_capture_sectopt.pcapng";
+	struct {
+		option_header header;
+		char text[64];
+	} comment;
+	PCAPNG_HANDLE handle;
+	int i, refused = 0;
+
+	memset(&comment, 0, sizeof(comment));
+	comment.header.option_code = OPT_COMMENT;
+	comment.header.option_length = sizeof(comment.text);
+
+	unlink_quietly(filename);
+	CHECK(pcapng_create(&handle, filename, NULL, 64,
+			    DLT_BLUETOOTH_BREDR_BB, BREDR_MAX_PAYLOAD, NULL,
+			    64) == PCAPNG_OK);
+	for (i = 0; i < 100000; i++) {
+		if (pcapng_append_section_option(&handle,
+						 (const option_header *)
+						 &comment) != PCAPNG_OK) {
+			refused = 1;
+			break;
+		}
+	}
+	CHECK(refused);
+	(void) pcapng_close(&handle);
+
+	CHECK(read_capture(filename));
+	unlink_quietly(filename);
+	if (capture_len == 0)
+		return;
+	/* the block still walks to its end, so a reader can parse it */
+	{
+		size_t blk = find_block(BLOCK_TYPE_SECTION_HEADER, 0);
+		size_t off, end;
+
+		CHECK(blk < capture_len);
+		if (blk >= capture_len)
+			return;
+		off = blk + 24;
+		end = blk + rd32(blk + 4) - 4;
+		while (off + 4 <= end) {
+			uint16_t len = rd16(off + 2);
+
+			if (rd16(off) == OPT_ENDOFOPT)
+				break;
+			off += 4 + 4 * ((len + 3u) / 4u);
+			CHECK(off <= end);
+			if (off > end)
+				break;
+		}
+		CHECK(off + 4 >= end);
+	}
+}
+
 /*
  * A write that cannot be completed must be reported, and only the bytes that
  * reached the file may be counted into the section length.
@@ -1162,18 +1292,20 @@ static void test_write_errors(void)
 		if (setrlimit(RLIMIT_FSIZE, &limited) == 0) {
 			/* the kernel raises SIGXFSZ as well as failing the
 			   write, and the default action would end the test */
-			signal(SIGXFSZ, SIG_IGN);
+			void (*old_xfsz)(int) = signal(SIGXFSZ, SIG_IGN);
+
 			CHECK(btbb_pcapng_append_packet(h, 1ull, -20, -80,
 							SPEC_DH1_LAP,
 							SPEC_DH1_UAP, pkt) ==
 			      -PCAPNG_FILE_WRITE_ERROR);
+			/* the part of the block that did reach the file is
+			   taken back out, and nothing is counted */
 			CHECK(fstat(raw->fd, &after) == 0);
-			CHECK(after.st_size < before.st_size + 68);
-			/* only what reached the file is counted */
+			CHECK(after.st_size == before.st_size);
 			CHECK(raw->section_header->section_length ==
-			      section_length_before +
-			      (uint64_t) (after.st_size - before.st_size));
+			      section_length_before);
 			CHECK(setrlimit(RLIMIT_FSIZE, &saved) == 0);
+			(void) signal(SIGXFSZ, old_xfsz);
 		}
 		(void) btbb_pcapng_close(h);
 		unlink_quietly(full);
@@ -1223,12 +1355,14 @@ int main(void)
 	test_bredr_pcapng_empty_payload();
 	test_bredr_failed_checks();
 	test_bredr_voice_payload_has_no_crc();
+	test_bredr_uap_search_records_no_check();
 	test_bredr_interface_options();
 	test_bredr_pcap_record();
 	test_le_connect_ind_option();
 	test_le_short_connect_ind();
 	test_header_padding_options();
 	test_padding_beyond_one_option();
+	test_section_option_limit();
 	test_write_errors();
 
 	if (failures) {

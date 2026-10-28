@@ -195,7 +195,7 @@ assemble_pcapng_bredr_packet( pcapng_bredr_packet * pkt,
 	uint32_t pcapng_caplen = sizeof(pcap_bluetooth_bredr_bb_header)  
 				 - sizeof(pkt->bredr_bb_header.bredr_payload)  
 				 + caplen;
-	uint32_t block_length  = PCAPNG_MAX_BLOCK_LENGTH( pcapng_caplen );
+	uint32_t block_length  = PCAPNG_BLOCK_LENGTH( pcapng_caplen );
 	/* The cast keeps the shift out of a signed int, where a reference UAP
 	   of 0x80 or above would overflow into the sign bit. */
 	uint32_t reflapuap = (ref_lap&0xffffff) | ((uint32_t) ref_uap << 24);
@@ -451,7 +451,7 @@ assemble_pcapng_le_packet( pcapng_le_packet * pkt,
 	uint32_t stored_caplen = MIN(LE_MAX_PAYLOAD, caplen);
 	uint32_t pcapng_caplen = sizeof(pcap_bluetooth_le_ll_header)+stored_caplen;
 	uint32_t pcapng_origlen = sizeof(pcap_bluetooth_le_ll_header)+caplen;
-	uint32_t block_length  = PCAPNG_MAX_BLOCK_LENGTH( pcapng_caplen );
+	uint32_t block_length  = PCAPNG_BLOCK_LENGTH( pcapng_caplen );
 
 	/* The block is rounded up to a 4-byte boundary, so up to three bytes
 	 * after the packet are written out without ever being filled in. Clear

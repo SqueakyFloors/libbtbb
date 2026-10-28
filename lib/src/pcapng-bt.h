@@ -45,9 +45,9 @@ typedef struct __attribute__((packed)) {
    data, so it is not included here. */
 #define PCAPNG_ENHANCED_BLK_SZ 36
 
-/* The length of the longest block a record of this kind can build, rounded
-   up to the 4-byte boundary pcapng blocks end on. */
-#define PCAPNG_MAX_BLOCK_LENGTH(packet_data_size) \
+/* The total length of an enhanced packet block carrying this much packet
+   data, rounded up to the 4-byte boundary a pcapng block ends on. */
+#define PCAPNG_BLOCK_LENGTH(packet_data_size) \
   (4*((PCAPNG_ENHANCED_BLK_SZ + (packet_data_size) + 3)/4))
 
 /* --------------------------------- BR/EDR ----------------------------- */
@@ -153,10 +153,10 @@ typedef struct __attribute__((packed)) {
    the end of a stack object. */
 typedef char pcapng_bredr_packet_is_long_enough[
   (sizeof(pcapng_bredr_packet) >=
-   PCAPNG_MAX_BLOCK_LENGTH(sizeof(pcap_bluetooth_bredr_bb_header))) ? 1 : -1];
+   PCAPNG_BLOCK_LENGTH(sizeof(pcap_bluetooth_bredr_bb_header))) ? 1 : -1];
 typedef char pcapng_le_packet_is_long_enough[
   (sizeof(pcapng_le_packet) >=
-   PCAPNG_MAX_BLOCK_LENGTH(sizeof(pcap_bluetooth_le_ll_header) +
+   PCAPNG_BLOCK_LENGTH(sizeof(pcap_bluetooth_le_ll_header) +
 			   LE_MAX_PAYLOAD)) ? 1 : -1];
 
 #endif /* PCAPNG_BT_DOT_H */

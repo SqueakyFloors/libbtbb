@@ -749,6 +749,17 @@ int crc_check(int clock, btbb_packet* pkt)
 	 */
 	int retval = 1;
 
+	/* This is how the library guesses a piconet's upper address part: it
+	 * decodes the same packet at up to 64 candidate clocks and sees which
+	 * one makes the CRC come out. A failure here says the guess was wrong,
+	 * not that the air traffic was corrupt, so put the packet's own
+	 * HEC and CRC answers back before returning. A capture file would
+	 * otherwise report a CRC failure for a payload nothing ever decoded. */
+	int hec_checked = btbb_packet_get_flag(pkt, BTBB_HEC_CHECKED);
+	int hec_valid = btbb_packet_get_flag(pkt, BTBB_HEC_VALID);
+	int crc_checked = btbb_packet_get_flag(pkt, BTBB_CRC_CHECKED);
+	int crc_correct = btbb_packet_get_flag(pkt, BTBB_CRC_CORRECT);
+
 	switch(pkt->packet_type)
 	{
 		case PACKET_TYPE_FHS:
@@ -786,6 +797,11 @@ int crc_check(int clock, btbb_packet* pkt)
 		default:
 			break;
 	}
+	btbb_packet_set_flag(pkt, BTBB_HEC_CHECKED, hec_checked);
+	btbb_packet_set_flag(pkt, BTBB_HEC_VALID, hec_valid);
+	btbb_packet_set_flag(pkt, BTBB_CRC_CHECKED, crc_checked);
+	btbb_packet_set_flag(pkt, BTBB_CRC_CORRECT, crc_correct);
+
 	/*
 	 * never return a zero result unless this is a FHS, DM1, or HV1.  any
 	 * other type could have actually been something else (another logical

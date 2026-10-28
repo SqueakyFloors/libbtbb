@@ -348,17 +348,22 @@ PCAPNG_RESULT pcapng_append_packet( PCAPNG_HANDLE * handle,
 	PCAPNG_RESULT retval = PCAPNG_OK;
 	if (handle && (handle->fd != -1)) {
 		size_t writesz = packet->block_total_length;
+		off_t before = lseek( handle->fd, 0, SEEK_CUR );
 		ssize_t result = write( handle->fd, packet, writesz );
 
-		/* A failed write stores nothing, and a short write stores only
-		   part of the block, so count what reached the file rather
-		   than what was offered. Either way the caller is told, so it
-		   can stop capturing instead of filling a file with records
-		   the reader cannot parse. */
-		if (result > 0) {
-			handle->section_header->section_length += (size_t) result;
+		if ((result != -1) && ((size_t) result == writesz)) {
+			handle->section_header->section_length += writesz;
 		}
-		if ((result == -1) || ((size_t) result < writesz)) {
+		else {
+			/* A short write leaves part of a block in the file,
+			   which no reader can make sense of, so take it back
+			   out and leave the capture ending on the last whole
+			   block. The caller is told either way, so it can
+			   stop capturing rather than keep trying. */
+			if ((result > 0) && (before != (off_t) -1)) {
+				(void) ftruncate( handle->fd, before );
+				(void) lseek( handle->fd, before, SEEK_SET );
+			}
 			retval = PCAPNG_FILE_WRITE_ERROR;
 		}
 	}
