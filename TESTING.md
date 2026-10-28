@@ -255,7 +255,7 @@ map changes, and the replaced allocator.
 | Candidate lists rebuilt during a four-minute follow of a non-adaptive piconet, 26,634 candidates each time | 12 | 0 | PR #34, lab board against live traffic |
 | LE symbol storage, and the length the decoder reads | 64 bytes, 5 bits of the field | 260 bytes, all 8 bits, clamped to the 251 a data PDU allows | PR #2. On air, a packet whose length field claimed more than one record's worth came out whole, where the old library showed 46 bytes |
 | A 255-octet advertising PDU: the length reported, and the three bytes taken as its CRC | 251, and payload octets 252 to 254 | 255, and the real CRC | PR #63, a throwaway program decoding one 264-byte frame against each build: payload octet *n* set to *n*, CRC `aa bb cc`. Before, it reported 251 with `fc fd fe` as the CRC. The committed `spec_le` and `le_long` vectors check the same thing with their own bytes |
-| The longest LE record each capture writer produces | 270 and 284 bytes | 274 and 288 | PR #63, the snapshot length read out of live captures: a plain PCAP, a PPI PCAP and a pcapng interface block, 9610 real advertising packets on a lab board |
+| The longest LE record each capture writer produces | 270 and 284 bytes | 274 and 288 | PR #63, the snapshot length read out of live captures on a lab board: a plain PCAP and a pcapng interface block over 28,979 real advertising packets, and a PPI PCAP over 11,462. The `capture` test pins the same two numbers |
 | Wrong length reported for an eSCO payload at the longest length its type carries, 20,000 random payloads per type | EV3 79, EV5 132, EV4 117 | EV3 1, EV5 0, EV4 0 | PR #61, `test_length_sweep()` in `tests/test_esco.c` with `SWEEP_TRIALS` raised to 20,000, run on this tree and on a copy with the three decode hunks reverted. The sweep builds payloads the way the air carries them: whitened, FEC encoded for an EV4, at a clock that changes from one to the next, with a tail of noise after the packet. The committed test runs the same sweep at 2,000 and pins its counts |
 | The same for a payload well short of that length (EV5, 20 information bytes) | 78 one byte short | 101 one byte long | PR #61, the same sweep. Short of the type's longest length the guess changes direction rather than going away; `btbb_packet_set_esco_length()` removes it |
 | CONNECT_IND option bytes recorded | `symbols[0..33]` | `symbols[6..39]`, confirmed on 8438 real records in one lab run | PR #36. Reverting the offset alone fails 39 checks, every connection parameter among them |
@@ -299,8 +299,10 @@ malformed input, or a rare chance event:
   an EV3 (#39), which need a voice link the lab has no transmitter for.
 - The buffer bounds of #13 and #32, and the channel index bound in PR #30.
 - The over-claimed LE advertising length (#35).
-- A 255-octet advertising PDU (#58), which needs a transmitter sending
-  extended advertising at the top of the Length range.
+- A 255-octet PDU (#58), which needs a transmitter sending extended
+  advertising, or an encrypted connection, at the top of the Length range.
+  Live advertising capture on a lab board was checked against the widened
+  buffer and the new snapshot lengths; the long PDU itself was not.
 
 Checked on Low Energy hardware already: the stream split of PR #8 under live
 traffic, the CONNECT_IND option read back from a real connection's capture

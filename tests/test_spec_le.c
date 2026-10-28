@@ -263,9 +263,9 @@ static void test_advertising_pdu_length_is_eight_bits(void)
  * Those are secondary advertising channel PDUs, so they arrive on the same
  * channels as connection traffic - indices 0 to 36, where the library's
  * lell_packet_is_data() reads a packet as a data PDU. A 255-octet PDU there
- * must still come back whole: capping it at the 251 a data PDU may carry
- * would lose its last four octets and report three of them as its CRC, which
- * is what a 260-byte symbol buffer used to do.
+ * must still come back whole: capping it at the 251 octets of payload a data
+ * PDU may carry would lose its last four octets and report three of them as
+ * its CRC, which is what a 260-byte symbol buffer used to do.
  *
  * Every payload octet has to come back, and the three bytes after them have
  * to be the CRC.
@@ -316,7 +316,8 @@ static void test_longest_pdu_on_every_channel(void)
 /*
  * Section 2.4: the header's first octet is LLID, NESN, SN, MD and two
  * reserved bits, and the second is the Length, which Data Length Extension
- * widened to the full octet; the payload may be up to 251 octets.
+ * widened to the full octet; the payload may be up to 251 octets, with the
+ * Length counting a 4-octet MIC on top of that where the link is encrypted.
  */
 static void test_data_pdu_header_and_length(void)
 {
@@ -383,12 +384,12 @@ static void test_data_pdu_header_and_length(void)
  * A length longer than what was captured is not a length the decoder can
  * honor.
  *
- * A claim of 255 on one of these channels is not capped at the 251 octets
- * Section 2.4 allows a data PDU, even though 255 is more than a data PDU may
- * carry: a secondary advertising channel PDU arrives on the same channels and
- * does reach 255, and nothing in the packet says which it is. Reporting what
- * arrived keeps the long PDU whole, where capping would lose its last four
- * octets.
+ * A claim of 255 is not capped at the 251 octets of payload Section 2.4
+ * allows a data PDU. A data PDU's Length reaches 255 in its own right,
+ * because it counts the 4-octet MIC an encrypted link adds, and a secondary
+ * advertising channel PDU arrives on these same channels and reaches 255 too.
+ * Reporting what arrived keeps such a PDU whole, where capping would lose its
+ * last four octets.
  */
 static void test_data_pdu_length_bounds(void)
 {

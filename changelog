@@ -51,13 +51,14 @@ libbtbb (2020-12-R1+fork5) unstable; urgency=low
     as its length modulo 64: a 64-octet PDU came out as 0 bytes, and both
     lell_print() and the capture files held none of its payload. The whole
     range of the field now fits too: the symbol buffer is 264 bytes, which is
-    the access address, the header, the 255 payload octets the field can
-    claim, and the CRC. It was 260, four short, so a PDU of 252 to 255
-    octets - the lengths extended advertising reaches through AUX_ADV_IND and
-    AUX_CHAIN_IND - lost its last octets, and three of them were printed and
-    recorded as its CRC while the real CRC was gone. LE capture files declare
-    a snapshot length four bytes longer to match, 274 for the plain writer and
-    288 for the PPI one.
+    the access address, the header, the 255 octets the field can claim, and
+    the CRC. It was 260, four short, so a PDU whose Length was 252 to 255 lost
+    its last octets, and three of them were printed and recorded as its CRC
+    while the real CRC was gone. Extended advertising reaches those lengths
+    through AUX_ADV_IND and AUX_CHAIN_IND, and so does a data PDU at its full
+    payload on an encrypted link, whose Length counts the MIC as well. LE
+    capture files declare a snapshot length four bytes longer to match, 274
+    for the plain writer and 288 for the PPI one.
   * An LE capture file's reference access address flag now follows the
     address the caller gave rather than the channel the packet arrived on.
     The published layout defines that field as the access address configured
@@ -228,8 +229,8 @@ libbtbb (2020-12-R1+fork5) unstable; urgency=low
   * The snapshot length a capture file declares is the longest record its
     writer can produce. A BR/EDR file said 400 bytes where a record reaches
     422, so a reader sizing a buffer from it had too little room, and an LE
-    file said 400 where 270 is the longest record it writes, and a PPI file
-    the same where 284 is.
+    file said 400 where 274 is the longest record it writes, and a PPI file
+    the same where 288 is.
   * Writing a record for a packet with no payload, and recording a reference
     UAP of 0x80 or above, no longer rely on behaviour C leaves undefined.
   * A record carries only a payload the decoder produced for that packet.

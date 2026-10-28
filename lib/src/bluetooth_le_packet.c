@@ -32,11 +32,12 @@
 #include <string.h>
 
 /* The symbol buffer has to hold the longest PDU the Length field can claim,
- * or the last octets of one would be lost and the bytes after them read as
+ * plus the 9 bytes of access address, PDU header and CRC around it, or the
+ * last octets of such a PDU would be lost and the bytes after them read as
  * its CRC. A buffer too small for that is caught here rather than in a
  * capture. */
 typedef char le_symbol_buffer_holds_the_longest_pdu[
-	(MAX_LE_PAYLOAD_LENGTH >= LE_MAX_PDU_LENGTH) ? 1 : -1];
+	(MAX_LE_SYMBOLS - 9 >= LE_MAX_PDU_LENGTH) ? 1 : -1];
 
 /* company identifier lookup */
 const char *bt_compidtostr(uint16_t compid);
@@ -367,8 +368,9 @@ void lell_allocate_and_decode_n(const uint8_t *stream, size_t stream_len,
 		captured_len = (unsigned)(copy_len - 9);
 
 	/* The second header octet is the whole Length field, in both kinds of
-	 * PDU: 1 to 255 octets for an advertising channel PDU, and 0 to 251
-	 * for a data channel PDU, where Data Length Extension widened it.
+	 * PDU: 1 to 255 octets for an advertising channel PDU, and 0 to 255
+	 * for a data channel PDU, whose payload stops at 251 but whose Length
+	 * also counts the 4-octet MIC an encrypted link adds.
 	 *
 	 * Only six bits of it used to be read on an advertising channel, which
 	 * was the Core 4.x header. Legacy advertising PDUs stay at or below 37
@@ -383,12 +385,13 @@ void lell_allocate_and_decode_n(const uint8_t *stream, size_t stream_len,
 	 *
 	 * The claim needs no cap of its own: one octet cannot ask for more
 	 * than the symbol buffer holds. In particular it is not capped at the
-	 * 251 octets a data channel PDU may carry, which would throw away
-	 * exactly the payload the buffer was grown for. A secondary
+	 * 251 octets of payload a data channel PDU may carry, which would
+	 * throw away exactly the bytes the buffer was grown for. A data PDU's
+	 * own Length reaches 255 on an encrypted link, and a secondary
 	 * advertising channel PDU - AUX_ADV_IND and AUX_CHAIN_IND, which is
 	 * what carries the long payloads of extended advertising - arrives on
 	 * channel indices 0 to 36, the same as a data PDU, so there is
-	 * nothing here to tell the two apart. */
+	 * nothing here to tell the two apart anyway. */
 	(*pkt)->length = declared_len < captured_len ? declared_len : captured_len;
 
 	if (lell_packet_is_data(*pkt)) {
