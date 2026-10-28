@@ -21,6 +21,9 @@ import struct
 import time
 
 PCAPH_MAGIC_NUM = 0xa1b2c3d4
+# The same format with a record's second timestamp field counting nanoseconds
+# rather than microseconds. This library's own capture writer uses it.
+PCAPH_MAGIC_NUM_NANO = 0xa1b23c4d
 PCAPH_VER_MAJOR = 2
 PCAPH_VER_MINOR = 4
 PCAPH_THISZONE = 0
@@ -52,19 +55,26 @@ class PcapReader:
         if len(header) < PCAPH_LEN:
             raise ValueError('Specified file is too short to be a libpcap capture')
 
-        # The magic number says which byte order the whole file is written in:
-        # read as little endian it is PCAPH_MAGIC_NUM when the file is little
-        # endian, and that value byte-swapped when it is big endian. Either
-        # way, a file that holds neither is not a libpcap capture.
-        magicnum = struct.unpack("<I", header[0:4])[0]
-        if magicnum == PCAPH_MAGIC_NUM:
+        # The magic number says two things: which byte order the whole file is
+        # written in, by whether it reads as itself or byte-swapped, and which
+        # unit a record's second timestamp field is in. A file holding neither
+        # magic number, in neither order, is not a libpcap capture.
+        magics = (PCAPH_MAGIC_NUM, PCAPH_MAGIC_NUM_NANO)
+        little = struct.unpack("<I", header[0:4])[0]
+        big = struct.unpack(">I", header[0:4])[0]
+        if little in magics:
             # Little endian
             self.__endflag = "<"
-        elif magicnum == 0xd4c3b2a1:
+            magic = little
+        elif big in magics:
             # Big endian
             self.__endflag = ">"
+            magic = big
         else:
             raise ValueError('Specified file is not a libpcap capture')
+
+        self.__ticks_per_second = \
+            1000000000.0 if magic == PCAPH_MAGIC_NUM_NANO else 1000000.0
 
         pcaph = struct.unpack("%sIHHIIII"%self.__endflag, header)
         # Only the version has to be the one this reads; the time zone,
@@ -116,9 +126,10 @@ class PcapReader:
             return [None,None]
 
         rechdr = [
-                # The record holds whole seconds and microseconds in two
-                # fields: 5 in the second one is 0.000005 s, not 0.5 s.
-                rechdrtmp[0] + rechdrtmp[1] / 1000000.0,
+                # The record holds whole seconds and a fraction of a second
+                # in two fields: 5 in the second one is 0.000005 s of a
+                # microsecond capture, not 0.5 s.
+                rechdrtmp[0] + rechdrtmp[1] / self.__ticks_per_second,
                 rechdrtmp[2], 
                 rechdrtmp[3]
                 ]

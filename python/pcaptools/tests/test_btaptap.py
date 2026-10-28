@@ -31,17 +31,20 @@ DLT_BLUETOOTH_HCI_H4 = 187
 DLT_BLUETOOTH_BREDR_BB = 255
 
 PCAP_MAGIC = 0xa1b2c3d4
+# The magic number of a capture whose records count nanoseconds, which is
+# what libbtbb's own capture writer produces.
+PCAP_MAGIC_NANO = 0xa1b23c4d
 
 
-def pcap_file(path, datalink, frames):
+def pcap_file(path, datalink, frames, magic=PCAP_MAGIC, fraction=500000):
     '''
     Write a little-endian libpcap file holding the given frames.
     '''
     with open(path, "wb") as fh:
-        fh.write(struct.pack("<IHHiIII", PCAP_MAGIC, 2, 4, 0, 0, 65535,
+        fh.write(struct.pack("<IHHiIII", magic, 2, 4, 0, 0, 65535,
                              datalink))
         for frame in frames:
-            fh.write(struct.pack("<IIII", 1700000000, 500000, len(frame),
+            fh.write(struct.pack("<IIII", 1700000000, fraction, len(frame),
                                  len(frame)))
             fh.write(frame)
     return path
@@ -183,6 +186,16 @@ class Keystrokes(CaptureFileTestCase):
         done = btaptap("-r", cap)
         self.assertEqual(done.stdout, "b\n")
         self.assertNotIn("Traceback", done.stderr)
+        self.assertEqual(done.returncode, 0)
+
+    def test_nanosecond_capture(self):
+        # The capture files libbtbb itself writes.
+        cap = pcap_file(self.path("nano.pcap"), DLT_EN10MB,
+                        [dm1_frame(l2cap_keystroke([0x04]))],
+                        magic=PCAP_MAGIC_NANO)
+
+        done = btaptap("-r", cap)
+        self.assertEqual(done.stdout, "a\n")
         self.assertEqual(done.returncode, 0)
 
     def test_ellisys_export(self):
@@ -337,6 +350,17 @@ class PcapModule(CaptureFileTestCase):
         # five tenths of one.
         dumper.pcap_dump(b"\x00", ts_sec=1700000000, ts_usec=5)
         dumper.close()
+
+        reader = PcapReader(path)
+        self.addCleanup(reader.close)
+        header, _ = reader.pnext()
+        self.assertAlmostEqual(header[0], 1700000000.000005, places=6)
+
+    def test_nanosecond_timestamps(self):
+        # The second field counts nanoseconds in these, so the same number
+        # is a thousandth of the time it is in a microsecond capture.
+        path = pcap_file(self.path("nano.pcap"), DLT_EN10MB, [b"\x00"],
+                         magic=PCAP_MAGIC_NANO, fraction=5000)
 
         reader = PcapReader(path)
         self.addCleanup(reader.close)

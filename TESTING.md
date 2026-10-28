@@ -10,7 +10,7 @@ Specification's own published sample data, and they run on every push and pull
 request on Linux and macOS, plain and under AddressSanitizer and
 UndefinedBehaviorSanitizer.
 
-They found 61 defects — what you would expect of decoders nothing had
+They found 62 defects — what you would expect of decoders nothing had
 exercised: packet types that never produced a payload at all, a capture file
 whose connection parameters all belonged to other parts of the packet, buffers
 written and read past their ends, and hop predictions for channels the piconet
@@ -204,6 +204,7 @@ vectors.
 | An unsupported data link layer was reported once per packet, and the run still exited 0 | a capture from the Ubertooth tools, whose link type `btaptap` does not read, printed one line per packet and reported success | `btaptap`, a `DLT_BLUETOOTH_BREDR_BB` capture | #64 | #55 |
 | `PcapDumper` joined the bytes of its file and record headers with `''.join()` | the half of the `pcapdump` module the README offers could not write a capture at all | `btaptap`'s module cases, which write a capture and read it back | #64 | #55 |
 | `PcapReader` built a record's timestamp with `float("%s.%s")` | a packet 5 microseconds past the second was timestamped half a second past it | `btaptap`'s timestamp case | #64 | #55 |
+| `PcapReader` read a record's fraction-of-a-second field as microseconds whatever the file's magic number said, and this library's own capture writer produces nanosecond captures | every timestamp of a capture written by the Ubertooth tools was a thousand times too far into the second | `btaptap`, a nanosecond capture decoded and its timestamps read | #64 | #55 |
 | `PcapReader` took any file whose first four bytes were not the byte-swapped magic number as a little-endian capture, so its "not a libpcap capture" could not be reached | a file that is not a capture was read as one, and failed later with a traceback out of the reader | `btaptap`, a text file and a file shorter than a capture header | #64 | #55 |
 | `lib/src/CMakeLists.txt` guarded "no library at all" with an option name nothing sets | `cmake -DBUILD_SHARED_LIB=OFF`, the obvious way to ask for a static build, configured a tree with no library in it and failed halfway through the build with `ld: library 'btbb-static' not found` | `library_config`, and a static-only job in CI | #64 | #62 |
 
