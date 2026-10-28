@@ -5,12 +5,12 @@ from 2012 and one from 2015, built only by a `tests/Makefile` from 2011 that
 the normal build never ran; one of the three had not compiled in years. There
 was a Travis configuration that no longer ran. So nothing checked a change.
 
-There are now 12 tests in the build, driven in large part by the Bluetooth Core
+There are now 13 tests in the build, driven in large part by the Bluetooth Core
 Specification's own published sample data, and they run on every push and pull
 request on Linux and macOS, plain and under AddressSanitizer and
 UndefinedBehaviorSanitizer.
 
-They found 51 defects — what you would expect of decoders nothing had
+They found 53 defects — what you would expect of decoders nothing had
 exercised: packet types that never produced a payload at all, a capture file
 whose connection parameters all belonged to other parts of the packet, buffers
 written and read past their ends, and hop predictions for channels the piconet
@@ -66,6 +66,7 @@ linkage, and `tests/CMakeLists.txt` says which tests do it.
 | `hop` | `single_hop()` with and without AFH, and `get_hop_pattern()`'s streams and cache | The Ubertooth project's `firmware/tests/test_bluetooth_hop.c`, an independent transcription of Vol 2, Part B, Section 2.6 computed outside either code base. Using them here pins the host's predictions and the channels the board tunes to against one source of truth |
 | `piconet` | Clock recovery (hop reversal): the CLK1-27 candidate list, winnowing it against observed hops, the AFH detector, and the confirmation rule | The hops are produced by `single_hop()`, which `hop` and `spec_hop` pin against the specification, so a "truth" piconet standing in for the device under observation hops the way a real one does |
 | `internal` | The FEC 2/3 code, the sync word syndrome tables, and the packet header decode through both the pieces and `btbb_decode_header()` | The 20 FEC 2/3 blocks and two syndrome values from upstream's `test_fec23.c` (2012) and `test_syndromes.c` (2012), plus the table of 20 UAP, header and HEC rows that was the only real content of upstream's `test_header.c` (2015), whose program never compiled |
+| `esco` | The length an eSCO payload is decoded at, and the HV3 voice packet that shares a type code with an EV3: a payload three lengths agree with, a payload whose own CRC ends in a zero byte so that the length one short agrees too, captures of noise and of zeros past the packet, a length the caller gives, and a voice payload with no CRC at all | Payloads built in the test, each carrying the CRC the library's own `crcgen()` computes - which `spec_bredr` pins against the specification's sample data first - so the lengths that agree are known before the decoder is asked |
 | `capture` | What reaches a capture file: block and option layout, record fields, the four snapshot lengths, header block padding, the option-space limit, and a write to a closed descriptor and to a file at `RLIMIT_FSIZE` | The pcapng specification and the published `LINKTYPE_BLUETOOTH_BREDR_BB` and `LINKTYPE_BLUETOOTH_LE_LL_WITH_PHDR` layouts. Every record is read back out of the file by a small block and option walker rather than compared with the struct that wrote it, so a field at the wrong offset shows up |
 | `capture_internal` | The two record assemblers called directly, so the test owns the record's memory and can set the padding to a known pattern before the record is built | The same layouts; this is the half `capture` cannot see, because a file cannot say what a padding byte held beforehand |
 | `le_long` | A data PDU's length read from all eight bits of the field, payload lengths 0, 1, 27, 31, 32, 55, 56, 100 and 251 preserved with their last byte intact, a header claiming 251 bytes in a 50-byte capture, and the longest packet written to PCAP and PCAPNG and read back | Vol 6, Part B, Section 2.4 lengths and the two published record layouts |
@@ -76,13 +77,13 @@ linkage, and `tests/CMakeLists.txt` says which tests do it.
 ## How big the suite is
 
 Counted on 2026-10-28, at `374a48c` on `master`, macOS 15 arm64 with Apple
-clang:
+clang, with the `esco` test counted the same way when it was added:
 
 | | Count | How it was counted |
 |---|---|---|
-| Tests in the build | 12 | `ctest` case count; 11 C programs and one CMake script test |
-| Assertion sites | 772 | 758 `CHECK`, `CHECK_EQ`, `CHECK_EQUALS`, `CHECK_CONTAINS`, `CHECK_LACKS` and `XFAIL` call sites across the ten programs that use those macros, plus the 14 explicit failure conditions in `test_le_long.c`, which checks with plain `if` |
-| Assertions executed per run | 175,934 | a scratch copy of the tree with a counter added to each `CHECK` macro body and reported from a destructor, then every test binary run once and the counts summed. The macros do not nest, so nothing is double counted. `test_le_long` is not in this figure |
+| Tests in the build | 13 | `ctest` case count; 12 C programs and one CMake script test |
+| Assertion sites | 870 | 856 `CHECK`, `CHECK_EQ`, `CHECK_EQUALS`, `CHECK_CONTAINS`, `CHECK_LACKS` and `XFAIL` call sites across the eleven programs that use those macros, plus the 14 explicit failure conditions in `test_le_long.c`, which checks with plain `if` |
+| Assertions executed per run | 176,054 | a scratch copy of the tree with a counter added to each `CHECK` macro body and reported from a destructor, then every test binary run once and the counts summed. The macros do not nest, so nothing is double counted. `test_le_long` is not in this figure |
 | Published spec vectors | 7680 hop frequencies | 15 tables of `TABLE_ENTRIES` (512) in `tests/test_spec_hop.c`: three addresses, the basic sequence and four channel maps each |
 
 Where the assertions are:
@@ -96,7 +97,8 @@ Where the assertions are:
 | `spec_le` | 984 |
 | `internal` | 457 |
 | `hop` | 221 |
-| `smoke` | 157 |
+| `smoke` | 161 |
+| `esco` | 116 |
 | `le_print` | 82 |
 | `capture_internal` | 78 |
 
@@ -120,6 +122,8 @@ vectors.
 | `EV3()` and `EV5()` passed the start of the payload to `unwhiten()` for every byte | an eSCO packet's payload was the first byte repeated; no EV3 or EV5 payload ever decoded | `spec_bredr` | #28 | #16 |
 | `EV4()` checked the payload CRC at a length of 1, indexing `payload[-8]`, where `crcgen()` with a negative length returns a constant that reads as "CRC good" 1 time in 65536 | no EV4 payload decoded, and a packet could be reported as CRC-verified without being checked | `spec_bredr` | #28 | #17 |
 | All three eSCO types only tried a candidate length once a further byte had been decoded | no eSCO payload at the longest length its type allows could ever be found | `spec_bredr`, each type at its shortest, longest and a middle length | #28 | #16 |
+| The eSCO length search stopped at the first length whose CRC agreed, and one payload in 256 ends its CRC in a zero byte, which leaves the CRC register at zero a byte early and makes the length one short of the payload agree as well | an eSCO payload came out one byte short, its last information byte read as part of the CRC: 79 of 20,000 random EV3 payloads at the length a link normally sets up | `esco` | #61 | #40 |
+| `btbb_decode_payload()` chose between an HV3 and an EV3 by decoding as EV3 and falling back only when the capture ran out before the search had finished | an HV3 voice packet in a capture that holds 16 or more symbols past it, which a real capture does, was reported as 32 bytes of EV3: its 30 voice bytes and two bytes that were not part of the packet | `esco` | #61 | #39 |
 | A DV packet's data field was dewhitened from bit 18, where the payload header starts on every other type, instead of continuing past the 80-bit voice field at bit 98 | the length, the data and the CRC of every DV packet were wrong | `spec_bredr`, every clock | #28 | #24 |
 | `DM()` and `fhs()` compared a bit count against the symbols they had, and a rate 2/3 FEC payload arrives in half again as many symbols as it has bits | a capture that ended partway through a packet decoded a payload out of symbols that were not there | `spec_bredr`, every truncation of a DM1, DH1, DM3, DH5, FHS and DV | #28 | #13 |
 | `btbb_decode_header()` and `try_clock()` read the 122 symbols of the access code and header with no check that the packet held them, and the header's majority vote covers for the missing ones | a capture cut one symbol short still decoded to a header that looked good | `spec_bredr` | #28 | #13 |
@@ -227,6 +231,8 @@ map changes, and the replaced allocator.
 | Cost of the confirmation rule where the predictions are exact | — | four more packets to lock (10.7 → 14.7, 45.3 → 49.3, 34.2 → 38.2 over three scenarios) | PR #49, both reviewers independently |
 | Candidate lists rebuilt during a four-minute follow of a non-adaptive piconet, 26,634 candidates each time | 12 | 0 | PR #34, lab board against live traffic |
 | LE symbol storage, and the length the decoder reads | 64 bytes, 5 bits of the field | 260 bytes, all 8 bits, clamped to the 251 the specification allows | PR #2. On air, a packet whose length field claimed more than one record's worth came out whole, where the old library showed 46 bytes |
+| Wrong length reported for an eSCO payload at the longest length its type carries, 20,000 random payloads per type | EV3 79, EV5 132, EV4 117 | EV3 1, EV5 0, EV4 0 | PR #61, `test_length_sweep()` in `tests/test_esco.c` with `SWEEP_TRIALS` raised to 20,000, run on this tree and on a copy with the three decode hunks reverted. The sweep builds payloads the way the air carries them: whitened, FEC encoded for an EV4, at a clock that changes from one to the next, with a tail of noise after the packet. The committed test runs the same sweep at 2,000 and pins its counts |
+| The same for a payload well short of that length (EV5, 20 information bytes) | 78 one byte short | 101 one byte long | PR #61, the same sweep. Short of the type's longest length the guess changes direction rather than going away; `btbb_packet_set_esco_length()` removes it |
 | CONNECT_IND option bytes recorded | `symbols[0..33]` | `symbols[6..39]`, confirmed on 8438 real records in one lab run | PR #36. Reverting the offset alone fails 39 checks, every connection parameter among them |
 
 Each capture-file fix was also reverted on its own: 1 to 8 failing checks each,
@@ -256,6 +262,8 @@ Unit tests only, because they need packet types real stacks rarely send,
 malformed input, or a rare chance event:
 
 - AUX1 (#18), DV (#24), EV4 (#17) and EV5 (#16) payloads.
+- The length an eSCO payload is decoded at (#40) and the HV3 told apart from
+  an EV3 (#39), which need a voice link the lab has no transmitter for.
 - The buffer bounds of #13 and #32, and the channel index bound in PR #30.
 - The over-claimed LE advertising length (#35).
 

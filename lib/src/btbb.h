@@ -155,6 +155,38 @@ const char *btbb_get_payload(const btbb_packet* pkt);
  * bytes written. */
 int btbb_get_payload_packed(const btbb_packet* pkt, char *dst);
 
+/* Tell the decoder the payload length an eSCO link carries, in information
+ * bytes, or 0 if it is not known. The reported payload length is this plus
+ * the two CRC bytes.
+ *
+ * An eSCO payload carries no length of its own: the length is agreed when
+ * the link is set up (Vol 2, Part B, Section 6.5.3), so without it the
+ * decoder has to try every length the packet type allows and pick between
+ * the ones whose CRC agrees. More than one does: a 16-bit CRC agrees with
+ * about one length in 65536 by chance, and a zero byte right after the
+ * payload - a byte in 256 of the noise a capture holds past the packet -
+ * makes the length one byte longer agree as well. Where the payload is at
+ * the longest length its type carries the decoder settles that, since there
+ * is no longer length to pick; short of it, a payload can be reported one
+ * byte long, with its CRC's low byte as the last information byte.
+ *
+ * So a caller that knows the link's length should say so: the decoder then
+ * decodes that length, or as much of it as the capture holds, and tries no
+ * other. It is also the only way to get the length of an encrypted payload,
+ * whose CRC never agrees.
+ *
+ * This applies to the EV3, EV4 and EV5 types only. A length the type cannot
+ * carry (below 1, or above 30 for an EV3, 120 for an EV4 or 180 for an EV5)
+ * is ignored, and the decoder searches as if the length were unknown. An EV3
+ * shares its type code with an HV3 voice packet, so a length set here also
+ * says that packets of that type code on this link are EV3s.
+ *
+ * The value stays on the packet object until it is set again, including
+ * across the frames btbb_find_ac() hands back in the same object, so set it
+ * to 0 when the packets no longer come from that link. */
+void btbb_packet_set_esco_length(btbb_packet *pkt, int length);
+int btbb_packet_get_esco_length(const btbb_packet *pkt);
+
 uint8_t btbb_packet_get_type(const btbb_packet* pkt);
 uint8_t btbb_packet_get_lt_addr(const btbb_packet* pkt);
 uint8_t btbb_packet_get_header_flags(const btbb_packet* pkt);

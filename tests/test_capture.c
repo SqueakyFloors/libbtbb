@@ -791,8 +791,10 @@ static void test_bredr_voice_payload_has_no_crc(void)
  * The other side of that: an eSCO payload whose CRC does come out is still
  * reported. The decoder finds the length by trying each one, so this packet
  * sends the specification's DH1 payload, whose CRC is right at 8 bytes, under
- * an HV3 header and with one byte to spare, which is what EV3() needs to
- * reach the check at that length.
+ * an HV3 header and with one byte to spare, which is what the capture holds
+ * past a real packet. The spare byte is not zero: a zero byte there would
+ * agree at nine bytes as well (tests/test_esco.c covers that), and the
+ * length is not what this test is about.
  */
 static void test_bredr_esco_crc_reported(void)
 {
@@ -813,7 +815,7 @@ static void test_bredr_esco_crc_reported(void)
 		return;
 	encode_header_13(header_data, (uint8_t) hec, header_symbols);
 	strcpy(payload, SPEC_DH1_PAYLOAD);
-	strcat(payload, "00000000");
+	strcat(payload, "10000000");
 	length = build_bredr_stream(stream, SPEC_DH1_LAP, header_symbols,
 				    payload);
 	pkt = decode_bredr(stream, length, SPEC_DH1_UAP);

@@ -29,6 +29,14 @@
 /* maximum number of payload bits */
 #define MAX_PAYLOAD_LENGTH 2744
 
+/* The longest payload each eSCO packet type carries, in bytes including its
+ * two byte CRC (Vol 2, Part B, Section 6.5.3). The length itself is not in
+ * the packet: it is agreed when the link is set up, so a decode that is not
+ * told it searches up to these. */
+#define EV3_MAX_PAYLOAD (30 + 2)
+#define EV4_MAX_PAYLOAD (120 + 2)
+#define EV5_MAX_PAYLOAD (180 + 2)
+
 /* minimum header bit errors to indicate that this is an ID packet */
 #define ID_THRESHOLD 5
 
@@ -89,6 +97,10 @@ struct btbb_packet {
 	* plus payload_header_length plus 2 bytes CRC (if present).
 	*/
 	int payload_length;
+
+	/* The payload length an eSCO link carries, in information bytes, or 0
+	* if the caller has not said. See btbb_packet_set_esco_length(). */
+	int esco_length;
 
 	/* The actual payload data in host format
 	* Ready for passing to wireshark

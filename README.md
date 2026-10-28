@@ -20,7 +20,7 @@ Before this fork the library had three test programs from 2012 and 2015 that
 only an old `tests/Makefile` built, one of which had not compiled in years, and
 a Travis configuration that no longer ran. Nothing checked a change.
 
-It now has 12 tests in the build: 772 assertions in their source, 175,934
+It now has 13 tests in the build: 870 assertions in their source, 176,054
 assertion executions per run, driven in large part by the Bluetooth Core
 Specification v5.4's own sample data — all 7680 hop frequencies of Vol 2,
 Part G, Section 2, the access code, HEC, CRC, FEC and whitening vectors and the
