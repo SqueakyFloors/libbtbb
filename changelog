@@ -61,12 +61,15 @@ libbtbb (2020-12-R1+fork5) unstable; urgency=low
     payload rather than the length the payload header claimed. The types that
     carry error correction were the ones affected, because their payload
     arrives in half again as many symbols as it has bits.
+  * A packet whose payload the error correction cannot recover, which is what
+    noise does to a capture, no longer reports the length its payload header
+    claimed along with bytes left from whatever was decoded before it.
   * The access code search no longer reads part of a sync word when it is
     given no offsets to search. The length its caller has to provide is now
     documented as the one it actually reads, 63 symbols past the search
     window rather than 72.
 
- -- Russell Wagner <152923636+SqueakyFloors@users.noreply.github.com>  27 Oct 2026 19:00:00 -0700
+ -- Russell Wagner <152923636+SqueakyFloors@users.noreply.github.com>  27 Oct 2026 21:00:00 -0700
 
 libbtbb (2020-12-R1+fork4) unstable; urgency=low
   * LE packets from Bluetooth 4.2 and later devices keep their whole payload.
