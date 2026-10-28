@@ -1,11 +1,14 @@
 libbtbb (2020-12-R1+fork5) unstable; urgency=low
-  * A clock the library recovered that turns out not to be the piconet's is
-    now given up. Following a piconet never winnowed again, so a wrong CLK1-6
-    or UAP meant every packet printed "Failed to decode packet" for as long as
-    the capture ran, with no way back. After 20 packets in a row fail to
-    decode, btbb_process_packet() reports BTBB_LOCK_LOST and the piconet
-    starts discovery again; a clock the caller set itself, as
-    ubertooth-follow does from an adapter, is left alone.
+  * A clock and UAP the library recovered that turn out not to be the
+    piconet's are now given up. Following a piconet never winnowed again, so a
+    wrong CLK1-6 or UAP meant every packet printed "Failed to decode packet"
+    for as long as the capture ran, with no way back. After 20 packet headers
+    in a row fail their HEC - which is checked against the piconet's UAP over
+    a header dewhitened with CLK1-6, so it is evidence about both, where a
+    payload that will not decode is only a packet lost to bit errors -
+    btbb_process_packet() reports BTBB_PROCESS_LOCK_LOST and the piconet
+    starts discovery again. A clock the caller set itself, as ubertooth-follow
+    does from an adapter, is left alone.
   * A long LE pcapng capture now says when a CONNECT_IND's connection
     parameters were not recorded. Room for them is set aside in the interface
     description block when the file is created, about 340 connections' worth

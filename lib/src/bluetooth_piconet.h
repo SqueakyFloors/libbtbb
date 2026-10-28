@@ -52,27 +52,32 @@
 #define CLK27_CONFIRM_HOPS 4
 
 /*
- * How many packets in a row have to fail to decode while following a piconet
- * before the clock the library recovered is given up.
+ * How many packet headers in a row have to fail their HEC while following a
+ * piconet before the clock the library recovered is given up.
  *
  * Following starts once a clock is accepted, and from then on nothing
  * winnows: a clock that was wrong is used for every packet that follows.
- * Every candidate shares the CLK1-6 that CRC-confirmed discovery found, so
- * what a wrong candidate gets wrong is the hopping, not the dewhitening; the
- * clock bits a decode does depend on are CLK1-6 and the UAP, and those can
- * also be wrong, accepted by elimination rather than by a CRC.  Then every
- * packet fails to decode and, until now, there was no way back.
+ * Every candidate shares the CLK1-6 that discovery found, so what a wrong
+ * candidate gets wrong is which channel to listen on, not the dewhitening.
+ * The clock bits a header does depend on are CLK1-6 and the UAP, and those
+ * can be wrong, accepted by elimination rather than by a CRC.  Then every
+ * header fails and, until now, there was no way back.
  *
- * The run has to be long enough that a correctly followed piconet on a noisy
- * link does not cross it: a failure there is a packet lost to bit errors, and
- * giving the clock up costs a fresh discovery, which #49 measured at 10.7 to
- * 14.7 packets.  Twenty is longer than that, so the library cannot give up a
- * lock faster than it can win one back.  Against a wrong CLK1-6 or UAP it
- * costs almost nothing: the header's 8-bit HEC has to agree with the
- * piconet's UAP, so about one packet in 256 decodes by chance and twenty
- * failures in a row arrive in about twenty packets.
+ * Only the HEC counts, not any failure to decode: it is checked against the
+ * piconet's UAP over a header dewhitened with CLK1-6, so it is evidence about
+ * exactly the two things being given up here.  A payload that will not decode
+ * says nothing about either, and counting those would throw away a good clock
+ * on a link with bit errors in it.
+ *
+ * The run still has to be long enough that bit errors in the headers
+ * themselves do not cross it, and giving the clock up costs a fresh
+ * discovery, which #49 measured at 10.7 to 14.7 packets.  Twenty is longer
+ * than that, so the library cannot give up a lock faster than it can win one
+ * back.  Against a wrong CLK1-6 or UAP it costs almost nothing: the HEC is 8
+ * bits, so about one header in 256 passes by chance and twenty failures in a
+ * row arrive in about twenty packets.
  */
-#define FOLLOW_DECODE_FAILURES 20
+#define FOLLOW_HEADER_FAILURES 20
 
 struct btbb_piconet {
 
@@ -148,9 +153,9 @@ struct btbb_piconet {
 	 * better one to fall back on, so it does not take that one away. */
 	uint8_t clock_recovered;
 
-	/* Packets in a row that failed to decode while following, counted
-	 * against FOLLOW_DECODE_FAILURES above. */
-	int follow_decode_failures;
+	/* Packet headers in a row that failed their HEC while following,
+	 * counted against FOLLOW_HEADER_FAILURES above. */
+	int follow_header_failures;
 
 	/* CLK1-6 candidates */
 	int clock6_candidates[64];

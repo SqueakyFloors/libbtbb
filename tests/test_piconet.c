@@ -823,7 +823,8 @@ static uint8_t hec_for(uint16_t header_data, uint8_t uap)
  * 1/3 code of Vol 2, Part B, Section 7.4. Nothing is whitened, so the header
  * reads back as it was built whatever clock the decoder is given.
  */
-static btbb_packet *followed_packet(uint16_t header_data, uint8_t hec)
+static btbb_packet *followed_packet(uint16_t header_data, uint8_t hec,
+				    int length)
 {
 	char stream[400];
 	uint64_t syncword = btbb_gen_syncword(TEST_LAP);
@@ -843,31 +844,52 @@ static btbb_packet *followed_packet(uint16_t header_data, uint8_t hec)
 		stream[69 + i * 3] = bit;
 		stream[70 + i * 3] = bit;
 	}
+	/* Where a payload belongs, alternating symbols: a payload header that
+	 * claims a length, and bits under it that no CRC will check out. */
+	for (i = 122; i < length; i++)
+		stream[i] = (char) (i & 1);
 	/* finding the access code is what gives the packet its LAP */
 	if (btbb_find_ac(stream, 1, TEST_LAP, 0, &pkt) != 0)
 		return NULL;
 	if (pkt == NULL)
 		return NULL;
-	btbb_packet_set_data(pkt, stream, 122, 0, 0);
+	btbb_packet_set_data(pkt, stream, length, 0, 0);
 	btbb_packet_set_flag(pkt, BTBB_WHITENED, 0);
 	return pkt;
 }
 
 /* An lt_addr of 1 and the packet type NULL, which has no payload to decode. */
-#define FOLLOWED_HEADER 0x001
+#define FOLLOWED_HEADER (1 | (PACKET_TYPE_NULL << 3))
+/* The same, as a DM1, whose payload carries a rate 2/3 code and a CRC. */
+#define FOLLOWED_DM1_HEADER (1 | (PACKET_TYPE_DM1 << 3))
 
-/* A packet of this piconet that decodes, and one whose header belongs to
- * another UAP, so the decoder rejects it. */
+/* The UAP a header built for another piconet checks out against, and never
+ * this piconet's. */
+#define OTHER_UAP (TEST_UAP ^ 0xff)
+
+/* A packet of this piconet that decodes, and one whose header checks out
+ * against another UAP, so this piconet's HEC check fails. */
 static btbb_packet *decodable_packet(void)
 {
-	return followed_packet(FOLLOWED_HEADER, hec_for(FOLLOWED_HEADER,
-							TEST_UAP));
+	return followed_packet(FOLLOWED_HEADER,
+			       hec_for(FOLLOWED_HEADER, TEST_UAP), 122);
 }
 
-static btbb_packet *undecodable_packet(void)
+static btbb_packet *failed_header_packet(void)
 {
 	return followed_packet(FOLLOWED_HEADER,
-			       hec_for(FOLLOWED_HEADER, TEST_UAP ^ 0xff));
+			       hec_for(FOLLOWED_HEADER, OTHER_UAP), 122);
+}
+
+/*
+ * A packet of this piconet whose header checks out and whose payload does
+ * not: a DM1 whose payload symbols no rate 2/3 block can be made of, which is
+ * what a packet with bit errors in it comes to.
+ */
+static btbb_packet *failed_payload_packet(void)
+{
+	return followed_packet(FOLLOWED_DM1_HEADER,
+			       hec_for(FOLLOWED_DM1_HEADER, TEST_UAP), 400);
 }
 
 /*
@@ -893,17 +915,16 @@ static btbb_piconet *following_a_recovered_clock(void)
 }
 
 /*
- * Packet after packet of the piconet arriving and none of them decoding means
- * the clock or the UAP being followed is not the piconet's. Nothing winnows
- * while following, so the library used to carry on reporting failures for as
- * long as the capture ran. Now the clock is given up, discovery starts over
- * and the caller is told, so that it can take its receiver off the offset the
- * library gave it.
+ * Header after header of the piconet failing its HEC means the clock or the
+ * UAP being followed is not the piconet's. Nothing winnows while following, so
+ * the library used to carry on reporting failures for as long as the capture
+ * ran. Now both are given up, discovery starts over and the caller is told, so
+ * that it can take its receiver off the offset the library gave it.
  */
-static void test_a_run_of_decode_failures_gives_up_the_clock(void)
+static void test_a_run_of_header_failures_gives_up_the_clock(void)
 {
 	btbb_piconet *pn = following_a_recovered_clock();
-	btbb_packet *pkt = undecodable_packet();
+	btbb_packet *pkt = failed_header_packet();
 	int reported = 0;
 	int i;
 
@@ -912,37 +933,53 @@ static void test_a_run_of_decode_failures_gives_up_the_clock(void)
 		btbb_piconet_unref(pn);
 		return;
 	}
-	for (i = 0; i < FOLLOW_DECODE_FAILURES; i++) {
+	for (i = 0; i < FOLLOW_HEADER_FAILURES; i++) {
 		/* nothing is reported until the whole run has gone by */
 		CHECK_EQ(0, reported);
 		CHECK(btbb_piconet_get_flag(pn, BTBB_FOLLOWING));
 		reported = btbb_process_packet(pkt, pn);
 	}
-	CHECK_EQ(BTBB_LOCK_LOST, reported);
+	CHECK_EQ(BTBB_PROCESS_LOCK_LOST, reported);
 
-	/* Back to discovery: no clock, nothing followed, no hops remembered. */
+	/* Back to discovery: no clock, no UAP, nothing followed, no hops
+	 * remembered. */
 	CHECK(!btbb_piconet_get_flag(pn, BTBB_FOLLOWING));
 	CHECK(!btbb_piconet_get_flag(pn, BTBB_CLK27_VALID));
 	CHECK(!btbb_piconet_get_flag(pn, BTBB_CLK6_VALID));
+	CHECK(!btbb_piconet_get_flag(pn, BTBB_UAP_VALID));
 	CHECK(!btbb_piconet_get_flag(pn, BTBB_HOP_REVERSAL_INIT));
+	CHECK_EQ(0, btbb_piconet_get_uap(pn));
 	CHECK_EQ(0, pn->packets_observed);
-	CHECK_EQ(0, pn->follow_decode_failures);
+	CHECK_EQ(0, pn->follow_header_failures);
 	CHECK_EQ(0, pn->clock_recovered);
 	/* and the AFH map learned on the way is still there to search in */
 	CHECK_EQ(1, btbb_piconet_get_channel_seen(pn, 0));
+
+	/*
+	 * Discovery really does start again, rather than filtering on the UAP
+	 * it just gave up: try_hop() pins the UAP it was called with for as
+	 * long as the piconet has one, and every clock candidate whose header
+	 * disagrees with it is then ruled out, so the piconet would never find
+	 * the UAP the packets really carry.
+	 */
+	for (i = 0; i < 2 * FOLLOW_HEADER_FAILURES; i++)
+		CHECK_EQ(0, btbb_process_packet(pkt, pn));
+	CHECK(btbb_piconet_get_uap(pn) != TEST_UAP);
+	/* the candidates are the UAP these headers do check out against */
+	CHECK_EQ(OTHER_UAP, pn->clock6_candidates[0]);
 	btbb_packet_unref(pkt);
 	btbb_piconet_unref(pn);
 }
 
 /*
- * A packet that does decode says the clock is the piconet's, so the run
- * starts again from there: scattered failures on a noisy link never add up to
- * a lock given up.
+ * A header that checks out says the clock and UAP are the piconet's, so the
+ * run starts again from there: scattered failures on a noisy link never add
+ * up to a lock given up.
  */
-static void test_a_decoded_packet_ends_the_run(void)
+static void test_a_header_that_checks_out_ends_the_run(void)
 {
 	btbb_piconet *pn = following_a_recovered_clock();
-	btbb_packet *bad = undecodable_packet();
+	btbb_packet *bad = failed_header_packet();
 	btbb_packet *good = decodable_packet();
 	int i, round;
 
@@ -953,12 +990,12 @@ static void test_a_decoded_packet_ends_the_run(void)
 		return;
 	}
 	for (round = 0; round < 3; round++) {
-		for (i = 0; i < FOLLOW_DECODE_FAILURES - 1; i++)
+		for (i = 0; i < FOLLOW_HEADER_FAILURES - 1; i++)
 			CHECK_EQ(0, btbb_process_packet(bad, pn));
-		CHECK_EQ(FOLLOW_DECODE_FAILURES - 1,
-			 pn->follow_decode_failures);
+		CHECK_EQ(FOLLOW_HEADER_FAILURES - 1,
+			 pn->follow_header_failures);
 		CHECK_EQ(0, btbb_process_packet(good, pn));
-		CHECK_EQ(0, pn->follow_decode_failures);
+		CHECK_EQ(0, pn->follow_header_failures);
 	}
 	CHECK(btbb_piconet_get_flag(pn, BTBB_FOLLOWING));
 	CHECK(btbb_piconet_get_flag(pn, BTBB_CLK27_VALID));
@@ -968,15 +1005,52 @@ static void test_a_decoded_packet_ends_the_run(void)
 }
 
 /*
+ * A payload that will not decode is a packet lost to bit errors, not evidence
+ * about the clock: its header checked out under that clock and the piconet's
+ * UAP. Counting those would throw away a good clock on any link noisy enough
+ * to break payloads, which is most of them.
+ */
+static void test_a_failed_payload_is_not_evidence(void)
+{
+	btbb_piconet *pn = following_a_recovered_clock();
+	btbb_packet *pkt = failed_payload_packet();
+	int i;
+
+	CHECK(pkt != NULL);
+	if (pkt == NULL) {
+		btbb_piconet_unref(pn);
+		return;
+	}
+	/* The packet really is one the library fails to decode, and its header
+	 * really did check out. Decoded here as btbb_process_packet() decodes
+	 * a packet of a followed piconet, which is what sets the clock flags
+	 * the header decode needs. */
+	btbb_packet_set_uap(pkt, TEST_UAP);
+	btbb_packet_set_flag(pkt, BTBB_CLK6_VALID, 1);
+	btbb_packet_set_flag(pkt, BTBB_CLK27_VALID, 1);
+	CHECK_EQ(0, btbb_decode(pkt));
+	CHECK(btbb_packet_get_flag(pkt, BTBB_HEC_CHECKED));
+	CHECK(btbb_packet_get_flag(pkt, BTBB_HEC_VALID));
+
+	for (i = 0; i < 4 * FOLLOW_HEADER_FAILURES; i++)
+		CHECK_EQ(0, btbb_process_packet(pkt, pn));
+	CHECK_EQ(0, pn->follow_header_failures);
+	CHECK(btbb_piconet_get_flag(pn, BTBB_FOLLOWING));
+	CHECK(btbb_piconet_get_flag(pn, BTBB_CLK27_VALID));
+	btbb_packet_unref(pkt);
+	btbb_piconet_unref(pn);
+}
+
+/*
  * A clock the caller set is the caller's, not the library's: ubertooth-follow
  * reads one from an adapter and follows it without any discovery. There is no
- * search to fall back on, so however many packets fail to decode, the library
- * keeps following what it was told.
+ * search to fall back on, so however many headers fail, the library keeps
+ * following what it was told, and nothing counts up in the meantime.
  */
 static void test_a_clock_the_caller_set_is_kept(void)
 {
 	btbb_piconet *pn = discovered(NULL, 0);
-	btbb_packet *pkt = undecodable_packet();
+	btbb_packet *pkt = failed_header_packet();
 	int i;
 
 	CHECK(pkt != NULL);
@@ -988,11 +1062,14 @@ static void test_a_clock_the_caller_set_is_kept(void)
 	btbb_piconet_set_flag(pn, BTBB_CLK27_VALID, 1);
 	btbb_piconet_set_flag(pn, BTBB_FOLLOWING, 1);
 
-	for (i = 0; i < 4 * FOLLOW_DECODE_FAILURES; i++)
+	for (i = 0; i < 4 * FOLLOW_HEADER_FAILURES; i++)
 		CHECK_EQ(0, btbb_process_packet(pkt, pn));
 	CHECK(btbb_piconet_get_flag(pn, BTBB_FOLLOWING));
 	CHECK(btbb_piconet_get_flag(pn, BTBB_CLK27_VALID));
 	CHECK_EQ(1234, btbb_piconet_get_clk_offset(pn));
+	/* nothing counts up for a clock that is not the library's to give
+	 * up, so nothing can run away either */
+	CHECK_EQ(0, pn->follow_header_failures);
 	btbb_packet_unref(pkt);
 	btbb_piconet_unref(pn);
 }
@@ -1015,8 +1092,9 @@ int main(void)
 	test_a_wrong_clock_is_not_accepted_on_a_short_map();
 	test_the_clocks_of_the_device_and_the_observer_differ();
 	test_every_candidate_agrees_on_clk1_6();
-	test_a_run_of_decode_failures_gives_up_the_clock();
-	test_a_decoded_packet_ends_the_run();
+	test_a_run_of_header_failures_gives_up_the_clock();
+	test_a_header_that_checks_out_ends_the_run();
+	test_a_failed_payload_is_not_evidence();
 	test_a_clock_the_caller_set_is_kept();
 
 	if (failures != 0) {

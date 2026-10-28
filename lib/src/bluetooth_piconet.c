@@ -600,7 +600,7 @@ static void reset(btbb_piconet *pn)
 	 * nothing recovered to give up. */
 	btbb_piconet_set_flag(pn, BTBB_FOLLOWING, 0);
 	pn->clock_recovered = 0;
-	pn->follow_decode_failures = 0;
+	pn->follow_header_failures = 0;
 	pn->packets_observed = 0;
 
 	/*
@@ -648,7 +648,7 @@ static int channel_winnow(int offset, char channel, btbb_piconet *pn)
 			/* The library's own, so the library may give it up
 			 * again if following it does not work out. */
 			pn->clock_recovered = 1;
-			pn->follow_decode_failures = 0;
+			pn->follow_header_failures = 0;
 		}
 	}
 	else if (new_count == 0) {
@@ -981,28 +981,50 @@ int btbb_process_packet(btbb_packet *pkt, btbb_piconet *pn) {
 			btbb_packet_set_flag(pkt, BTBB_CLK6_VALID, 1);
 			btbb_packet_set_flag(pkt, BTBB_CLK27_VALID, 1);
 
-			if(btbb_decode(pkt)) {
-				pn->follow_decode_failures = 0;
+			if(btbb_decode(pkt))
 				btbb_print_packet(pkt);
-			} else {
+			else
 				printf("Failed to decode packet\n");
-				pn->follow_decode_failures++;
-				/* Packet after packet of this piconet
-				 * arriving and none of them decoding means the
-				 * clock or the UAP being followed is not the
-				 * piconet's. Nothing winnows while following,
-				 * so start discovery over and tell the caller:
-				 * it put the receiver on the offset the
-				 * library gave it, and has to take it off
-				 * again. */
-				if (pn->clock_recovered &&
-				    pn->follow_decode_failures >=
-				    FOLLOW_DECODE_FAILURES) {
-					fprintf(stderr, "note: %d packets in a row failed to decode; "
-						"giving up this clock and starting discovery again\n",
-						pn->follow_decode_failures);
-					reset(pn);
-					return BTBB_LOCK_LOST;
+
+			/*
+			 * The header's HEC is the only thing here that says
+			 * anything about the clock: it is checked against the
+			 * piconet's UAP, over a header dewhitened with CLK1-6,
+			 * so a header that checks out confirms both whatever
+			 * the payload goes on to do. A payload that will not
+			 * decode is a packet lost to bit errors and no
+			 * evidence at all, and a header the rate 1/3 code
+			 * could not recover is none either.
+			 */
+			if (btbb_packet_get_flag(pkt, BTBB_HEC_CHECKED)) {
+				if (btbb_packet_get_flag(pkt, BTBB_HEC_VALID)) {
+					pn->follow_header_failures = 0;
+				} else if (pn->clock_recovered) {
+					pn->follow_header_failures++;
+					/* Header after header of this piconet
+					 * failing under the clock and UAP
+					 * being followed means they are not
+					 * the piconet's. Nothing winnows
+					 * while following, so start discovery
+					 * over and tell the caller: it put
+					 * the receiver on the offset the
+					 * library gave it, and has to take it
+					 * off again. */
+					if (pn->follow_header_failures >=
+					    FOLLOW_HEADER_FAILURES) {
+						fprintf(stderr, "note: %d packet headers in a row failed their HEC; "
+							"giving up this clock and UAP and starting discovery again\n",
+							pn->follow_header_failures);
+						/* The UAP goes with the
+						 * clock. Discovery cannot find
+						 * another while try_hop() is
+						 * still filtering on this one,
+						 * which it does for as long as
+						 * the piconet has one. */
+						pn->UAP = 0;
+						reset(pn);
+						return BTBB_PROCESS_LOCK_LOST;
+					}
 				}
 			}
 		}
