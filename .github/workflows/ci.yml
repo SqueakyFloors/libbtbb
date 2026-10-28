@@ -71,7 +71,8 @@ jobs:
       # The install rule has to put the pcapdump module where the installed
       # btaptap finds it, which is not where the interpreter looks.
       - name: Run the installed tool
-        run: "$RUNNER_TEMP/prefix/bin/btaptap" -h
+        run: |
+          "$RUNNER_TEMP/prefix/bin/btaptap" -h
 
   sanitizers:
     name: ubuntu-24.04 clang asan+ubsan
