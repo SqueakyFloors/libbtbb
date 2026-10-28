@@ -749,17 +749,6 @@ int crc_check(int clock, btbb_packet* pkt)
 	 */
 	int retval = 1;
 
-	/* This is how the library guesses a piconet's upper address part: it
-	 * decodes the same packet at up to 64 candidate clocks and sees which
-	 * one makes the CRC come out. Keep the packet's own HEC and CRC
-	 * answers so they can be put back when a trial comes to nothing; a
-	 * capture file would otherwise report a CRC failure for a payload
-	 * nothing ever decoded. */
-	int hec_checked = btbb_packet_get_flag(pkt, BTBB_HEC_CHECKED);
-	int hec_valid = btbb_packet_get_flag(pkt, BTBB_HEC_VALID);
-	int crc_checked = btbb_packet_get_flag(pkt, BTBB_CRC_CHECKED);
-	int crc_correct = btbb_packet_get_flag(pkt, BTBB_CRC_CORRECT);
-
 	switch(pkt->packet_type)
 	{
 		case PACKET_TYPE_FHS:
@@ -810,18 +799,23 @@ int crc_check(int clock, btbb_packet* pkt)
 	if (retval > 1 && (pkt->packet_type == 7 || pkt->packet_type == 13))
 		retval = 1;
 
-	/* More than 2 is a CRC that came out, which is the result the caller
-	 * accepts as the address part and clock of this piconet. That answer
-	 * is about this packet, so leave it on it. Anything else is a trial
-	 * the caller goes on from: 2 means the CRC did not come out but the
-	 * logical transport may have been guessed wrong, and 0 and 1 are a
-	 * failure and an inconclusive result. Put the packet's own answers
-	 * back for those. */
+	/* This is how the library guesses a piconet's upper address part: it
+	 * decodes the same packet at up to 64 candidate clocks and keeps the
+	 * one whose CRC comes out.
+	 *
+	 * More than 2 is a CRC that came out, which is the answer the caller
+	 * takes as this piconet's address part and clock. It is about this
+	 * packet, so leave it on it. Anything else is a trial the caller goes
+	 * on from, and the trial has overwritten the payload, its length and
+	 * the packet type with a candidate's, so nothing that was known about
+	 * the packet before still describes what it now holds: say nothing was
+	 * checked. A capture file would otherwise report a CRC failure for a
+	 * payload nothing ever decoded. */
 	if (retval <= 2) {
-		btbb_packet_set_flag(pkt, BTBB_HEC_CHECKED, hec_checked);
-		btbb_packet_set_flag(pkt, BTBB_HEC_VALID, hec_valid);
-		btbb_packet_set_flag(pkt, BTBB_CRC_CHECKED, crc_checked);
-		btbb_packet_set_flag(pkt, BTBB_CRC_CORRECT, crc_correct);
+		btbb_packet_set_flag(pkt, BTBB_HEC_CHECKED, 0);
+		btbb_packet_set_flag(pkt, BTBB_HEC_VALID, 0);
+		btbb_packet_set_flag(pkt, BTBB_CRC_CHECKED, 0);
+		btbb_packet_set_flag(pkt, BTBB_CRC_CORRECT, 0);
 	}
 
 	return retval;
@@ -1371,6 +1365,10 @@ int btbb_decode_header(btbb_packet* pkt)
 	if (pkt->length < 122)
 		return 0;
 
+	/* Nothing is known about this header until it decodes. */
+	btbb_packet_set_flag(pkt, BTBB_HEC_CHECKED, 0);
+	btbb_packet_set_flag(pkt, BTBB_HEC_VALID, 0);
+
 	if (btbb_packet_get_flag(pkt, BTBB_CLK6_VALID) && unfec13(stream, header, 18)) {
 		unwhiten(header, pkt->packet_header, pkt->clkn, 18, 0, pkt);
 		uint16_t hdr_data = air_to_host16(pkt->packet_header, 10);
@@ -1398,6 +1396,12 @@ int btbb_decode_payload(btbb_packet* pkt)
 {
 	int rv = 0;
 	pkt->payload_header_length = 0;
+
+	/* Nothing is known about this payload's CRC until one of the type
+	 * decoders below checks it, and the types whose payload has no CRC
+	 * never will. */
+	btbb_packet_set_flag(pkt, BTBB_CRC_CHECKED, 0);
+	btbb_packet_set_flag(pkt, BTBB_CRC_CORRECT, 0);
 
 	switch(pkt->packet_type)
 	{

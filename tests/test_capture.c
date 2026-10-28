@@ -356,6 +356,7 @@ static void test_bredr_pcapng_record(void)
 	size_t blk, data;
 	int length, i;
 	uint16_t expected_flags;
+	uint32_t high_refuap_lap_uap = 0;
 
 	unlink_quietly(filename);
 	strcpy(header_symbols, SPEC_DH1_HEADER);
@@ -375,6 +376,9 @@ static void test_bredr_pcapng_record(void)
 	dirty_stack();
 	CHECK(btbb_pcapng_append_packet(h, 1000000007ull, -20, -80,
 					SPEC_DH1_LAP, SPEC_DH1_UAP, pkt) == 0);
+	/* a second record with a reference UAP whose top bit is set */
+	CHECK(btbb_pcapng_append_packet(h, 1000000008ull, -20, -80,
+					SPEC_DH1_LAP, 0x80, pkt) == 0);
 	CHECK(btbb_pcapng_close(h) != 0);	/* returns -PCAPNG_INVALID_HANDLE */
 	btbb_packet_unref(pkt);
 
@@ -428,6 +432,17 @@ static void test_bredr_pcapng_record(void)
 	CHECK(all_zero(blk + 58, 2));
 	CHECK(rd32(blk + 60) == 0);			/* end of options */
 	CHECK(rd32(blk + 64) == 68);
+
+	/* the second record, with the high reference UAP */
+	blk = find_block(BLOCK_TYPE_ENHANCED_PACKET, blk + 68);
+	CHECK(blk < capture_len);
+	if (blk >= capture_len)
+		return;
+	CHECK(rd32(blk + 16) == 1000000008u);
+	high_refuap_lap_uap = rd32(blk + 28 + 12);
+	/* a reference UAP with its top bit set is recorded as given; it is the
+	   value whose shift used to run into the sign bit of an int */
+	CHECK(high_refuap_lap_uap == (SPEC_DH1_LAP | 0x80000000u));
 }
 
 /* A POLL has no payload, so the record carries none and says so. */
@@ -854,6 +869,7 @@ static void test_bredr_interface_options(void)
 	if (idb >= capture_len)
 		return;
 	CHECK(rd16(idb + 8) == DLT_BLUETOOTH_BREDR_BB);
+	CHECK(rd32(idb + 12) == sizeof(pcap_bluetooth_bredr_bb_header));
 
 	/* a BD_ADDR option: six address bytes, the UAP mask and the NAP flag */
 	value = find_option(idb, 16, PCAPNG_BREDR_OPTION_BD_ADDR,
@@ -939,7 +955,10 @@ static void test_bredr_pcap_record(void)
 	CHECK(rd32(0) == 0xa1b23c4du);
 	CHECK(rd16(4) == 2);
 	CHECK(rd16(6) == 4);
-	CHECK(rd32(16) == BREDR_MAX_PAYLOAD);
+	/* the snapshot length is the longest record the writer can emit, so a
+	   reader sizing a buffer from it has room for every record */
+	CHECK(rd32(16) == sizeof(pcap_bluetooth_bredr_bb_header));
+	CHECK(rd32(16) == 422);
 	CHECK(rd32(20) == DLT_BLUETOOTH_BREDR_BB);
 
 	rec = 24;
@@ -1014,6 +1033,8 @@ static void test_le_connect_ind_option(void)
 	if (idb >= capture_len)
 		return;
 	CHECK(rd16(idb + 8) == DLT_BLUETOOTH_LE_LL_WITH_PHDR);
+	CHECK(rd32(idb + 12) ==
+	      sizeof(pcap_bluetooth_le_ll_header) + LE_MAX_PAYLOAD);
 
 	/* an interface description block's options start after its 16-byte
 	   fixed part */

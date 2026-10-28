@@ -78,8 +78,9 @@ btbb_pcap_create_file(const char *filename, btbb_pcap_handle ** ph)
 	btbb_pcap_handle * handle = malloc( sizeof(btbb_pcap_handle) );
 	if (handle) {
 		memset(handle, 0, sizeof(*handle));
+		/* the longest record: the pseudoheader and a full payload */
 		handle->pcap_file = btbb_pcap_open(filename, DLT_BLUETOOTH_BREDR_BB,
-											BREDR_MAX_PAYLOAD);
+						   sizeof(pcap_bluetooth_bredr_bb_header));
 		if (handle->pcap_file) {
 			*ph = handle;
 		}
@@ -240,14 +241,49 @@ struct lell_pcap_handle {
 	uint8_t btle_ppi_version;
 };
 
+#define PPI_BTLE 30006
+
+typedef struct __attribute__((packed)) {
+	uint8_t pph_version;
+	uint8_t pph_flags;
+	uint16_t pph_len;
+	uint32_t pph_dlt;
+} ppi_packet_header_t;
+
+typedef struct __attribute__((packed)) {
+	uint16_t pfh_type;
+	uint16_t pfh_datalen;
+} ppi_fieldheader_t;
+
+typedef struct __attribute__((packed)) {
+	uint8_t btle_version;
+	uint16_t btle_channel;
+	uint8_t btle_clkn_high;
+	uint32_t btle_clk100ns;
+	int8_t rssi_max;
+	int8_t rssi_min;
+	int8_t rssi_avg;
+	uint8_t rssi_count;
+} ppi_btle_t;
+
 static int
 lell_pcap_create_file_dlt(const char *filename, int dlt, lell_pcap_handle ** ph)
 {
 	int retval = 0;
 	lell_pcap_handle * handle = malloc( sizeof(lell_pcap_handle) );
 	if (handle) {
+		/* The snapshot length is the longest record this link type
+		   writes, so a reader sizing a buffer from it has room for
+		   every record in the file. */
+		uint32_t snaplen = (dlt == DLT_PPI)
+			? (uint32_t) (sizeof(ppi_packet_header_t) +
+				      sizeof(ppi_fieldheader_t) +
+				      sizeof(ppi_btle_t) + LE_MAX_PAYLOAD)
+			: (uint32_t) (sizeof(pcap_bluetooth_le_ll_header) +
+				      LE_MAX_PAYLOAD);
+
 		memset(handle, 0, sizeof(*handle));
-		handle->pcap_file = btbb_pcap_open(filename, dlt, BREDR_MAX_PAYLOAD);
+		handle->pcap_file = btbb_pcap_open(filename, dlt, snaplen);
 		if (handle->pcap_file) {
 			handle->dlt = dlt;
 			*ph = handle;
@@ -347,31 +383,6 @@ lell_pcap_append_packet(lell_pcap_handle * h, const uint64_t ns,
 	}
 	return -PCAP_INVALID_HANDLE;
 }
-
-#define PPI_BTLE 30006
-
-typedef struct __attribute__((packed)) {
-	uint8_t pph_version;
-	uint8_t pph_flags;
-	uint16_t pph_len;
-	uint32_t pph_dlt;
-} ppi_packet_header_t;
-
-typedef struct __attribute__((packed)) {
-	uint16_t pfh_type;
-	uint16_t pfh_datalen;
-} ppi_fieldheader_t;
-
-typedef struct __attribute__((packed)) {
-	uint8_t btle_version;
-	uint16_t btle_channel;
-	uint8_t btle_clkn_high;
-	uint32_t btle_clk100ns;
-	int8_t rssi_max;
-	int8_t rssi_min;
-	int8_t rssi_avg;
-	uint8_t rssi_count;
-} ppi_btle_t;
 
 typedef struct __attribute__((packed)) {
 	pcaprec_hdr_t pcap_header;

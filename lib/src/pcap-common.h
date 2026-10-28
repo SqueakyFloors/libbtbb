@@ -22,6 +22,7 @@
 #ifndef PCAP_COMMON_DOT_H
 #define PCAP_COMMON_DOT_H
 
+#include "bluetooth_packet.h"
 #include "btbb.h"
 
 // since we no longer rely on or assume the existence of libpcap,
@@ -122,6 +123,13 @@ typedef struct __attribute__((packed)) _pcap_bluetooth_bredr_bb_header {
         uint16_t flags;
 	uint8_t bredr_payload[BREDR_MAX_PAYLOAD];
 } pcap_bluetooth_bredr_bb_header;
+
+/* Both BR/EDR writers pack a packet's payload into a buffer of
+   BREDR_MAX_PAYLOAD bytes, and btbb_get_payload_packed() writes one byte for
+   each byte the packet's payload field holds, so the record has to be at
+   least as long as that field. */
+typedef char bredr_record_holds_a_whole_payload[
+	(BREDR_MAX_PAYLOAD >= MAX_PAYLOAD_LENGTH / 8) ? 1 : -1];
 
 /* --------------------------------- Low Energy ---------------------------- */
 

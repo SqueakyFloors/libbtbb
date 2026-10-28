@@ -109,7 +109,7 @@ create_bredr_capture_file_single_interface( PCAPNG_HANDLE * handle,
 				(const option_header *) &libbtbb_section_options, 
 				(size_t) getpagesize( ),
 				DLT_BLUETOOTH_BREDR_BB,
-				BREDR_MAX_PAYLOAD,
+				sizeof(pcap_bluetooth_bredr_bb_header),
 				interface_options,
 				(size_t) getpagesize( ) );
 

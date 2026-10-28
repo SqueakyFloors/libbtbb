@@ -92,6 +92,10 @@ libbtbb (2020-12-R1+fork5) unstable; urgency=low
   * A capture that records more interface options than the space set aside for
     them now refuses the extra ones instead of writing past the end of the
     header block.
+  * The snapshot length a capture file declares is the longest record its
+    writer can produce. A BR/EDR file said 400 bytes where a record reaches
+    422, and an LE file said 400 as well, so a reader sizing a buffer from it
+    had too little room.
   * Writing a record for a packet with no payload, and recording a reference
     UAP of 0x80 or above, no longer rely on behaviour C leaves undefined.
 
