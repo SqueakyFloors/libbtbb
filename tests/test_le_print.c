@@ -153,18 +153,12 @@ static int capture_lell_print(const lell_packet *pkt,
 	return 0;
 }
 
-/*
- * Decode one packet, print it with the streams captured, and free it.
- * Returns 0 on success.
- */
-static int decode_and_capture(const uint8_t *packet,
-			      char *out, size_t outlen,
-			      char *err, size_t errlen)
+/* Print one decoded packet with the streams captured, and free it. */
+static int capture_decoded(lell_packet *pkt, char *out, size_t outlen,
+			   char *err, size_t errlen)
 {
-	lell_packet *pkt = NULL;
 	int result;
 
-	lell_allocate_and_decode(packet, 2402, 0, &pkt);
 	if (pkt == NULL) {
 		printf("FAIL: no packet\n");
 		++failures;
@@ -179,6 +173,33 @@ static int decode_and_capture(const uint8_t *packet,
 
 	lell_packet_unref(pkt);
 	return result;
+}
+
+/*
+ * Decode one packet, print it with the streams captured, and free it.
+ * Returns 0 on success.
+ */
+static int decode_and_capture(const uint8_t *packet,
+			      char *out, size_t outlen,
+			      char *err, size_t errlen)
+{
+	lell_packet *pkt = NULL;
+
+	lell_allocate_and_decode(packet, 2402, 0, &pkt);
+	return capture_decoded(pkt, out, outlen, err, errlen);
+}
+
+/* The same for a capture that holds a known number of bytes, which is what
+ * lell_allocate_and_decode_n() is given. */
+static int decode_n_and_capture(const uint8_t *packet, size_t len,
+				uint16_t phys_channel,
+				char *out, size_t outlen,
+				char *err, size_t errlen)
+{
+	lell_packet *pkt = NULL;
+
+	lell_allocate_and_decode_n(packet, len, phys_channel, 0, &pkt);
+	return capture_decoded(pkt, out, outlen, err, errlen);
 }
 
 static void test_connect_req(void)
@@ -366,12 +387,164 @@ static void test_well_formed_values_keep_their_indent(void)
 	CHECK_CONTAINS(out, "\n           Data: 01 02\n");
 }
 
+/*
+ * An advertising PDU may claim a longer payload than the capture holds: the
+ * length field is six bits, so up to 63 bytes, where a 64-byte capture can
+ * hold 55 after the access address, the header and the CRC.  The claim used
+ * to be taken at face value, and the three bytes printed as the CRC came
+ * from past the end of the symbol buffer - the packet structure's own next
+ * fields, which is how the access address and channel index of the packet
+ * being printed came out as its CRC.
+ *
+ * The bytes the capture holds are printed, and no others. An ADV_DIRECT_IND
+ * is used because its two addresses are read from fixed offsets rather than
+ * walked through as advertising data.
+ */
+static void test_an_over_claimed_advertising_length(void)
+{
+	uint8_t packet[LELL_LEGACY_STREAM_LEN];
+	char out[8192], err[1024];
+	int i;
+
+	packet[0] = 0xd6;
+	packet[1] = 0xbe;
+	packet[2] = 0x89;
+	packet[3] = 0x8e;
+	packet[4] = 0x01;		/* ADV_DIRECT_IND */
+	packet[5] = 0x3f;		/* claims 63 payload bytes */
+	/* a byte's own index, so that each one printed can be placed */
+	for (i = 6; i < LELL_LEGACY_STREAM_LEN; i++)
+		packet[i] = (uint8_t) i;
+
+	if (decode_and_capture(packet, out, sizeof(out),
+			       err, sizeof(err)) != 0)
+		return;
+
+	CHECK_CONTAINS(out, "Advertising / AA 8e89bed6 (valid)/ 55 bytes");
+	CHECK_CONTAINS(out, "AdvA:  0b:0a:09:08:07:06 (public)");
+	CHECK_CONTAINS(out, "InitA: 11:10:0f:0e:0d:0c (public)");
+	/* the last three bytes of the capture, 0x3d to 0x3f */
+	CHECK_CONTAINS(out, "\n    CRC:   3d 3e 3f\n");
+	/* the access address, which is what used to be printed from past the
+	 * end of the buffer */
+	CHECK_LACKS(out, "d6 be 89 8e");
+	CHECK_EQUALS(err, "");
+}
+
+/*
+ * A PDU whose payload is too short for its own type: the fields after it
+ * were printed from whatever the buffer held there, so a CONNECT_REQ
+ * carrying ten bytes still reported a connection access address, a hop
+ * increment and a clock accuracy, none of which arrived.
+ */
+static void test_a_payload_too_short_for_its_type(void)
+{
+	static const uint8_t SHORT_CONNECT_REQ[LELL_LEGACY_STREAM_LEN] = {
+		0xd6, 0xbe, 0x89, 0x8e,
+		0x05,				/* CONNECT_REQ */
+		10,				/* 24 bytes short of one */
+		0x66, 0x55, 0x44, 0x33, 0x22, 0x11,
+		0x01, 0x02, 0x03, 0x04,
+		0xde, 0xad, 0xbe,		/* CRC, unchecked */
+	};
+	char out[8192], err[1024];
+
+	if (decode_and_capture(SHORT_CONNECT_REQ, out, sizeof(out),
+			       err, sizeof(err)) != 0)
+		return;
+
+	CHECK_EQUALS(err, "Error: CONNECT_REQ needs 34 payload bytes, 10 received\n");
+	CHECK_CONTAINS(out, "Type:  CONNECT_REQ");
+	CHECK_LACKS(out, "InitA:");
+	CHECK_LACKS(out, "AA:    ");
+	CHECK_LACKS(out, "Hop:");
+	CHECK_LACKS(out, "SCA:");
+	/* the bytes that did arrive are still dumped */
+	CHECK_CONTAINS(out, "\n    Data:  66 55 44 33 22 11 01 02 03 04\n");
+}
+
+/*
+ * A capture that stops partway through a packet: the length field is the
+ * sender's, so it describes bytes the receiver never had.  The decoder
+ * reports only what it was given, and the print follows it.
+ */
+static void test_a_truncated_capture(void)
+{
+	static const uint8_t TRUNCATED_ADV_IND[12] = {
+		0xd6, 0xbe, 0x89, 0x8e,
+		0x00,				/* ADV_IND */
+		37,				/* of which 3 bytes arrived */
+		0x66, 0x55, 0x44,
+		0xde, 0xad, 0xbe,		/* CRC, unchecked */
+	};
+	char out[8192], err[1024];
+
+	if (decode_n_and_capture(TRUNCATED_ADV_IND, sizeof(TRUNCATED_ADV_IND),
+				 2402, out, sizeof(out), err, sizeof(err)) != 0)
+		return;
+
+	CHECK_CONTAINS(out, "Advertising / AA 8e89bed6 (valid)/  3 bytes");
+	CHECK_EQUALS(err, "Error: ADV_IND needs 6 payload bytes, 3 received\n");
+	CHECK_LACKS(out, "AdvA:");
+	CHECK_CONTAINS(out, "\n    Data:  66 55 44\n");
+	CHECK_CONTAINS(out, "\n    CRC:   de ad be\n");
+}
+
+/* An LL Control PDU carries its opcode in the first payload byte, so one
+ * that arrived with no payload has no opcode to report. */
+static void test_an_empty_ll_control_pdu(void)
+{
+	static const uint8_t EMPTY_CONTROL_PDU[9] = {
+		0x11, 0x22, 0x33, 0x44,		/* connection access address */
+		0x03,				/* LLID 3, LL Control */
+		0,				/* no payload */
+		0xde, 0xad, 0xbe,		/* CRC, unchecked */
+	};
+	char out[8192], err[1024];
+
+	/* 2404 MHz is data channel 0 */
+	if (decode_n_and_capture(EMPTY_CONTROL_PDU, sizeof(EMPTY_CONTROL_PDU),
+				 2404, out, sizeof(out), err, sizeof(err)) != 0)
+		return;
+
+	CHECK_CONTAINS(out, "LLID: 3 / LL Control PDU");
+	CHECK_EQUALS(err, "Error: an LL Control PDU needs 1 payload byte, 0 received\n");
+	CHECK_LACKS(out, "Opcode");
+	CHECK_CONTAINS(out, "\n    CRC:   de ad be\n");
+}
+
+/* A flags element with no flags in it: its one byte is not there to read. */
+static void test_an_empty_flags_element(void)
+{
+	static const uint8_t EMPTY_FLAGS_PACKET[MAX_LE_SYMBOLS] = {
+		0xd6, 0xbe, 0x89, 0x8e,
+		0x00,				/* ADV_IND */
+		8,				/* 6 + 2 bytes */
+		0x66, 0x55, 0x44, 0x33, 0x22, 0x11,	/* AdvA */
+		0x01, 0x01,			/* flags, with no flags byte */
+		0xde, 0xad, 0xbe,		/* CRC, unchecked */
+	};
+	char out[8192], err[1024];
+
+	if (decode_and_capture(EMPTY_FLAGS_PACKET, out, sizeof(out),
+			       err, sizeof(err)) != 0)
+		return;
+
+	CHECK_CONTAINS(out, "Type 01 (Flags)");
+	CHECK_EQUALS(err, "Wrong length (0, should be >= 1)\n");
+}
+
 int main(void)
 {
 	test_connect_req();
 	test_uuid16_advertising_data();
 	test_diagnostics_go_to_stderr();
 	test_well_formed_values_keep_their_indent();
+	test_an_over_claimed_advertising_length();
+	test_a_payload_too_short_for_its_type();
+	test_a_truncated_capture();
+	test_an_empty_ll_control_pdu();
+	test_an_empty_flags_element();
 
 	if (failures != 0) {
 		printf("%d check(s) failed\n", failures);

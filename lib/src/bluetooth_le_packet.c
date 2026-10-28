@@ -433,6 +433,34 @@ const char * lell_get_adv_type_str(const lell_packet *pkt)
 	return "UNKNOWN";
 }
 
+/*
+ * How many payload bytes an advertising PDU of this type has to hold for the
+ * fields lell_print() reads from it to be there at all.
+ *
+ * pkt->length is what the capture holds, not what the PDU claimed: the
+ * decoder bounds the claimed length by the bytes it was given. So a PDU that
+ * claims more than arrived, and a PDU whose length field is simply too small
+ * for its type, both come out short here, and the fields that were never
+ * received are not printed as though they had been.
+ */
+static int adv_payload_needed(uint8_t adv_type)
+{
+	switch (adv_type) {
+	case ADV_IND:
+	case ADV_NONCONN_IND:
+	case ADV_SCAN_IND:
+	case SCAN_RSP:
+		return 6;	/* AdvA, then the advertising data */
+	case ADV_DIRECT_IND:
+	case SCAN_REQ:
+		return 12;	/* two addresses */
+	case CONNECT_REQ:
+		return 34;	/* two addresses and the connection parameters */
+	default:
+		return 0;	/* a type this printer knows no fields of */
+	}
+}
+
 static void _dump_addr(const char *name, const uint8_t *buf, int offset, int random) {
 	int i;
 	printf("    %s%02x", name, buf[offset+5]);
@@ -505,6 +533,10 @@ static void _dump_scan_rsp_data(const uint8_t *buf, int len) {
 		switch (type) {
 			case 0x01:
 				printf(" (Flags)\n");
+				if (sublen - 1 < 1) {
+					_warn("Wrong length (0, should be >= 1)\n");
+					break;
+				}
 				printf("           ");
 				for (i = 0; i < 8; ++i)
 					printf("%d", buf[pos+1] & (1 << (7-i)) ? 1 : 0);
@@ -630,7 +662,7 @@ print128:
 
 void lell_print(const lell_packet *pkt)
 {
-	int i, opcode;
+	int i, opcode, needed;
 	if (lell_packet_is_data(pkt)) {
 		int llid = pkt->symbols[4] & 0x3;
 		static const char *llid_str[] = {
@@ -650,6 +682,10 @@ void lell_print(const lell_packet *pkt)
 												 (pkt->symbols[4] >> 4) & 1);
 		switch (llid) {
 		case 3: // LL Control PDU
+			if (pkt->length < 1) {
+				_warn("Error: an LL Control PDU needs 1 payload byte, 0 received\n");
+				break;
+			}
 			opcode = pkt->symbols[6];
 			static const char *opcode_str[] = {
 				"LL_CONNECTION_UPDATE_REQ",
@@ -685,6 +721,13 @@ void lell_print(const lell_packet *pkt)
 		       pkt->length);
 		printf("    Channel Index: %d\n", pkt->channel_idx);
 		printf("    Type:  %s\n", lell_get_adv_type_str(pkt));
+
+		needed = adv_payload_needed(pkt->adv_type);
+		if (pkt->length < needed) {
+			_warn("Error: %s needs %d payload bytes, %d received\n",
+			      lell_get_adv_type_str(pkt), needed, pkt->length);
+			goto dump;
+		}
 
 		switch(pkt->adv_type) {
 			case ADV_IND:
@@ -739,6 +782,9 @@ void lell_print(const lell_packet *pkt)
 		}
 	}
 
+	/* The bytes themselves are always dumped, however little of the packet
+	 * arrived: these are the ones that did. */
+dump:
 	printf("\n");
 	printf("    Data: ");
 	for (i = 6; i < 6 + pkt->length; ++i)

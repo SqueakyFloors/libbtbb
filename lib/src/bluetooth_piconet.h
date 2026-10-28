@@ -33,6 +33,24 @@
  * (Bluetooth Core v5.1 | Vol 2, Part B, Section 2.3.1). */
 #define AFH_MIN_USED_CHANNELS 20
 
+/*
+ * How many further observed hops have to agree with the last CLK1-27
+ * candidate standing before it is taken as the piconet's clock.
+ *
+ * Candidates are narrowed by comparing each observed hop with the hop the
+ * library predicts, and while the AFH map is still being learned those
+ * predictions are wrong for the channels not yet seen.  A clock that is not
+ * the piconet's can survive every comparison made so far and be the last one
+ * left; once it is accepted, following begins and nothing winnows again, so
+ * every packet after it fails to decode and there is no way back.
+ *
+ * Each confirming hop is another chance for a wrong candidate to disagree,
+ * and another chance for the map to gain the channel that would have ruled it
+ * out, which starts the search again from the map as it then stands.  The
+ * cost is this many more packets before following starts.
+ */
+#define CLK27_CONFIRM_HOPS 4
+
 struct btbb_piconet {
 
 	uint32_t refcount;
@@ -61,11 +79,11 @@ struct btbb_piconet {
 	/* CLK1-27 candidates */
 	uint32_t *clock_candidates;
 
-	/* these values for hop() can be precalculated */
+	/* these values for single_hop() can be precalculated */
 	int b, e;
 
-	/* these values for hop() can be precalculated in part (e.g. a1 is the
-	 * precalculated part of a) */
+	/* these values for single_hop() can be precalculated in part (e.g. a1
+	 * is the precalculated part of a) */
 	int a1, c1, d1;
 
 	/* Basic mapping table (Vol 2, Part B, Section 2.6.2): even channels in
@@ -76,9 +94,6 @@ struct btbb_piconet {
 	/* AFH mapping table (2.6.3.1): the basic table with every unused
 	 * channel removed, holding used_channels entries. */
 	int afh_bank[BT_NUM_CHANNELS];
-
-	/* this holds the entire hopping sequence */
-	char *sequence;
 
 	/* number of candidates for CLK1-27 */
 	int num_candidates;
@@ -98,6 +113,11 @@ struct btbb_piconet {
 
 	/* number of observed packets that have been used to winnow the candidates */
 	int winnowed;
+
+	/* How many winnowing comparisons have left one candidate standing.
+	 * The first of them is the comparison that chose it; the rest are the
+	 * hops that confirm it, counted against CLK27_CONFIRM_HOPS above. */
+	int clk27_confirmations;
 
 	/* CLK1-6 candidates */
 	int clock6_candidates[64];
@@ -124,7 +144,8 @@ struct btbb_piconet {
 	pkt_queue *queue;
 };
 
-/* number of hops in the hopping sequence (i.e. number of possible values of CLK1-27) */
+/* the number of CLK1-27 values, which is also the length of a full hopping
+ * sequence: hops happen at every other clock value */
 #define SEQUENCE_LENGTH 134217728
 
 /* number of aliased channels received */
@@ -143,15 +164,11 @@ int fast_perm(int z, int p_high, int p_low);
 /* assumes z is constrained to 5 bits, p_high to 5 bits, p_low to 9 bits */
 int perm5(int z, int p_high, int p_low);
 
-/* determine channel for a particular hop */
-/* replaced with gen_hops() for a complete sequence but could still come in handy */
+/* The channel a particular hop lands on, computed when it is asked for: the
+ * piconet's current AFH map is part of the answer, and that map is still being
+ * learned while a clock is being recovered. */
 char single_hop(int clock, btbb_piconet *pnet);
 
-/* look up channel for a particular hop */
-char hop(int clock, btbb_piconet *pnet);
-
 void try_hop(btbb_packet *pkt, btbb_piconet *pn);
-
-void get_hop_pattern(btbb_piconet *pn);
 
 #endif /* INCLUDED_BLUETOOTH_PICONET_H */

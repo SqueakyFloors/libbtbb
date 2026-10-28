@@ -1,6 +1,5 @@
 /*
- * BR/EDR connection-state hop selection: single_hop() and the generated
- * sequence, with and without AFH.
+ * BR/EDR connection-state hop selection: single_hop(), with and without AFH.
  *
  * The expected frequencies are the vectors from the Ubertooth project's
  * firmware/tests/test_bluetooth_hop.c, so that libbtbb's host-side
@@ -37,7 +36,6 @@
 
 #include <stdio.h>
 #include <string.h>
-#include <unistd.h>
 
 #include "bluetooth_piconet.h"
 
@@ -58,15 +56,6 @@ static int failures = 0;
 		if (e_ != a_) {                                            \
 			printf("FAIL %s:%d: %s is %d, expected %d\n",      \
 			       __FILE__, __LINE__, #actual, a_, e_);       \
-			++failures;                                        \
-		}                                                          \
-	} while (0)
-
-#define CHECK_SILENT(which, text)                                          \
-	do {                                                               \
-		if ((text)[0] != '\0') {                                   \
-			printf("FAIL %s:%d: %s has \"%s\"\n", __FILE__,    \
-			       __LINE__, (which), (text));                 \
 			++failures;                                        \
 		}                                                          \
 	} while (0)
@@ -118,10 +107,7 @@ static int hop_mhz(uint32_t clock, btbb_piconet *pn)
 	return 2402 + (int) single_hop((int) clock, pn);
 }
 
-/*
- * A piconet with the address and the map already applied, without going
- * through btbb_piconet_set_afh_map(), which generates the whole sequence.
- */
+/* A piconet with the address and the map already applied. */
 static void setup(btbb_piconet *pn, const uint8_t *map, int afh)
 {
 	memset(pn->afh_map, 0, sizeof(pn->afh_map));
@@ -270,7 +256,11 @@ static void test_reserved_map_bit_is_not_counted(void)
 	btbb_piconet_unref(pn);
 }
 
-/* The public entry point keeps the map, the table and the count in step. */
+/*
+ * The public entry point keeps the map, the table and the count in step, and
+ * with the address known it leaves the piconet ready to predict hops on the
+ * new map: the hops below are asked for without any further setting up.
+ */
 static void test_set_afh_map_rebuilds_the_table(void)
 {
 	btbb_piconet *pn = btbb_piconet_new();
@@ -278,13 +268,10 @@ static void test_set_afh_map_rebuilds_the_table(void)
 	size_t i;
 
 	btbb_init_piconet(pn, TEST_LAP);
-	/* The UAP without BTBB_UAP_VALID, so setting the map does not also
-	 * generate the whole sequence, which the last test covers. */
-	pn->UAP = TEST_UAP;
+	btbb_piconet_set_uap(pn, TEST_UAP);
 	btbb_piconet_set_flag(pn, BTBB_IS_AFH, 1);
 	memcpy(map, AFH_MAP, sizeof(map));
 	btbb_piconet_set_afh_map(pn, map);
-	address_precalc(((pn->UAP << 24) | pn->LAP) & 0xfffffff, pn);
 	CHECK_EQ(34, pn->used_channels);
 	for (i = 0; i < NUM_VECTORS; i++)
 		CHECK_EQ(HOP_VECTORS[i].afh,
@@ -301,208 +288,6 @@ static void test_set_afh_map_rebuilds_the_table(void)
 	btbb_piconet_unref(pn);
 }
 
-/* hop() for a clock value: the sequence is indexed by CLK27-1. */
-static void check_sequence(btbb_piconet *pn, int afh)
-{
-	size_t i;
-
-	for (i = 0; i < NUM_VECTORS; i++) {
-		uint32_t index = HOP_VECTORS[i].clock >> 1;
-		if (index >= SEQUENCE_LENGTH)
-			continue;	/* past CLK27 */
-		if (afh)
-			CHECK_EQ(HOP_VECTORS[i].afh,
-				 2402 + hop((int) index, pn));
-		else
-			CHECK_EQ(HOP_VECTORS[i].basic,
-				 2402 + hop((int) index, pn));
-	}
-}
-
-/*
- * The generated sequence is what the host actually predicts from, so it has to
- * agree with single_hop(), whatever map the piconet was last seen with: an
- * adaptive piconet must not be handed the sequence cached for the same address
- * and another map. One sequence is 128 MB, so the cache keeps one per address
- * and rebuilds it in place rather than keeping one per map.
- */
-static void test_generated_sequence_matches_single_hop(void)
-{
-	btbb_piconet *pn = btbb_piconet_new();
-	uint8_t map[10];
-	char *sequence;
-	size_t i;
-
-	btbb_init_piconet(pn, TEST_LAP);
-	btbb_piconet_set_uap(pn, TEST_UAP);
-	get_hop_pattern(pn);
-	sequence = pn->sequence;
-	check_sequence(pn, 0);
-
-	btbb_piconet_set_flag(pn, BTBB_IS_AFH, 1);
-	memcpy(map, AFH_MAP, sizeof(map));
-	btbb_piconet_set_afh_map(pn, map);
-	CHECK(pn->sequence == sequence);
-	check_sequence(pn, 1);
-
-	/*
-	 * Another map marking the same number of channels used, so only the
-	 * map itself tells the two sequences apart: channel 21 instead of 22.
-	 */
-	map[2] &= (uint8_t) ~0x40;
-	map[2] |= 0x20;
-	btbb_piconet_set_afh_map(pn, map);
-	CHECK_EQ(34, pn->used_channels);
-	CHECK(pn->sequence == sequence);
-	for (i = 0; i < NUM_VECTORS; i++) {
-		uint32_t index = HOP_VECTORS[i].clock >> 1;
-		if (index < SEQUENCE_LENGTH)
-			CHECK_EQ(2402 + single_hop((int) HOP_VECTORS[i].clock, pn),
-				 2402 + hop((int) index, pn));
-	}
-
-	/* And back to the first map, and to basic hopping. */
-	memcpy(map, AFH_MAP, sizeof(map));
-	btbb_piconet_set_afh_map(pn, map);
-	CHECK(pn->sequence == sequence);
-	check_sequence(pn, 1);
-	btbb_piconet_set_flag(pn, BTBB_IS_AFH, 0);
-	get_hop_pattern(pn);
-	CHECK(pn->sequence == sequence);
-	check_sequence(pn, 0);
-	btbb_piconet_unref(pn);
-}
-
-/* An address no other test uses, so the first call below has to build it. */
-#define SILENT_TEST_LAP 0x9abcde
-
-/*
- * Read a captured stream into buf as a string, and close the capture. A read
- * that fails returns no bytes, which would look like a silent stream, so it
- * is reported.
- */
-static void read_capture(FILE *capture, char *buf, size_t buflen)
-{
-	size_t got;
-
-	rewind(capture);
-	got = fread(buf, 1, buflen - 1, capture);
-	if (ferror(capture)) {
-		printf("FAIL: could not read a capture file\n");
-		++failures;
-	}
-	buf[got] = '\0';
-	fclose(capture);
-}
-
-/* Run get_hop_pattern() with stdout and stderr redirected into out and err. */
-static int capture_get_hop_pattern(btbb_piconet *pn,
-				   char *out, size_t outlen,
-				   char *err, size_t errlen)
-{
-	FILE *out_capture, *err_capture;
-	int saved_out, saved_err;
-	int restored;
-
-	out[0] = '\0';
-	err[0] = '\0';
-
-	out_capture = tmpfile();
-	err_capture = tmpfile();
-	if (out_capture == NULL || err_capture == NULL) {
-		if (out_capture != NULL)
-			fclose(out_capture);
-		if (err_capture != NULL)
-			fclose(err_capture);
-		printf("FAIL: could not open a capture file\n");
-		++failures;
-		return -1;
-	}
-
-	fflush(stdout);
-	fflush(stderr);
-	saved_out = dup(fileno(stdout));
-	saved_err = dup(fileno(stderr));
-	if (saved_out < 0 || saved_err < 0 ||
-	    dup2(fileno(out_capture), fileno(stdout)) < 0 ||
-	    dup2(fileno(err_capture), fileno(stderr)) < 0) {
-		/* put back whatever was redirected before giving up */
-		if (saved_out >= 0) {
-			dup2(saved_out, fileno(stdout));
-			close(saved_out);
-		}
-		if (saved_err >= 0) {
-			dup2(saved_err, fileno(stderr));
-			close(saved_err);
-		}
-		fclose(out_capture);
-		fclose(err_capture);
-		printf("FAIL: could not redirect the output\n");
-		++failures;
-		return -1;
-	}
-
-	get_hop_pattern(pn);
-	fflush(stdout);
-	fflush(stderr);
-
-	/* Both streams are put back before anything is reported, so that the
-	 * report does not go into a capture file itself. A stream left
-	 * redirected would swallow the rest of the test's output, so it counts
-	 * as a failure rather than passing quietly. */
-	restored = dup2(saved_out, fileno(stdout)) >= 0;
-	restored &= dup2(saved_err, fileno(stderr)) >= 0;
-	close(saved_out);
-	close(saved_err);
-	if (!restored) {
-		printf("FAIL: could not restore the output\n");
-		++failures;
-	}
-
-	read_capture(out_capture, out, outlen);
-	read_capture(err_capture, err, errlen);
-	return 0;
-}
-
-/*
- * What get_hop_pattern() has to say is progress, not what the caller asked
- * for: a tool streaming its capture to standard output would get the note
- * mixed into the dump, where a script reading the stream cannot tell it from
- * capture data. Both paths through the function are taken here, building a
- * sequence for an address the cache has not seen and then reusing it.
- */
-static void test_get_hop_pattern_writes_nothing_to_stdout(void)
-{
-	btbb_piconet *pn = btbb_piconet_new();
-	char out[4096], err[4096];
-	char *built;
-
-	btbb_init_piconet(pn, SILENT_TEST_LAP);
-	btbb_piconet_set_uap(pn, TEST_UAP);
-
-	if (capture_get_hop_pattern(pn, out, sizeof(out),
-				    err, sizeof(err)) != 0)
-		return;
-	CHECK_SILENT("stdout", out);
-	built = pn->sequence;
-	CHECK(built != NULL);
-	/* the wait is still announced, on the stream notes belong on */
-	CHECK(strstr(err, "Calculating complete hopping sequence.") != NULL);
-	CHECK(strstr(err, "Hopping sequence calculated.") != NULL);
-
-	/* The second call reuses what the first built: it says nothing on
-	 * either stream, and hands back the same buffer rather than a newly
-	 * allocated one. */
-	if (capture_get_hop_pattern(pn, out, sizeof(out),
-				    err, sizeof(err)) != 0)
-		return;
-	CHECK_SILENT("stdout", out);
-	CHECK_SILENT("stderr", err);
-	CHECK(pn->sequence == built);
-
-	btbb_piconet_unref(pn);
-}
-
 int main(void)
 {
 	test_basic_hops_match_reference();
@@ -513,8 +298,6 @@ int main(void)
 	test_empty_map_falls_back_to_basic();
 	test_reserved_map_bit_is_not_counted();
 	test_set_afh_map_rebuilds_the_table();
-	test_generated_sequence_matches_single_hop();
-	test_get_hop_pattern_writes_nothing_to_stdout();
 
 	if (failures != 0) {
 		printf("%d check(s) failed\n", failures);

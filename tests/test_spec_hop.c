@@ -627,8 +627,8 @@ static void parse_afh_map(const char *hex, uint8_t *map)
 
 /*
  * Mark the map's channels seen one at a time. btbb_piconet_set_afh_map() is
- * the other way in, but it also generates the whole 128 MB hopping sequence,
- * which these tests have no use for: they drive the kernel directly.
+ * the other way in; these tests drive the kernel directly instead, so that a
+ * failure is the kernel's and not the public entry point's.
  */
 static void apply_afh_map(btbb_piconet *pn, const uint8_t *map)
 {

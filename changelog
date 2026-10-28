@@ -1,8 +1,8 @@
 libbtbb (2020-12-R1+fork5) unstable; urgency=low
-  * The hopping sequence notes ("Calculating complete hopping sequence." and
-    "Hopping sequence calculated.") now go to stderr, and the "Found hopping
-    sequence in cache." note is gone. A tool streaming its capture to stdout
-    no longer has them mixed into the stream.
+  * The hopping sequence notes ("Calculating complete hopping sequence.",
+    "Hopping sequence calculated." and "Found hopping sequence in cache.") are
+    gone, along with the sequence they announced. A tool streaming its capture
+    to stdout no longer has them mixed into the stream.
   * The LE decoder now bounds the channel a frequency outside 2402-2480 MHz
     decodes as. A frequency below the band used to come back as a channel
     index of 254 or 255, which is no channel at all, and 2400 MHz as a PCAP
@@ -112,6 +112,31 @@ libbtbb (2020-12-R1+fork5) unstable; urgency=low
   * New packet flags BTBB_HEC_CHECKED, BTBB_HEC_VALID and BTBB_CRC_CHECKED,
     which with the existing BTBB_CRC_CORRECT say what the decoder checked and
     what it found. BTBB_CRC_CORRECT was never set before.
+  * Reading a piconet's AFH map no longer builds a whole hopping sequence.
+    btbb_piconet_set_afh_map() generated it whenever the address was known: a
+    128 MB allocation and a wait of seconds, paid every time ubertooth-follow
+    read an adapter's map, for a sequence nothing reads any more. Hops are
+    answered one at a time from the map instead, so the allocation is gone -
+    and with it a failure of the largest allocation the library made, which
+    nothing checked and which was written through.
+  * Clock recovery no longer takes the first candidate clock left standing as
+    the piconet's. While the AFH map is still incomplete the predicted hops
+    are wrong for the channels not yet seen, so a clock that is not the
+    piconet's can match every hop observed so far and be the last one left.
+    The library then followed the piconet on that offset, and following never
+    winnows again, so every packet after it failed to decode and there was no
+    way back. Four further hops now have to agree with a candidate before it
+    is accepted, which also gives the map time to gain a channel that rules it
+    out. Of 24 simulated recoveries against a device whose map the observer
+    was one channel short of, 7 locked a wrong clock before and none do now.
+  * An LE advertising PDU that claims a longer payload than arrived no longer
+    has its fields printed out of bytes that were never received. A
+    CONNECT_REQ carrying ten bytes reported a connection access address, a hop
+    increment and a clock accuracy read from whatever followed in the buffer.
+    The dump now says what is missing, on stderr, and prints the bytes that
+    did arrive.
+  * A flags element with no flags in it no longer has a flags byte read from
+    past the end of the advertising data.
 
  -- Russell Wagner <152923636+SqueakyFloors@users.noreply.github.com>  27 Oct 2026 22:30:00 -0700
 

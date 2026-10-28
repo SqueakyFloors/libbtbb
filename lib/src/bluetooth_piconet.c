@@ -129,8 +129,12 @@ void btbb_piconet_set_afh_map(btbb_piconet *pn, uint8_t *afh_map) {
 	/* Rebuild the mapping tables and the used-channel count from the new
 	 * map, so they describe it before anything hops on it. */
 	precalc(pn);
+	/* With the address known as well, the piconet can predict hops on the
+	 * new map straight away.  The UAP is widened before it is shifted,
+	 * which a signed int would not hold. */
 	if(btbb_piconet_get_flag(pn, BTBB_UAP_VALID))
-		get_hop_pattern(pn);
+		address_precalc((int) (((((uint32_t) pn->UAP) << 24) |
+					pn->LAP) & 0xfffffff), pn);
 }
 
 uint8_t *btbb_piconet_get_afh_map(btbb_piconet *pn) {
@@ -307,154 +311,6 @@ int fast_perm(int z, int p_high, int p_low)
 	return(perm_table[z][p_high][p_low]);
 }
 
-/* generate the complete hopping sequence */
-static void gen_hops(btbb_piconet *pn)
-{
-	/* a, b, c, d, e, f, x, y1, y2 are variable names used in section 2.6 of the spec */
-	/* b is already defined */
-	/* e is already defined */
-	int a, c, d, x;
-	uint32_t base_f, f, f_dash;
-	int h, i, j, k, c_flipped, perm_in, perm_out, chan;
-
-	int n_used = pn->used_channels;
-	/* Fewer used channels than AFH is defined for (or an unset map) falls
-	 * back to basic hopping, which also avoids dividing by zero. */
-	int afh = btbb_piconet_get_flag(pn, BTBB_IS_AFH) &&
-			n_used >= AFH_MIN_USED_CHANNELS;
-
-	/* sequence index = clock >> 1 */
-	/* (hops only happen at every other clock value) */
-	int index = 0;
-	base_f = 0;
-	f = 0;
-	f_dash = 0;
-
-	/* nested loops for optimization (not recalculating every variable with every clock tick) */
-	for (h = 0; h < 0x04; h++) { /* clock bits 26-27 */
-		for (i = 0; i < 0x20; i++) { /* clock bits 21-25 */
-			a = pn->a1 ^ i;
-			for (j = 0; j < 0x20; j++) { /* clock bits 16-20 */
-				c = pn->c1 ^ j;
-				c_flipped = c ^ 0x1f;
-				for (k = 0; k < 0x200; k++) { /* clock bits 7-15 */
-					d = pn->d1 ^ k;
-					for (x = 0; x < 0x20; x++) { /* clock bits 2-6 */
-						perm_in = ((x + a) % 32) ^ pn->b;
-
-						/* y1 (clock bit 1) = 0, y2 = 0 */
-						perm_out = fast_perm(perm_in, c, d);
-						chan = pn->bank[(perm_out + pn->e + f) % BT_NUM_CHANNELS];
-						/* AFH re-mapping (2.6.3.1): a used basic
-						 * channel is kept unchanged; an unused one is
-						 * replaced by entry k' of the AFH mapping
-						 * table. */
-						if (afh && !btbb_piconet_get_channel_seen(pn, chan))
-							chan = pn->afh_bank[(perm_out + pn->e + f_dash) % n_used];
-						pn->sequence[index] = chan;
-
-						if (afh) {
-							/* AFH same channel mechanism (2.6.1): the
-							 * peripheral slot reuses the channel of the
-							 * central slot before it, i.e. CLK1 = 0. */
-							pn->sequence[index + 1] = chan;
-						} else {
-							/* y1 (clock bit 1) = 1, y2 = 32 */
-							perm_out = fast_perm(perm_in, c_flipped, d);
-							pn->sequence[index + 1] = pn->bank[(perm_out + pn->e + f + 32) % BT_NUM_CHANNELS];
-						}
-
-						index += 2;
-					}
-					base_f += 16;
-					f = base_f % BT_NUM_CHANNELS;
-					/* F' = 16 * CLK27-7 mod N, taken from base_f and
-					 * not from F, which is already reduced mod 79. */
-					if (afh)
-						f_dash = base_f % n_used;
-				}
-			}
-		}
-	}
-}
-
-/* Fill a sequence buffer this piconet already owns. */
-static void fill_hop_pattern(btbb_piconet *pn, char *sequence)
-{
-	/* Building the sequence takes seconds, so say so, but on stderr:
-	 * standard output carries only what the caller asked for, which for a
-	 * tool streaming a capture there is the capture. */
-	fprintf(stderr, "\nCalculating complete hopping sequence.\n");
-	pn->sequence = sequence;
-
-	precalc(pn);
-	address_precalc(((pn->UAP<<24) | pn->LAP) & 0xfffffff, pn);
-	gen_hops(pn);
-
-	fprintf(stderr, "Hopping sequence calculated.\n");
-}
-
-/* Function to calculate piconet hopping patterns and add to hash map */
-void gen_hop_pattern(btbb_piconet *pn)
-{
-	/* this holds the entire hopping sequence */
-	fill_hop_pattern(pn, (char*) malloc(SEQUENCE_LENGTH));
-}
-
-/* Container for hopping pattern */
-/*
- * Container for hopping pattern, one per address. A sequence is 128 MB, so
- * rather than keep one per map ever seen, the entry records what it was built
- * from and is rebuilt in place when that no longer describes the piconet.
- */
-typedef struct {
-    uint32_t address;	/* the key */
-    uint8_t afh;	/* the sequence is adapted to afh_map */
-    uint8_t afh_map[10];
-    char *sequence;
-    UT_hash_handle hh;
-} hopping_struct;
-
-static hopping_struct *hopping_map = NULL;
-
-/* Function to fetch piconet hopping patterns */
-void get_hop_pattern(btbb_piconet *pn)
-{
-	hopping_struct *s;
-	uint32_t address;
-	uint8_t afh;
-
-	/* The map may have been written through btbb_piconet_get_afh_map(),
-	 * which leaves the tables describing an older one. */
-	precalc(pn);
-	address = (((uint32_t)pn->UAP << 24) | pn->LAP) & 0xfffffff;
-	/* Below Nmin the sequence is the basic one, whatever the map says. */
-	afh = btbb_piconet_get_flag(pn, BTBB_IS_AFH) &&
-		pn->used_channels >= AFH_MIN_USED_CHANNELS;
-
-	HASH_FIND(hh, hopping_map, &address, sizeof(address), s);
-
-	if (s == NULL) {
-		gen_hop_pattern(pn);
-		s = malloc(sizeof(hopping_struct));
-		s->address = address;
-		s->afh = afh;
-		memcpy(s->afh_map, pn->afh_map, sizeof(s->afh_map));
-		s->sequence = pn->sequence;
-		HASH_ADD(hh, hopping_map, address, sizeof(address), s);
-	} else if (s->afh != afh ||
-		   (afh && memcmp(s->afh_map, pn->afh_map,
-				  sizeof(s->afh_map)) != 0)) {
-		/* Two maps marking the same channel count used still give
-		 * different sequences, so the map itself decides this. */
-		s->afh = afh;
-		memcpy(s->afh_map, pn->afh_map, sizeof(s->afh_map));
-		fill_hop_pattern(pn, s->sequence);
-	} else {
-		pn->sequence = s->sequence;
-	}
-}
-
 /* determine channel for a particular hop */
 /* borrowed from ubertooth firmware to support AFH */
 char single_hop(int clock, btbb_piconet *pn)
@@ -498,12 +354,6 @@ char single_hop(int clock, btbb_piconet *pn)
 		next_channel = pn->afh_bank[(perm + pn->e + f_dash + y2) % n_used];
 	}
 	return next_channel;
-}
-
-/* look up channel for a particular hop */
-char hop(int clock, btbb_piconet *pn)
-{
-	return pn->sequence[clock];
 }
 
 static char aliased_channel(char channel)
@@ -596,6 +446,7 @@ int btbb_init_hop_reversal(int aliased, btbb_piconet *pn)
 	 * they are, so an allocation failure cannot leave half of it. */
 	pn->num_candidates = 0;
 	pn->winnowed = 0;
+	pn->clk27_confirmations = 0;
 	pn->candidates_afh = (uint8_t) afh_in_use(pn);
 	channel_map(pn, pn->candidates_afh_map);
 	btbb_piconet_set_flag(pn, BTBB_HOP_REVERSAL_INIT, 1);
@@ -683,7 +534,6 @@ static void reset(btbb_piconet *pn)
 	if(btbb_piconet_get_flag(pn, BTBB_HOP_REVERSAL_INIT)) {
 		free(pn->clock_candidates);
 		pn->clock_candidates = NULL;
-		pn->sequence = NULL;
 	}
 	btbb_piconet_set_flag(pn, BTBB_GOT_FIRST_PACKET, 0);
 	btbb_piconet_set_flag(pn, BTBB_HOP_REVERSAL_INIT, 0);
@@ -724,12 +574,17 @@ static int channel_winnow(int offset, char channel, btbb_piconet *pn)
 	pn->num_candidates = new_count;
 
 	if (new_count == 1) {
-		/* In CLKN ticks, which is what clk_offset carries, so shift
-		 * both CLK1-27 values up by one. */
-		pn->clk_offset = (int) ((pn->clock_candidates[0] << 1) -
-					(pn->first_pkt_time << 1));
-		printf("\nAcquired CLK1-27 = 0x%07x\n", pn->clock_candidates[0]);
-		btbb_piconet_set_flag(pn, BTBB_CLK27_VALID, 1);
+		/* The hop that narrowed the list to one is the comparison
+		 * that chose it, so it does not also confirm it. */
+		pn->clk27_confirmations++;
+		if (pn->clk27_confirmations > CLK27_CONFIRM_HOPS) {
+			/* In CLKN ticks, which is what clk_offset carries, so
+			 * shift both CLK1-27 values up by one. */
+			pn->clk_offset = (int) ((pn->clock_candidates[0] << 1) -
+						(pn->first_pkt_time << 1));
+			printf("\nAcquired CLK1-27 = 0x%07x\n", pn->clock_candidates[0]);
+			btbb_piconet_set_flag(pn, BTBB_CLK27_VALID, 1);
+		}
 	}
 	else if (new_count == 0) {
 		reset(pn);
@@ -763,6 +618,15 @@ int btbb_winnow(btbb_piconet *pn)
 	uint8_t channel, last_channel;
 
 	/*
+	 * The clock is known, so hops from here on are the piconet's to
+	 * follow, not candidates to narrow. Without this the hop that the
+	 * clock was accepted on would be compared again and the clock
+	 * announced a second time.
+	 */
+	if (btbb_piconet_get_flag(pn, BTBB_CLK27_VALID))
+		return new_count;
+
+	/*
 	 * The AFH map has changed since the candidates were chosen, so they
 	 * were chosen from a hop sequence this piconet no longer follows, and
 	 * the true clock may be among the ones already dropped. Choose them
@@ -791,7 +655,11 @@ int btbb_winnow(btbb_piconet *pn)
 		index = pn->pattern_indices[pn->winnowed];
 		channel = pn->pattern_channels[pn->winnowed];
 		new_count = channel_winnow(index, channel, pn);
-		if (new_count <= 1)
+		if (new_count == 0)
+			break;	/* reset() has started discovery over */
+		/* one candidate, confirmed by enough later hops to be the
+		 * clock: there is nothing left to narrow */
+		if (btbb_piconet_get_flag(pn, BTBB_CLK27_VALID))
 			break;
 
 		/* There is no previous hop to compare the first one with. */
