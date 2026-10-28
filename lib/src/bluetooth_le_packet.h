@@ -27,15 +27,22 @@
 #include <stdio.h>
 #include <stdlib.h>
 
-/* Access address (4) + PDU header (2) + max DLE payload (251) + CRC (3). */
-#define MAX_LE_SYMBOLS 260
+/* The Length field is one octet, and both kinds of PDU use its whole range.
+ * Core v5.4, Vol 6, Part B, Section 2.3 gives an advertising physical channel
+ * PDU 1 to 255 octets, which the extended advertising PDUs AUX_ADV_IND and
+ * AUX_CHAIN_IND reach. Section 2.4 gives a data physical channel PDU 0 to
+ * 255: its payload stops at the 251 Data Length Extension allows, but the
+ * Length also counts the 4-octet MIC an encrypted link adds. */
+#define LE_MAX_PDU_LENGTH 255
 
-/* The longest payload the symbol buffer can hold, since the access address,
- * the PDU header and the CRC take 9 of its bytes. It is also the longest
- * payload a data channel PDU may carry. Not to be confused with
- * pcap-common.h's LE_MAX_PAYLOAD, which is the whole 260-byte frame a
- * capture record holds. */
-#define MAX_LE_PAYLOAD_LENGTH (MAX_LE_SYMBOLS - 9)
+/* The bytes of a frame that the Length field does not count: the access
+ * address (4), the PDU header (2) and the CRC (3). */
+#define LE_FRAMING_BYTES 9
+
+/* The longest frame on air: 255 octets of PDU and the 9 bytes around them.
+ * Spelled out rather than computed, so that the check in
+ * bluetooth_le_packet.c has two numbers to compare. */
+#define MAX_LE_SYMBOLS 264
 
 /* How many bytes lell_allocate_and_decode() reads. It takes no length, and
  * this is what it has always read, so its callers all pass a buffer at least

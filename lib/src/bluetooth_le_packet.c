@@ -31,6 +31,14 @@
 #include <stdarg.h>
 #include <string.h>
 
+/* The symbol buffer is exactly the longest frame on air: the longest PDU the
+ * Length field can claim and the bytes around it. Too small and the last
+ * octets of such a PDU are lost, with the bytes after them read as its CRC,
+ * which is what a 260-byte buffer did; too large and it is no longer what the
+ * capture writers' record length is derived from. */
+typedef char le_symbol_buffer_is_the_longest_frame[
+	(MAX_LE_SYMBOLS == LE_MAX_PDU_LENGTH + LE_FRAMING_BYTES) ? 1 : -1];
+
 /* company identifier lookup */
 const char *bt_compidtostr(uint16_t compid);
 
@@ -353,15 +361,16 @@ void lell_allocate_and_decode_n(const uint8_t *stream, size_t stream_len,
 		(*pkt)->access_address |= (uint32_t) (*pkt)->symbols[3] << 24;
 	}
 
-	/* The access address (4 bytes), the PDU header (2) and the CRC (3) are
-	 * not part of the payload length, so 9 bytes of the capture are not
+	/* The access address, the PDU header and the CRC are not part of the
+	 * payload length, so LE_FRAMING_BYTES of the capture are not
 	 * payload. */
-	if (copy_len >= 9)
-		captured_len = (unsigned)(copy_len - 9);
+	if (copy_len >= LE_FRAMING_BYTES)
+		captured_len = (unsigned)(copy_len - LE_FRAMING_BYTES);
 
 	/* The second header octet is the whole Length field, in both kinds of
-	 * PDU: 1 to 255 octets for an advertising channel PDU, and 0 to 251
-	 * for a data channel PDU, where Data Length Extension widened it.
+	 * PDU: 1 to 255 octets for an advertising channel PDU, and 0 to 255
+	 * for a data channel PDU, whose payload stops at 251 but whose Length
+	 * also counts the 4-octet MIC an encrypted link adds.
 	 *
 	 * Only six bits of it used to be read on an advertising channel, which
 	 * was the Core 4.x header. Legacy advertising PDUs stay at or below 37
@@ -372,15 +381,17 @@ void lell_allocate_and_decode_n(const uint8_t *stream, size_t stream_len,
 	if (copy_len >= 6)
 		declared_len = (*pkt)->symbols[5];
 
-	/* A Length of up to 255 is more payload than the symbol buffer holds,
-	 * so the claim is capped at what it holds, as a data channel PDU's
-	 * already was. This states the buffer's limit rather than adding one:
-	 * captured_len below cannot exceed it either, because the copy into
-	 * the buffer is what it is counted from. */
-	if (declared_len > MAX_LE_PAYLOAD_LENGTH)
-		declared_len = MAX_LE_PAYLOAD_LENGTH;
-
-	/* The length is what arrived, not what the sender claimed. */
+	/* The length is what arrived, not what the sender claimed.
+	 *
+	 * The claim needs no cap of its own: one octet cannot ask for more
+	 * than the symbol buffer holds. In particular it is not capped at the
+	 * 251 octets of payload a data channel PDU may carry, which would
+	 * throw away exactly the bytes the buffer was grown for. A data PDU's
+	 * own Length reaches 255 on an encrypted link, and a secondary
+	 * advertising channel PDU - AUX_ADV_IND and AUX_CHAIN_IND, which is
+	 * what carries the long payloads of extended advertising - arrives on
+	 * channel indices 0 to 36, the same as a data PDU, so there is
+	 * nothing here to tell the two apart anyway. */
 	(*pkt)->length = declared_len < captured_len ? declared_len : captured_len;
 
 	if (lell_packet_is_data(*pkt)) {

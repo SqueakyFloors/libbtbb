@@ -339,11 +339,10 @@ typedef struct lell_packet lell_packet;
  * cannot be allocated. The _n form is the one to call: it takes the
  * number of bytes 'stream' holds and reads no more than that, keeping
  * whatever of the packet it was given and no further. It stores at most
- * 260 bytes, which is the access address, the header, 251 payload bytes
- * and the CRC; a PDU claiming a longer payload than that - the Length
- * field reaches 255 - has its length reported as 251. The form without
- * a length reads 64 bytes, which is what it has always read and what
- * every caller it has had provides. */
+ * 264 bytes, which is the access address, the header, the 255 payload
+ * bytes the one-octet Length field can claim, and the CRC. The form
+ * without a length reads 64 bytes, which is what it has always read and
+ * what every caller it has had provides. */
 void lell_allocate_and_decode(const uint8_t *stream, uint16_t phys_channel, uint32_t clk100ns, lell_packet **pkt);
 void lell_allocate_and_decode_n(const uint8_t *stream, size_t stream_len,
                                 uint16_t phys_channel, uint32_t clk100ns,

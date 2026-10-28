@@ -1593,7 +1593,7 @@ static void test_le_pcap_records(void)
 			CHECK(rd32(16) ==
 			      sizeof(pcap_bluetooth_le_ll_header) +
 			      LE_MAX_PAYLOAD);
-			CHECK(rd32(16) == 270);
+			CHECK(rd32(16) == 274);
 			CHECK(rd32(20) == DLT_BLUETOOTH_LE_LL_WITH_PHDR);
 			CHECK(rd32(24) == 2);			/* seconds */
 			CHECK(rd32(28) == 3);			/* nanoseconds */
@@ -1697,7 +1697,7 @@ static void test_le_pcap_records(void)
 		unlink_quietly(ppi_name);
 		if (capture_len != 0) {
 			CHECK(rd32(16) == 24 + LE_MAX_PAYLOAD);
-			CHECK(rd32(16) == 284);
+			CHECK(rd32(16) == 288);
 			CHECK(rd32(20) == DLT_PPI);
 			CHECK(rd32(32) == 24 + sizeof(CONNECT_IND));
 			CHECK(capture_len == 24 + 16 + 24 +
