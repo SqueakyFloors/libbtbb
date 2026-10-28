@@ -21,6 +21,9 @@ import struct
 import time
 
 PCAPH_MAGIC_NUM = 0xa1b2c3d4
+# The same format with a record's second timestamp field counting nanoseconds
+# rather than microseconds. This library's own capture writer uses it.
+PCAPH_MAGIC_NUM_NANO = 0xa1b23c4d
 PCAPH_VER_MAJOR = 2
 PCAPH_VER_MINOR = 4
 PCAPH_THISZONE = 0
@@ -36,27 +39,48 @@ class PcapReader:
         @param savefile: Input libpcap filename to open
         @rtype: None
         '''
-        PCAPH_LEN = 24
         self.__fh = open(savefile, mode='rb')
         self._pcaphsnaplen = 0
-        header = self.__fh.read(PCAPH_LEN)
+        try:
+            self.__read_header()
+        except Exception:
+            # A reader that was not created holds no file: the caller is left
+            # with no object to close it with.
+            self.__fh.close()
+            raise
 
-        # Read the first 4 bytes for the magic number, determine endianness
-        magicnum = struct.unpack("I", header[0:4])[0]
-        if magicnum != 0xd4c3b2a1:
+    def __read_header(self):
+        PCAPH_LEN = 24
+        header = self.__fh.read(PCAPH_LEN)
+        if len(header) < PCAPH_LEN:
+            raise ValueError('Specified file is too short to be a libpcap capture')
+
+        # The magic number says two things: which byte order the whole file is
+        # written in, by whether it reads as itself or byte-swapped, and which
+        # unit a record's second timestamp field is in. A file holding neither
+        # magic number, in neither order, is not a libpcap capture.
+        magics = (PCAPH_MAGIC_NUM, PCAPH_MAGIC_NUM_NANO)
+        little = struct.unpack("<I", header[0:4])[0]
+        big = struct.unpack(">I", header[0:4])[0]
+        if little in magics:
             # Little endian
             self.__endflag = "<"
-        elif magicnum == 0xa1b2c3d4:
-            # Big endign
+            magic = little
+        elif big in magics:
+            # Big endian
             self.__endflag = ">"
+            magic = big
         else:
-            raise Exception('Specified file is not a libpcap capture')
+            raise ValueError('Specified file is not a libpcap capture')
+
+        self.__ticks_per_second = \
+            1000000000.0 if magic == PCAPH_MAGIC_NUM_NANO else 1000000.0
 
         pcaph = struct.unpack("%sIHHIIII"%self.__endflag, header)
-        if pcaph[1] != PCAPH_VER_MAJOR and pcaph[2] != PCAPH_VER_MINOR \
-                and pcaph[3] != PCAPH_THISZONE and pcaph[4] != PCAPH_SIGFIGS \
-                and pcaph[5] != PCAPH_SNAPLEN:
-            raise Exception('Unsupported pcap header format or version')
+        # Only the version has to be the one this reads; the time zone,
+        # accuracy and snapshot length are the capture's own.
+        if pcaph[1] != PCAPH_VER_MAJOR:
+            raise ValueError('Unsupported libpcap version %d.%d' % (pcaph[1], pcaph[2]))
 
         self._pcaphsnaplen = pcaph[5]
         self._datalink = pcaph[6]
@@ -87,30 +111,53 @@ class PcapReader:
     def pcap_next(self):
         '''
         Retrieves the next packet from the capture file.  Returns a list of
-        [Hdr, packet] where Hdr is a list of [timestamp, snaplen, plen] and
-        packet is a string of the payload content.  Returns None at the end
-        of the packet capture.
+        [Hdr, packet] where Hdr is a list of [timestamp, the length in the
+        file, the length the packet was] and packet is the bytes of the
+        payload content.  Returns [None, None] at the end of the packet
+        capture, and raises ValueError for a capture that cannot be read
+        through.
         @rtype: List
         '''
         # Read the next header block
         PCAPH_RECLEN = 16
         rechdrdata = self.__fh.read(PCAPH_RECLEN)
 
-        try:
-            rechdrtmp = struct.unpack("%sIIII"%self.__endflag, rechdrdata)
-        except struct.error:
+        # Nothing left is the end of the capture. Some of a record header is
+        # a capture that was cut off while it was being written, which the
+        # caller is told about rather than left to read as the end.
+        if len(rechdrdata) == 0:
             return [None,None]
+        if len(rechdrdata) < PCAPH_RECLEN:
+            raise ValueError('Capture ends in a partial libpcap record header')
+
+        rechdrtmp = struct.unpack("%sIIII"%self.__endflag, rechdrdata)
 
         rechdr = [
-                float("%s.%s"%(rechdrtmp[0],rechdrtmp[1])), 
+                # The record holds whole seconds and a fraction of a second
+                # in two fields: 5 in the second one is 0.000005 s of a
+                # microsecond capture, not 0.5 s.
+                rechdrtmp[0] + rechdrtmp[1] / self.__ticks_per_second,
                 rechdrtmp[2], 
                 rechdrtmp[3]
                 ]
-        if rechdr[1] > rechdr[2] or rechdr[1] > self._pcaphsnaplen or rechdr[2] > self._pcaphsnaplen:
-            raise Exception('Corrupted or invalid libpcap record header (included length exceeds actual length)')
+        # How much of the packet is in the file cannot be more than the
+        # packet was, nor more than the snapshot length the capture was taken
+        # at. How long the packet was may well be more than either: that is
+        # what a snapshot length is for.
+        if rechdr[1] > rechdr[2]:
+            raise ValueError('Corrupted or invalid libpcap record header '
+                             '(included length %d exceeds the packet length %d)'
+                             % (rechdr[1], rechdr[2]))
+        if rechdr[1] > self._pcaphsnaplen:
+            raise ValueError('Corrupted or invalid libpcap record header '
+                             '(included length %d exceeds the capture snapshot '
+                             'length %d)' % (rechdr[1], self._pcaphsnaplen))
 
         # Read the included packet length
         frame = self.__fh.read(rechdr[1])
+        if len(frame) < rechdr[1]:
+            raise ValueError('Capture ends in a partial libpcap record: %d of '
+                             '%d bytes' % (len(frame), rechdr[1]))
         return [rechdr, frame]
 
 
@@ -126,7 +173,7 @@ class PcapDumper:
         @rtype: None
         '''
         self.__fh = open(savefile, mode='wb')
-        self.__fh.write(''.join([
+        self.__fh.write(b''.join([
             struct.pack("I", PCAPH_MAGIC_NUM), 
             struct.pack("H", PCAPH_VER_MAJOR),
             struct.pack("H", PCAPH_VER_MINOR),
@@ -151,27 +198,30 @@ class PcapDumper:
         @param orig_len: Length of the original packet, used if the packet you
         are writing is smaller than the original packet.  Defaults to the
         specified packet's length.
-        @type packet: String
+        @type packet: bytes
         @param packet: Packet contents
         @rtype: None
         '''
 
         if ts_sec == None or ts_usec == None:
-            # There must be a better way here that I don't know -JW
-            s_sec, s_usec = str(time.time()).split(".")
-            ts_sec = int(s_sec)
-            ts_usec = int(s_usec)
+            # The record holds whole seconds and microseconds, so the fraction
+            # of a second is scaled rather than written out as digits.
+            now = time.time()
+            ts_sec = int(now)
+            ts_usec = int((now - ts_sec) * 1000000)
 
         if orig_len == None:
             orig_len = len(packet)
 
         plen = len(packet)
 
-        self.__fh.write(''.join([
+        # The record's two lengths, in the order the format has them: how
+        # much of the packet is in the file, then how long the packet was.
+        self.__fh.write(b''.join([
             struct.pack("I", ts_sec),
             struct.pack("I", ts_usec),
-            struct.pack("I", orig_len),
             struct.pack("I", plen),
+            struct.pack("I", orig_len),
             packet
             ]))
 

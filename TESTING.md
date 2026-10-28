@@ -5,12 +5,12 @@ from 2012 and one from 2015, built only by a `tests/Makefile` from 2011 that
 the normal build never ran; one of the three had not compiled in years. There
 was a Travis configuration that no longer ran. So nothing checked a change.
 
-There are now 13 tests in the build, driven in large part by the Bluetooth Core
+There are now 17 tests in the build, driven in large part by the Bluetooth Core
 Specification's own published sample data, and they run on every push and pull
 request on Linux and macOS, plain and under AddressSanitizer and
 UndefinedBehaviorSanitizer.
 
-They found 53 defects — what you would expect of decoders nothing had
+They found 63 defects — what you would expect of decoders nothing had
 exercised: packet types that never produced a payload at all, a capture file
 whose connection parameters all belonged to other parts of the packet, buffers
 written and read past their ends, and hop predictions for channels the piconet
@@ -32,7 +32,11 @@ $ cmake --build build -j8
 $ ctest --test-dir build
 ```
 
-Under the sanitizers, which is what CI's third job does:
+That leaves the python tools out, and with them the two tests that cover
+`btaptap`. Drop `-DENABLE_PYTHON=OFF` for those, or run the keystroke one on
+its own: `python3 python/pcaptools/tests/test_btaptap.py`.
+
+Under the sanitizers, which is what CI's fourth job does:
 
 ```
 $ cmake -S . -B build-asan -DENABLE_PYTHON=OFF \
@@ -46,9 +50,10 @@ program you can run on its own: `build/tests/test_piconet`. A failure prints
 `FAIL <file>:<line>: <condition>` and the program exits non-zero, so the line
 that failed names the vector.
 
-CI (`.github/workflows/ci.yml`) runs three jobs: Ubuntu 24.04 with gcc,
+CI (`.github/workflows/ci.yml`) runs four jobs: Ubuntu 24.04 with gcc,
 macOS 15 with clang, both with `-Wall -Wextra -Werror` and an install into a
-temporary prefix, and Ubuntu 24.04 with clang under AddressSanitizer and
+temporary prefix, Ubuntu 24.04 with gcc building the static library on its own,
+and Ubuntu 24.04 with clang under AddressSanitizer and
 UndefinedBehaviorSanitizer with `-fno-sanitize-recover=all`.
 
 ## What each test covers
@@ -73,6 +78,8 @@ linkage, and `tests/CMakeLists.txt` says which tests do it.
 | `le_print` | What `lell_print()` writes and on which stream: a `CONNECT_REQ`, advertising data carrying 16-bit service UUIDs, the four value lines that carry their own indentation, and seven malformed packets, one per diagnostic message | Hand-built packets, each case comparing the whole of stderr against the expected text and checking stdout carries none of it |
 | `smoke` | The public API end to end: one known packet of each kind decoded, `btbb_gen_syncword()` and `btbb_find_ac()` with and without a bit error, and every frequency from 2400 to 2480 MHz decoded to a channel index and a PCAP `channel_k` | Sync words computed independently from the (64,30) block code in `python/utils/encode_sw.py`, not from the library's own tables |
 | `release_version` | That `cmake/set_release.cmake` produces the version the build claims | The script itself |
+| `btaptap` | The keystroke decoder end to end, run as a user runs it: keystrokes out of baseband and HCI captures, modifier keys, a held key, `-c`, `-h` beside a capture, a frame cut short, and every way a run can fail, each one an `error:` line on stderr and a non-zero exit. Also the `pcapdump` module the README offers on its own, which writes a capture file and reads it back | The Ellisys export recorded in `python/pcaptools/tests`, 864 keyboard reports of someone typing, and captures the test builds itself from the HID boot-mode report layout |
+| `library_config` | The library configurations the build offers: that one building neither library is refused while configuring, and that a static-only build builds a test program | Configures, and builds, a tree of its own, because a build is in one configuration only |
 
 ## How big the suite is
 
@@ -187,6 +194,21 @@ vectors.
 | `lell_print()` complained about malformed packets with `printf` | the six diagnostic messages landed on stdout in the middle of the packet dump, so a tool writing its capture to stdout had them mixed in and a script could not tell them from packet fields | `le_print`, seven malformed packets, one per message, each comparing the whole of stderr and checking stdout carries none of it | #8 | #4 |
 | Four advertising-data fields printed their indentation before deciding whether the field could be read | with the complaint moved to stderr, a blank indented line would have been left in the dump | `le_print`, a packet whose four fields are all readable | #8 | #4 |
 
+### The python tools, and the build
+
+| What was wrong | User impact | Pinned by | PR | Issue |
+|---|---|---|---|---|
+| `btaptap` read every byte of a capture through `ord()`, which python 3 raises a `TypeError` for, and the read loop took any `TypeError` as the end of the capture | no capture ever gave up a keystroke: the tool printed nothing, said nothing and exited 0, since the changelog claimed python 3 support in 2020-12-R1 | `btaptap`, keystrokes out of a baseband and an HCI capture and out of the recorded Ellisys export | #64 | #55 |
+| The Ellisys path opened the CSV in text mode, so the CR LF line endings its header comparison expects never matched, and past that point it called `xreadlines()`, converted hex with `str.decode("hex")` and built its faked L2CAP packet with `chr()` | `-e` refused the repository's own example export as not an Ellisys export, and exited 0 | `btaptap`, the recorded export decoded, and a CSV that is not one refused | #64 | #55 |
+| An unsupported data link layer was reported once per packet, and the run still exited 0 | a capture from the Ubertooth tools, whose link type `btaptap` does not read, printed one line per packet and reported success | `btaptap`, a `DLT_BLUETOOTH_BREDR_BB` capture | #64 | #55 |
+| `PcapDumper` joined the bytes of its file and record headers with `''.join()` | the half of the `pcapdump` module the README offers could not write a capture at all | `btaptap`'s module cases, which write a capture and read it back | #64 | #55 |
+| `PcapReader` built a record's timestamp by writing the fraction-of-a-second field after the decimal point, `float("%s.%s")`, which is only right when the field is written in as many digits as it is wide | a fraction starting with a zero came out up to a second late: 5 microseconds past the second read as half a second, and one record in ten of a nanosecond capture, where the fraction is below 0.1 s, was wrong | `btaptap`'s timestamp cases, a microsecond and a nanosecond capture | #64 | #55 |
+| `PcapReader` answered "end of capture" for a record header it had only part of, and handed back a frame shorter than the record said it was | a capture a tool was killed in the middle of writing was reported as read right through: `btaptap` stopped there, said nothing and exited 0 | `btaptap`, captures cut off mid-record-header and mid-record | #64 | #55 |
+| `PcapReader` called a record corrupt when the length the packet was exceeded the capture's snapshot length, which is the one thing a snapshot length produces | a capture taken at a snapshot length, as a long-running capture is, was refused at its first record: no keystrokes, one error line, exit 1 | `btaptap`, a capture whose snapshot length is 40 holding a 50-byte packet | #64 | #55 |
+| `PcapDumper` wrote a record's two lengths the wrong way round, the length the packet was in the field that says how much of it is in the file | a capture holding the first bytes of longer packets, which is the one thing that field is for, claimed more bytes per record than it held, and a reader walking it either read into the next record or rejected it as corrupt | `btaptap`'s snapshot-length case, two records read back | #64 | #55 |
+| `PcapReader` never looked at which libpcap magic number a capture holds: it took any file whose first four bytes were not the byte-swapped one as a little-endian microsecond capture, so its "not a libpcap capture" could not be reached and a nanosecond capture, which is what this library's own writer produces, was not told apart | a file that is not a capture was read as one and failed later with a traceback out of the reader, and scaling the fraction field at all needed the unit the magic number carries | `btaptap`, a text file, a file shorter than a capture header, and a nanosecond capture read back | #64 | #55 |
+| `lib/src/CMakeLists.txt` guarded "no library at all" with an option name nothing sets | `cmake -DBUILD_SHARED_LIB=OFF`, the obvious way to ask for a static build, configured a tree with no library in it and failed halfway through the build with `ld: library 'btbb-static' not found` | `library_config`, and a static-only job in CI | #64 | #62 |
+
 The vectors ported from upstream's own test programs in #9 — the FEC 2/3
 blocks, the syndrome values and the 20-row header table — all passed. They
 found nothing, which is the result: that part of the library was right and is
@@ -234,6 +256,14 @@ map changes, and the replaced allocator.
 | Wrong length reported for an eSCO payload at the longest length its type carries, 20,000 random payloads per type | EV3 79, EV5 132, EV4 117 | EV3 1, EV5 0, EV4 0 | PR #61, `test_length_sweep()` in `tests/test_esco.c` with `SWEEP_TRIALS` raised to 20,000, run on this tree and on a copy with the three decode hunks reverted. The sweep builds payloads the way the air carries them: whitened, FEC encoded for an EV4, at a clock that changes from one to the next, with a tail of noise after the packet. The committed test runs the same sweep at 2,000 and pins its counts |
 | The same for a payload well short of that length (EV5, 20 information bytes) | 78 one byte short | 101 one byte long | PR #61, the same sweep. Short of the type's longest length the guess changes direction rather than going away; `btbb_packet_set_esco_length()` removes it |
 | CONNECT_IND option bytes recorded | `symbols[0..33]` | `symbols[6..39]`, confirmed on 8438 real records in one lab run | PR #36. Reverting the offset alone fails 39 checks, every connection parameter among them |
+
+### The python tools, and the build
+
+| | Before | After | Source |
+|---|---|---|---|
+| Keystrokes `btaptap` recovered from the recorded Ellisys export, 864 keyboard reports | 0, and the export refused | 543 characters, the paragraph that was typed | PR #64, `python3 btaptap -e python/pcaptools/tests/ellysis-keyboard.csv` on each build |
+| The 33 cases of the new `btaptap` test, run against the tree before the fix | 38 failures and 6 errors | all pass | PR #64, the test file copied into a checkout of `master` at `622b6c2` |
+| Test programs a `-DBUILD_SHARED_LIB=OFF` build links | none: the build stopped at the first one | the configuration is refused, and `-DBUILD_SHARED_LIB=OFF -DBUILD_STATIC_LIB=ON` builds and passes all 15 | PR #64, `ctest` in a static-only build |
 
 Each capture-file fix was also reverted on its own: 1 to 8 failing checks each,
 two compile errors, one SIGSEGV and two sanitizer reports, 20 rows in PR #36.
