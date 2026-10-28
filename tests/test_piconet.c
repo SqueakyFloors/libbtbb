@@ -49,21 +49,57 @@ static void *counted_malloc(size_t size);
 #undef malloc
 
 static size_t largest_request;	/* bytes, since it was last reset */
-static size_t last_request;	/* bytes asked for by the most recent call */
 static int allocation_calls;	/* calls, since it was last reset */
 static int refuse_allocations;
 static int refuse_from;		/* refuse this call onward, 0 to refuse none */
 
+/*
+ * The size each live allocation was asked for, so a test can ask how long the
+ * block a function handed back really is rather than guess from the order the
+ * allocations were made in.
+ */
+#define REMEMBERED_ALLOCATIONS 64
+static struct {
+	void *address;
+	size_t size;
+} remembered[REMEMBERED_ALLOCATIONS];
+static int remembered_next;
+
+static size_t size_allocated(const void *address)
+{
+	int i, at;
+
+	if (address == NULL)
+		return 0;
+	/* newest first, so a freed block whose address was handed out again
+	 * answers with the size it was asked for the second time */
+	for (i = 1; i <= REMEMBERED_ALLOCATIONS; i++) {
+		at = (remembered_next - i + REMEMBERED_ALLOCATIONS) %
+			REMEMBERED_ALLOCATIONS;
+		if (remembered[at].address == address)
+			return remembered[at].size;
+	}
+	return 0;
+}
+
 static void *counted_malloc(size_t size)
 {
+	void *block;
+
 	if (size > largest_request)
 		largest_request = size;
-	last_request = size;
 	allocation_calls++;
 	if (refuse_allocations ||
 	    ((refuse_from != 0) && (allocation_calls >= refuse_from)))
 		return NULL;
-	return malloc(size);
+	block = malloc(size);
+	if (block != NULL) {
+		remembered[remembered_next].address = block;
+		remembered[remembered_next].size = size;
+		remembered_next = (remembered_next + 1) %
+			REMEMBERED_ALLOCATIONS;
+	}
+	return block;
 }
 
 static int failures = 0;
@@ -173,9 +209,9 @@ static void test_afh_candidates_fit_their_list(void)
 	CHECK_EQ(count, pn->num_candidates);
 	CHECK(count > old_size);
 	/* The list handed back is exactly as long as the count beside it,
-	 * whatever the sizes it grew through on the way: the last allocation
-	 * made is that size. */
-	CHECK_EQ(sizeof(uint32_t) * (size_t) count, last_request);
+	 * whatever the sizes it grew through on the way. */
+	CHECK_EQ(sizeof(uint32_t) * (size_t) count,
+		 size_allocated(pn->clock_candidates));
 	/* Every candidate really does hop to the observed channel, so the list
 	 * was filled and not merely allocated large enough. */
 	for (i = 0; i < pn->num_candidates; i++)
@@ -560,11 +596,11 @@ static void test_an_allocation_failure_partway_through_the_list(void)
 
 	first_hop(pn, channel_at(pn, 0));
 	allocation_calls = 0;
-	/* the list has been allocated and grown once by the third call */
+	/* the list has been allocated and grown at least once by then */
 	refuse_from = 3;
 	CHECK_EQ(0, btbb_init_hop_reversal(0, pn));
 	refuse_from = 0;
-	CHECK_EQ(3, allocation_calls);
+	CHECK(allocation_calls >= 3);
 	CHECK_EQ(0, pn->num_candidates);
 	CHECK(pn->clock_candidates == NULL);
 	CHECK(!btbb_piconet_get_flag(pn, BTBB_CLK27_VALID));

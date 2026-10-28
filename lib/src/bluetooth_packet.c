@@ -881,6 +881,13 @@ int crc_check(int clock, btbb_packet* pkt)
 		btbb_packet_set_flag(pkt, BTBB_HEC_VALID, 0);
 		btbb_packet_set_flag(pkt, BTBB_CRC_CHECKED, 0);
 		btbb_packet_set_flag(pkt, BTBB_CRC_CORRECT, 0);
+		/* The payload is the trial's too, so it is no longer a
+		 * payload this packet decoded. A caller that decoded the
+		 * packet before starting the search would otherwise have the
+		 * last trial clock's bytes reported as the packet's. */
+		btbb_packet_set_flag(pkt, BTBB_HAS_PAYLOAD, 0);
+		pkt->payload_length = 0;
+		pkt->corrected_payload_bits = 0;
 	}
 
 	return retval;
@@ -959,8 +966,10 @@ int fhs(int clock, btbb_packet* pkt)
 
 	/* No whitening input made the CRC come out, so what is left in the
 	 * payload is the last one tried and known to be wrong: report none,
-	 * as the two give-up paths above do. */
+	 * as the two give-up paths above do, and nothing corrected in it
+	 * either. */
 	pkt->payload_length = 0;
+	pkt->corrected_payload_bits = 0;
 	free(corrected);
 	return 0;
 }
@@ -1343,6 +1352,11 @@ static int ev4_payload(int clock, btbb_packet* pkt, int *corrected_total)
 			 * many corrected and uncorrectable bits together",
 			 * and the block that could not be put right is not
 			 * part of the payload being reported.
+			 *
+			 * A block is 10 bits and the length reported is whole
+			 * bytes, so up to two counted bits can belong to bits
+			 * past the end of the payload. That is as close as a
+			 * count made a block at a time can get.
 			 */
 			pkt->payload_length = bits / 8;
 			return 1;

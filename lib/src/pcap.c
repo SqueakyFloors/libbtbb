@@ -147,11 +147,10 @@ typedef struct {
    This is the best that can be done rather than a guarantee: a capture going
    to something whose position cannot be found, or that cannot be truncated
    or sought - a named pipe, say - keeps the part of the record that reached
-   it, as every capture did before. The stream's error is left set in that
-   case, so a caller that keeps writing keeps being told. The caller is told
-   the write failed either way, and a caller that stops capturing there -
-   which is the only sensible answer to a full disk - ends up with a file no
-   worse than it would have had. */
+   it, as every capture did before. Writing to such a thing goes on failing
+   on its own, and the caller is told this record failed either way, so a
+   caller that stops capturing there - the only sensible answer to a full
+   disk - ends up with a file no worse than it would have had. */
 static void discard_partial_record(FILE *file, off_t start_of_record)
 {
 	if (start_of_record < 0) {
@@ -160,17 +159,14 @@ static void discard_partial_record(FILE *file, off_t start_of_record)
 	if (ftruncate(fileno(file), start_of_record) != 0) {
 		return;
 	}
-	/* The record is out of the file, so the stream can be used again:
-	   clearing the error is what lets the seek below be accepted.
-
-	   The seek cannot fail in practice, the truncation just above having
-	   succeeded on this same descriptor, so the position is one the file
-	   can be set to. Were it ever to fail, the file would still end on a
-	   whole record; only the stream's own idea of where it is would be
-	   wrong, and the caller has already been told that this record did
-	   not get written. */
-	clearerr(file);
-	(void) fseeko(file, start_of_record, SEEK_SET);
+	/* Put the stream back on the end of the file, and only then make it
+	   usable again. A seek that failed would leave the stream past the
+	   new end of the file, where a further record would be written beyond
+	   a hole; leaving the error set is what keeps that from happening
+	   quietly. */
+	if (fseeko(file, start_of_record, SEEK_SET) == 0) {
+		clearerr(file);
+	}
 }
 
 /* Write one record. Returns 0, or -PCAP_FILE_WRITE_ERROR if any of it did not
@@ -179,9 +175,9 @@ static void discard_partial_record(FILE *file, off_t start_of_record)
    could not be written whole is taken back out, as the pcapng writer does
    with a block, leaving the file parsable to its end. */
 static int btbb_pcap_dump(FILE *file, pcaprec_hdr_t *pcap_header, u_char *data) {
-	/* ftello() rather than ftell(): a capture can pass the 2 GB a long
-	   holds on a 32-bit host, and a position that came back as -1 there
-	   would leave the failed record in the file. */
+	/* ftello() rather than ftell(), so the position is the off_t that
+	   ftruncate() below takes and that the pcapng writer uses, which is
+	   64 bits wide wherever large file support is on. */
 	off_t start_of_record = ftello(file);
 
 	if ((fwrite(pcap_header, sizeof(*pcap_header), 1, file) == 1) &&

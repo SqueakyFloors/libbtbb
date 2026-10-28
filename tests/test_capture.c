@@ -1192,6 +1192,89 @@ static void test_bredr_reused_packet_in_the_uap_search(void)
 }
 
 /*
+ * A payload decoded before the search for the address part starts does not
+ * survive a search that found nothing. The search decodes the same symbols
+ * again at up to 64 candidate clocks and throws each result away, so what is
+ * left in the payload field is the last clock tried.
+ *
+ * A search that succeeds is the other way round: it stops on the clock whose
+ * CRC came out, so the payload left behind is the packet's own and stays.
+ */
+static void test_bredr_payload_does_not_survive_the_uap_search(void)
+{
+	const char *filename = "test_capture_search_payload.pcapng";
+	char header_symbols[55];
+	char payload[sizeof(SPEC_DH1_PAYLOAD)];
+	char stream[1024];
+	btbb_pcapng_handle *h = NULL;
+	btbb_piconet *pn;
+	btbb_packet *pkt = NULL;
+	size_t blk, data;
+	int length;
+
+	/* a DH1 with one payload byte altered, so no clock's CRC comes out
+	   and the search runs every candidate */
+	strcpy(header_symbols, SPEC_DH1_HEADER);
+	strcpy(payload, SPEC_DH1_PAYLOAD);
+	CHECK(payload[8] == '1');
+	payload[8] = '0';
+	length = build_bredr_stream(stream, SPEC_DH1_LAP, header_symbols,
+				    payload);
+	CHECK(btbb_find_ac(stream, 1, SPEC_DH1_LAP, 0, &pkt) == 0);
+	CHECK(pkt != NULL);
+	if (pkt == NULL)
+		return;
+	btbb_packet_set_data(pkt, stream, length, 0, 0);
+	btbb_packet_set_flag(pkt, BTBB_WHITENED, 0);
+	btbb_packet_set_flag(pkt, BTBB_CLK6_VALID, 1);
+	btbb_packet_set_uap(pkt, SPEC_DH1_UAP);
+	CHECK(btbb_decode_header(pkt) == 1);
+	/* 2 is a payload decoded whose CRC did not come out */
+	CHECK(btbb_decode_payload(pkt) == 2);
+	CHECK(btbb_packet_get_flag(pkt, BTBB_HAS_PAYLOAD) == 1);
+	CHECK(btbb_packet_get_payload_length(pkt) == 8);
+
+	/* the search over the same symbols, as btbb_process_packet() runs it
+	   before a piconet's address part is known */
+	pn = btbb_piconet_new();
+	CHECK(pn != NULL);
+	if (pn == NULL) {
+		btbb_packet_unref(pkt);
+		return;
+	}
+	btbb_init_piconet(pn, SPEC_DH1_LAP);
+	(void) btbb_uap_from_header(pkt, pn);
+	CHECK(btbb_packet_get_flag(pkt, BTBB_HAS_PAYLOAD) == 0);
+	CHECK(btbb_packet_get_payload_length(pkt) == 0);
+
+	unlink_quietly(filename);
+	CHECK(btbb_pcapng_create_file(filename, "test", &h) == 0);
+	if (h == NULL) {
+		btbb_packet_unref(pkt);
+		btbb_piconet_unref(pn);
+		return;
+	}
+	CHECK(btbb_pcapng_append_packet(h, 31ull, -20, -80, SPEC_DH1_LAP,
+					SPEC_DH1_UAP, pkt) == 0);
+	(void) btbb_pcapng_close(h);
+	btbb_packet_unref(pkt);
+	btbb_piconet_unref(pn);
+
+	CHECK(read_capture(filename));
+	unlink_quietly(filename);
+	if (capture_len == 0)
+		return;
+	blk = find_block(BLOCK_TYPE_ENHANCED_PACKET, 0);
+	CHECK(blk < capture_len);
+	if (blk >= capture_len)
+		return;
+	data = blk + 28;
+	CHECK((rd16(data + 20) & BREDR_PAYLOAD_PRESENT) == 0);
+	CHECK(rd16(data + 6) == 0);		/* corrected payload bits */
+	CHECK(rd32(blk + 20) == 22);		/* the pseudoheader alone */
+}
+
+/*
  * The corrected-bits fields of a BR/EDR record. The format gives neither a
  * validity flag, so a reader takes both at face value, and both writers used
  * to fill them with 0 whatever the forward error correction had done.
@@ -2089,6 +2172,7 @@ int main(void)
 	test_bredr_reused_packet();
 	test_bredr_undecoded_payload_is_not_reported();
 	test_bredr_reused_packet_in_the_uap_search();
+	test_bredr_payload_does_not_survive_the_uap_search();
 	test_bredr_corrected_bits();
 	test_bredr_interface_options();
 	test_bredr_pcap_record();
