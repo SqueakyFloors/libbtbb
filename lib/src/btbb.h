@@ -40,7 +40,8 @@
 #define BTBB_IS_AFH            11
 #define BTBB_LOOKS_LIKE_AFH    12
 /* BTBB_IS_ALIASED is vestigial: aliased hop reversal is not
-   implemented, and btbb_init_hop_reversal() clears this flag. */
+   implemented, so btbb_init_hop_reversal() refuses it and never sets
+   this flag. */
 #define BTBB_IS_ALIASED        13
 #define BTBB_FOLLOWING         14
 

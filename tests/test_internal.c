@@ -510,6 +510,23 @@ static void test_find_ac_reads_only_the_stream_it_is_given(void)
 	CHECK(pkt == NULL);
 
 	/*
+	 * The length is a cap on the search, not a floor: a caller asking for
+	 * fewer offsets than the stream holds gets the ones it asked for. The
+	 * sync word is back at the last offset, which a search of 100 offsets
+	 * does not reach.
+	 */
+	memset(stream + last + 1, 0, SYNCWORD_SYMBOLS - 1);
+	plant_syncword(stream + last, syncword, SYNCWORD_SYMBOLS);
+	CHECK(btbb_find_ac_n(stream, len, 100, TEST_LAP, 0, &pkt) < 0);
+	CHECK(btbb_find_ac_n(stream, len, 100, LAP_ANY, 0, &pkt) < 0);
+	CHECK(pkt == NULL);
+	CHECK(btbb_find_ac_n(stream, len, last + 1, TEST_LAP, 0, &pkt) == last);
+	if (pkt != NULL) {
+		btbb_packet_unref(pkt);
+		pkt = NULL;
+	}
+
+	/*
 	 * A stream shorter than one sync word, and an empty one, hold no
 	 * offset to search at all. Here the stream starts at the guarded
 	 * page, so any symbol read would stop the test.

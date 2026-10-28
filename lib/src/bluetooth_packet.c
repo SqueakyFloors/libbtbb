@@ -504,8 +504,19 @@ int btbb_find_ac_n(char *stream, size_t stream_len, int search_length,
 int btbb_find_ac(char *stream, int search_length, uint32_t lap,
 				 int max_ac_errors, btbb_packet **pkt_ptr) {
 	/* the symbols this form has always read */
-	size_t stream_len = search_length > 0 ?
-		(size_t) search_length + (SYNCWORD_SYMBOLS - 1) : 0;
+	size_t stream_len = 0;
+
+	if (search_length > 0) {
+		stream_len = (size_t) search_length;
+		/* No sum where size_t is no wider than int. A search length
+		 * that close to the maximum is not one any caller makes, and
+		 * the largest length there is reads no less than it asked
+		 * for. */
+		if (stream_len <= SIZE_MAX - (SYNCWORD_SYMBOLS - 1))
+			stream_len += SYNCWORD_SYMBOLS - 1;
+		else
+			stream_len = SIZE_MAX;
+	}
 
 	return btbb_find_ac_n(stream, stream_len, search_length, lap,
 			      max_ac_errors, pkt_ptr);
@@ -1897,9 +1908,9 @@ int btbb_decode(btbb_packet* pkt)
 	/* Decoding prints nothing. A caller that wants the packet reported
 	 * calls btbb_print_packet(), which btbb_process_packet() does for a
 	 * packet of a piconet it is following. This used to print the packet
-	 * itself, so a followed packet was printed twice, and every packet
-	 * decoded while a clock was being recovered was printed to stdout
-	 * without anyone asking for it. */
+	 * itself whenever one decoded, so a followed packet was printed
+	 * twice, and any other caller got a dump on stdout it had not asked
+	 * for. */
 	return rv;
 }
 

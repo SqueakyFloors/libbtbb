@@ -692,8 +692,9 @@ static void test_dh1_sample_packet(void)
  * Decoding a packet prints nothing. btbb_decode() used to print "Packet
  * decoded with clock 0x.. (rv=..)" and then dump the packet, both to stdout,
  * so a tool dumping its capture there had the library's output in the dump,
- * and a packet the library was asked to print was printed twice. Reporting a
- * packet is btbb_print_packet()'s job, and it still does it.
+ * and a packet the library was asked to print was printed twice: once by the
+ * decode and once by the print. Reporting a packet is btbb_print_packet()'s
+ * job, and it still does it.
  */
 static void test_decode_prints_nothing(void)
 {
