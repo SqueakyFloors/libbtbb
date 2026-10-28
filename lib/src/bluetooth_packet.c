@@ -381,6 +381,12 @@ int promiscuous_packet_search(char *stream, int search_length, uint32_t *lap,
 	char *symbols;
 	int count, offset = -1;
 
+	/* With no offset to search there is no sync word to filter, and the
+	 * caller has promised nothing about the symbols the filter below
+	 * would read. */
+	if (search_length < 1)
+		return -1;
+
 	/* Barker code at end of sync word (includes
 	 * MSB of LAP) is used as a rough filter.
 	 */
@@ -658,6 +664,17 @@ static char *unfec23(char *input, int length)
 }
 
 
+/*
+ * The number of symbols a payload of this many bits arrives in when it is
+ * carried by the rate 2/3 FEC code. The code sends 15 symbols for every 10
+ * bits and pads the last block out, so the symbols a payload needs are half
+ * again as many as its bits, rounded up to a whole block.
+ */
+static int fec23_symbols(int bits)
+{
+	return ((bits + 9) / 10) * 15;
+}
+
 /* Remove the whitening from an air order array */
 static void unwhiten(char* input, char* output, int clock, int length, int skip, btbb_packet* pkt)
 {
@@ -804,8 +821,12 @@ int fhs(int clock, btbb_packet* pkt)
 
 	pkt->payload_length = 20;
 
-	if (size < pkt->payload_length * 12)
+	if (size < fec23_symbols(pkt->payload_length * 8)) {
+		/* the capture ends before the payload does, so there is
+		 * nothing decoded to report */
+		pkt->payload_length = 0;
 		return 1; //FIXME should throw exception
+	}
 
 	char *corrected = unfec23(stream, pkt->payload_length * 8);
 	if (!corrected)
@@ -845,6 +866,11 @@ int fhs(int clock, btbb_packet* pkt)
  */
 static int decode_payload_header(char *stream, int clock, int header_bytes, int size, int fec, int skip, btbb_packet* pkt)
 {
+	/* nothing is decoded yet, so a caller that goes on to report a
+	 * payload after this fails does not report a length from whatever the
+	 * packet held before */
+	pkt->payload_length = 0;
+
 	if(header_bytes == 2)
 	{
 		if(size < 16)
@@ -980,8 +1006,13 @@ int DM(int clock, btbb_packet* pkt)
 		/* could be encrypted */
 		return 1;
 	bitlength = pkt->payload_length*8;
-	if(bitlength > size)
+	if(fec23_symbols(bitlength) > size) {
+		/* the capture ends before the payload does: the rate 2/3 FEC
+		 * this type carries needs half again as many symbols as the
+		 * payload has bits */
+		pkt->payload_length = 0;
 		return 1; //FIXME should throw exception
+	}
 
 	char *corrected = unfec23(stream, bitlength);
 	if (!corrected)
@@ -1034,8 +1065,12 @@ int DH(int clock, btbb_packet* pkt)
 		/* could be encrypted */
 		return 1;
 	bitlength = pkt->payload_length*8;
-	if(bitlength > size)
+	if(bitlength > size) {
+		/* the capture ends before the payload does, so there is
+		 * nothing decoded to report */
+		pkt->payload_length = 0;
 		return 1; //FIXME should throw exception
+	}
 
 	unwhiten(stream, pkt->payload, clock, bitlength,
 		 HEADER_WHITENING_BITS, pkt);
@@ -1119,12 +1154,12 @@ int EV4(int clock, btbb_packet* pkt)
 	 * (Vol 2, Part B, Section 6.5.3.2), which rate 2/3 FEC turns into 98
 	 * blocks of 15 symbols */
 	int maxbytes = 122;
-	int maxsymbols = ((maxbytes * 8 + 9) / 10) * 15;
+	int maxsymbols = fec23_symbols(maxbytes * 8);
 
 	/* the shortest payload is one information byte and the two byte CRC,
 	 * which comes to 45 symbols */
 	int minbytes = 3;
-	int minsymbols = ((minbytes * 8 + 9) / 10) * 15;
+	int minsymbols = fec23_symbols(minbytes * 8);
 
 	int syms = 0; /* number of symbols we have decoded */
 	int bits = 0; /* number of payload bits we have decoded */
@@ -1241,6 +1276,10 @@ uint8_t try_clock(int clock, btbb_packet* pkt)
 	char header[18];
 	char unwhitened[18];
 
+	/* check that we have enough symbols */
+	if (pkt->length < 122)
+		return 0;
+
 	if (!unfec13(stream, header, 18))
 		return 0;
 	unwhiten(header, unwhitened, clock, 18, 0, pkt);
@@ -1260,6 +1299,10 @@ int btbb_decode_header(btbb_packet* pkt)
 	/* 18 bit packet header */
 	char header[18];
 	uint8_t UAP;
+
+	/* check that we have enough symbols */
+	if (pkt->length < 122)
+		return 0;
 
 	if (btbb_packet_get_flag(pkt, BTBB_CLK6_VALID) && unfec13(stream, header, 18)) {
 		unwhiten(header, pkt->packet_header, pkt->clkn, 18, 0, pkt);

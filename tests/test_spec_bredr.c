@@ -246,6 +246,57 @@ static void test_access_code_search(void)
 	}
 }
 
+/*
+ * btbb.h promises that the search reads search_length + 63 symbols and no
+ * more: each of the first search_length symbols is tried as the start of the
+ * 64 symbol sync word. These streams are allocated at exactly the length the
+ * header promises is enough, so in a sanitizer build a read past it stops the
+ * test.
+ */
+static void test_find_ac_reads_only_what_it_promises(void)
+{
+	uint64_t syncword = reverse64(ACCESS_CODES[2].sync_word); /* GIAC */
+	uint32_t lap = ACCESS_CODES[2].lap;
+	btbb_packet *pkt = NULL;
+	char *stream;
+	int i;
+
+	/* one offset to try: the sync word and nothing else */
+	stream = (char *) malloc(64);
+	CHECK(stream != NULL);
+	if (stream == NULL)
+		return;
+	for (i = 0; i < 64; i++)
+		stream[i] = (char) ((syncword >> i) & 1);
+
+	CHECK(btbb_find_ac(stream, 1, lap, 0, &pkt) == 0);
+	if (pkt != NULL) {
+		btbb_packet_unref(pkt);
+		pkt = NULL;
+	}
+	CHECK(btbb_find_ac(stream, 1, LAP_ANY, 0, &pkt) == 0);
+	if (pkt != NULL) {
+		btbb_packet_unref(pkt);
+		pkt = NULL;
+	}
+	free(stream);
+
+	/*
+	 * No offset to try: there is no sync word to look at, so none of the
+	 * stream may be read, not even the symbols the rough filter on the
+	 * end of the sync word starts from.
+	 */
+	stream = (char *) malloc(1);
+	CHECK(stream != NULL);
+	if (stream == NULL)
+		return;
+	stream[0] = 0;
+	CHECK(btbb_find_ac(stream, 0, lap, 0, &pkt) < 0);
+	CHECK(btbb_find_ac(stream, 0, LAP_ANY, 0, &pkt) < 0);
+	CHECK(pkt == NULL);
+	free(stream);
+}
+
 /* ------------------------------------------------------------------ *
  * Section 4: HEC and packet header sample data
  * ------------------------------------------------------------------ */
@@ -881,6 +932,108 @@ static void test_acl_payload_length_clamped(void)
 }
 
 /*
+ * A capture that stops partway through an ACL payload holds no payload the
+ * decoder can read, so it must report none: btbb_decode_payload() marks the
+ * packet as having a payload whatever it returns, so a length left over from
+ * the payload header reaches the dump and the capture files as bytes nothing
+ * decoded.
+ *
+ * The rate 2/3 types are where the bound is easy to get wrong. Their payload
+ * arrives in half again as many symbols as it has bits, so a capture can hold
+ * as many symbols as the payload has bits and still be short of it.
+ */
+static void test_acl_truncated_capture(void)
+{
+	static const struct {
+		const char *name;
+		uint8_t type;
+		int header_bytes;
+		int body;
+		int fec23;
+	} CASES[] = {
+		{ "DM1", PACKET_TYPE_DM1, 1,  17, 1 },
+		{ "DH1", PACKET_TYPE_DH1, 1,  27, 0 },
+		{ "DM3", PACKET_TYPE_DM3, 2, 121, 1 },
+		{ "DH5", PACKET_TYPE_DH5, 2, 339, 0 }
+	};
+	size_t row;
+
+	for (row = 0; row < sizeof(CASES) / sizeof(CASES[0]); row++) {
+		char payload[MAX_SYMBOLS];
+		char stream[MAX_SYMBOLS];
+		uint16_t header_data;
+		int payload_symbols, full_length, cut;
+		const int clock = 0x2a;
+
+		payload_symbols = build_acl_payload(payload,
+						    CASES[row].header_bytes,
+						    CASES[row].body, 1,
+						    CASES[row].fec23, 0x47,
+						    clock);
+		header_data = (uint16_t) (1 | (CASES[row].type << 3) |
+					  (3 << 7));
+		full_length = build_packet(stream, 0x9e8b33, header_data,
+					   spec_hec(header_data, 0x47),
+					   payload, payload_symbols, clock, 1);
+
+		/* every length from no payload at all to one symbol short */
+		for (cut = 122; cut < full_length; cut++) {
+			btbb_packet *pkt = packet_for(stream, cut, 0x47,
+						      clock, 1);
+			int rv;
+
+			CHECK(pkt != NULL);
+			if (pkt == NULL)
+				return;
+			CHECK(btbb_decode_header(pkt) == 1);
+
+			rv = btbb_decode_payload(pkt);
+			if (rv == 10 ||
+			    btbb_packet_get_payload_length(pkt) != 0) {
+				printf("FAIL %s:%d: %s cut to %d of %d "
+				       "symbols decodes to %d and reports "
+				       "%d bytes\n", __FILE__, __LINE__,
+				       CASES[row].name, cut, full_length, rv,
+				       btbb_packet_get_payload_length(pkt));
+				++failures;
+			}
+			btbb_packet_unref(pkt);
+		}
+	}
+}
+
+/*
+ * The access code and the packet header are the first 122 symbols of a
+ * packet, so a capture that stops inside them holds no header to decode.
+ * Without a length check the decoder reports one anyway: each header bit is
+ * sent three times, and the error correction takes the majority, so two
+ * symbols of the last bit still give the bit the sender set.
+ */
+static void test_header_needs_its_symbols(void)
+{
+	char stream[MAX_SYMBOLS];
+	uint16_t header_data = (uint16_t) (1 | (PACKET_TYPE_DM1 << 3) |
+					   (3 << 7));
+	const int clock = 0x2a;
+	int cut;
+
+	build_packet(stream, 0x9e8b33, header_data,
+		     spec_hec(header_data, 0x47), NULL, 0, clock, 1);
+
+	for (cut = 0; cut < 122; cut++) {
+		btbb_packet *pkt = packet_for(stream, cut, 0x47, clock, 1);
+
+		CHECK(pkt != NULL);
+		if (pkt == NULL)
+			return;
+		CHECK(btbb_header_present(pkt) == 0);
+		CHECK(btbb_decode_header(pkt) == 0);
+		CHECK(try_clock(clock, pkt) == 0);
+		btbb_packet_unref(pkt);
+	}
+}
+
+/*
  * The synchronous types carry a fixed length payload with no payload header:
  * HV1 10 bytes under rate 1/3 FEC, HV2 20 under rate 2/3, HV3 30 with none
  * (Vol 2, Part B, Section 6.5.2).
@@ -1415,6 +1568,7 @@ int main(void)
 {
 	test_access_code_sample_data();
 	test_access_code_search();
+	test_find_ac_reads_only_what_it_promises();
 	test_hec_sample_data();
 	test_crc_sample_data();
 	test_whitening_sample_data();
@@ -1424,6 +1578,8 @@ int main(void)
 	test_dm1_sample_packet();
 	test_acl_payload_lengths();
 	test_acl_payload_length_clamped();
+	test_acl_truncated_capture();
+	test_header_needs_its_symbols();
 	test_sco_payload_lengths();
 	test_esco_payload_lengths();
 	test_esco_truncated_capture();
