@@ -42,7 +42,9 @@ if(BUILD_TESTING)
     target_include_directories(test_esco PRIVATE ${PROJECT_SOURCE_DIR}/lib/src)
     target_compile_options(test_esco PRIVATE -std=gnu90)
     add_test(NAME esco COMMAND test_esco)
-    set_tests_properties(esco PROPERTIES TIMEOUT 30)
+    # A few seconds, most of it the sweep over 8,000 payloads, which a
+    # sanitizer build takes twice as long over.
+    set_tests_properties(esco PROPERTIES TIMEOUT 60)
 
     add_executable(test_spec_hop test_spec_hop.c)
     target_include_directories(test_spec_hop PRIVATE ${PROJECT_SOURCE_DIR}/lib/src)

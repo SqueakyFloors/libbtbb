@@ -565,6 +565,148 @@ static void test_known_esco_length_rules_out_hv3(void)
 	btbb_packet_unref(pkt);
 }
 
+/*
+ * How often the reported length is wrong over many payloads, which is what
+ * issue #40 is about: each of the cases above stands for about one payload in
+ * 256, so only a sweep shows the rate.
+ *
+ * The payloads are built the way the air carries them - whitened, rate 2/3
+ * FEC encoded for an EV4, at a clock that changes from one to the next, with
+ * a tail of noise after the packet - and from a fixed seed, so the counts
+ * below are exact rather than statistical. TESTING.md quotes the same sweep
+ * with SWEEP_TRIALS raised to 20,000, run against this tree and against the
+ * tree before this fix.
+ */
+#define SWEEP_TRIALS 2000
+
+static uint32_t sweep_seed = 0xabcdef;
+
+static int sweep_bit(void)
+{
+	sweep_seed = sweep_seed * 1103515245u + 12345u;
+	return (int) ((sweep_seed >> 20) & 1);
+}
+
+static uint8_t sweep_byte(void)
+{
+	sweep_seed = sweep_seed * 1103515245u + 12345u;
+	return (uint8_t) (sweep_seed >> 16);
+}
+
+/* the length the decoder reports for one payload of info information bytes */
+static int sweep_once(uint8_t type, int info)
+{
+	static char stream[MAX_SYMBOLS];
+	static char payload[(180 + 2) * 8];
+	static char whitened[(180 + 2) * 8];
+	char encoded[((180 + 2) * 8 * 3) / 2 + 15];
+	btbb_packet *pkt = btbb_packet_new();
+	int bytes = info + 2;
+	int i, symbols, length;
+	int clock;
+	uint16_t crc;
+
+	if (pkt == NULL)
+		return -1;
+
+	for (i = 0; i < info; i++)
+		put_byte(payload + i * 8, sweep_byte());
+	crc = crcgen(payload, info * 8, TEST_UAP);
+	put_byte(payload + info * 8, (uint8_t) (crc & 0xff));
+	put_byte(payload + (info + 1) * 8, (uint8_t) (crc >> 8));
+
+	clock = (int) (sweep_byte() & 0x3f);
+
+	/* whitening is its own inverse, so the decoder's own unwhiten() turns
+	 * the payload into the bits the air carries */
+	btbb_packet_set_flag(pkt, BTBB_WHITENED, 1);
+	unwhiten(payload, whitened, clock, bytes * 8,
+		 HEADER_WHITENING_BITS, pkt);
+
+	memset(stream, 0, sizeof(stream));
+	if (type == PACKET_TYPE_EV4) {
+		symbols = fec23_encode(whitened, bytes * 8, encoded);
+		memcpy(stream + PAYLOAD_OFFSET, encoded, (size_t) symbols);
+	} else {
+		symbols = bytes * 8;
+		memcpy(stream + PAYLOAD_OFFSET, whitened, (size_t) symbols);
+	}
+	for (i = 0; i < 320; i++)
+		stream[PAYLOAD_OFFSET + symbols + i] = (char) sweep_bit();
+
+	btbb_packet_set_data(pkt, stream, PAYLOAD_OFFSET + symbols + 320,
+			     0, (uint32_t) clock << 1);
+	btbb_packet_set_flag(pkt, BTBB_WHITENED, 1);
+	btbb_packet_set_uap(pkt, TEST_UAP);
+	pkt->packet_type = type;
+
+	(void) btbb_decode_payload(pkt);
+	length = btbb_packet_get_payload_length(pkt);
+	btbb_packet_unref(pkt);
+
+	return length;
+}
+
+static void sweep(uint8_t type, int info, int *shorter, int *longer)
+{
+	int trial;
+
+	/* from the same seed each time, so that one sweep's counts do not
+	 * depend on which others ran before it */
+	sweep_seed = 0xabcdef;
+	*shorter = 0;
+	*longer = 0;
+	for (trial = 0; trial < SWEEP_TRIALS; trial++) {
+		int length = sweep_once(type, info);
+
+		if (length < info + 2)
+			++*shorter;
+		else if (length > info + 2)
+			++*longer;
+	}
+}
+
+static void test_length_sweep(void)
+{
+	int shorter, longer;
+
+	/*
+	 * At the longest length a type carries, which is what a link normally
+	 * sets up, a payload comes out at its own length: no longer length
+	 * exists to agree by chance, and the length one short of it no longer
+	 * wins. Before this fix these three reported 8, 11 and 11 wrong
+	 * lengths in these 2,000.
+	 */
+	sweep(PACKET_TYPE_HV3, 30, &shorter, &longer);     /* EV3 */
+	CHECK(shorter == 0);
+	CHECK(longer == 0);
+
+	sweep(PACKET_TYPE_EV4, 120, &shorter, &longer);
+	CHECK(shorter == 0);
+	CHECK(longer == 0);
+
+	/*
+	 * A payload whose CRC is 0x0000 leaves the register at zero two bytes
+	 * early, so three lengths agree and the rule above takes the middle
+	 * one: one byte short. None of these 2,000 is like that - it is a
+	 * payload in 65536 - but one of the 20,000 in TESTING.md is.
+	 */
+	sweep(PACKET_TYPE_EV5, 180, &shorter, &longer);
+	CHECK(shorter == 0);
+	CHECK(longer == 0);
+
+	/*
+	 * Short of a type's longest length the guess does not go away: a zero
+	 * byte of noise right after the payload agrees as well, and so does a
+	 * longer length by chance. It changes direction, from one byte short
+	 * to one byte long, which keeps every information byte. A caller that
+	 * knows the link's length has no guess made for it at all.
+	 */
+	sweep(PACKET_TYPE_EV5, 20, &shorter, &longer);
+	CHECK(shorter == 0);
+	CHECK(longer == 6);
+}
+
 int main(void)
 {
 	test_esco_search_reports_the_longest_match();
@@ -574,6 +716,7 @@ int main(void)
 	test_truncated_capture_keeps_a_match();
 	test_hv3_is_not_reported_as_ev3();
 	test_known_esco_length_rules_out_hv3();
+	test_length_sweep();
 
 	if (failures != 0) {
 		printf("%d check(s) failed\n", failures);
