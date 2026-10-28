@@ -24,14 +24,22 @@ libbtbb (2020-12-R1+fork5) unstable; urgency=low
     learned. They used to come from a hopping sequence generated once, when
     recovery started, so every channel seen for the first time afterwards left
     the predictions describing a map the library no longer held, and the real
-    clock was often discarded with the wrong candidates. Recovery now also
-    predicts hops one at a time instead of building a 128 MB table of the whole
-    sequence first, so it starts without that allocation or the wait for it.
+    clock was discarded along with the wrong candidates. Recovery against an
+    adaptive piconet can still restart while the map is incomplete, since the
+    predictions can only be as good as the map learned so far, but it no longer
+    throws the clock away over a map it already has. It also predicts hops one
+    at a time instead of building a 128 MB table of the whole sequence first,
+    so it starts without that allocation or the wait for it.
   * The hop pattern remembered while reversing hops is bounded, as it already
     was while finding the UAP, rather than running off the end of the array
     after 1000 packets.
   * A piconet released while its clock was still being recovered no longer
     leaks its candidate list.
+  * btbb_piconet_get_clk_offset() now carries 312.5 us CLKN ticks and nothing
+    else. It used to hold a 6-bit count of 625 us slots between CLK1-6 being
+    found and CLK1-27 being found, so a caller reading it in that window got a
+    number in the wrong unit; it reads 0 there now. No tool reads it before
+    following a piconet.
 
  -- Russell Wagner <152923636+SqueakyFloors@users.noreply.github.com>  29 Oct 2026 03:00:00 -0700
 
