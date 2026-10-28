@@ -370,10 +370,11 @@ void lell_allocate_and_decode_n(const uint8_t *stream, size_t stream_len,
 	if (copy_len >= 6)
 		declared_len = (*pkt)->symbols[5];
 
-	/* An advertising PDU may claim more than the symbol buffer holds, so
-	 * the claim is capped at what it holds, as a data channel PDU's
-	 * already was. An Ubertooth cannot receive that much either, so the
-	 * bound that applies in practice is captured_len below. */
+	/* A Length of up to 255 is more payload than the symbol buffer holds,
+	 * so the claim is capped at what it holds, as a data channel PDU's
+	 * already was. This states the buffer's limit rather than adding one:
+	 * captured_len below cannot exceed it either, because the copy into
+	 * the buffer is what it is counted from. */
 	if (declared_len > MAX_LE_PAYLOAD_LENGTH)
 		declared_len = MAX_LE_PAYLOAD_LENGTH;
 

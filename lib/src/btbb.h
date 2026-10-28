@@ -338,10 +338,12 @@ typedef struct lell_packet lell_packet;
 /* Decode and allocate an LE packet; *pkt is left NULL if the packet
  * cannot be allocated. The _n form is the one to call: it takes the
  * number of bytes 'stream' holds and reads no more than that, keeping
- * whatever of the packet it was given and no further, and it stores at
- * most 260 bytes, the longest LE packet. The form without a length
- * reads 64 bytes, which is what it has always read and what every
- * caller it has had provides. */
+ * whatever of the packet it was given and no further. It stores at most
+ * 260 bytes, which is the access address, the header, 251 payload bytes
+ * and the CRC; a PDU claiming a longer payload than that - the Length
+ * field reaches 255 - has its length reported as 251. The form without
+ * a length reads 64 bytes, which is what it has always read and what
+ * every caller it has had provides. */
 void lell_allocate_and_decode(const uint8_t *stream, uint16_t phys_channel, uint32_t clk100ns, lell_packet **pkt);
 void lell_allocate_and_decode_n(const uint8_t *stream, size_t stream_len,
                                 uint16_t phys_channel, uint32_t clk100ns,
@@ -374,7 +376,10 @@ int lell_pcapng_create_file(const char *filename, const char *interface_desc, le
    being written for a broken one. */
 #define LELL_PCAPNG_CONNECT_INFO_NOT_RECORDED 1
 
-/* save an LE packet to PCAPNG capture file */
+/* Save an LE packet to a PCAPNG capture file. 'refAA' is the access address
+   the capture tool was listening for, which the record carries and its flags
+   mark as valid; pass 0 when the tool was listening for no particular
+   address, and the record says so instead. */
 int lell_pcapng_append_packet(lell_pcapng_handle * h, const uint64_t ns,
                               const int8_t sigdbm, const int8_t noisedbm,
                               const uint32_t refAA, const lell_packet *pkt);
@@ -402,7 +407,8 @@ typedef struct lell_pcap_handle lell_pcap_handle;
 int lell_pcap_create_file(const char *filename, lell_pcap_handle ** ph);
 /* create a PCAP file for LE captures using LINKTYPE_PPI */
 int lell_pcap_ppi_create_file(const char *filename, int btle_ppi_version, lell_pcap_handle ** ph);
-/* save an LE packet to PCAP capture file */
+/* Save an LE packet to a PCAP capture file. 'refAA' is the access address the
+   capture tool was listening for, as for lell_pcapng_append_packet(). */
 int lell_pcap_append_packet(lell_pcap_handle * h, const uint64_t ns,
                             const int8_t sigdbm, const int8_t noisedbm,
                             const uint32_t refAA, const lell_packet *pkt);

@@ -118,11 +118,8 @@ static int build_le_packet(uint8_t *stream, uint32_t aa, uint8_t header0,
 	return 6 + length + 3;
 }
 
-/*
- * The longest packet the decoder's buffer holds: the access address, the
- * header, 251 payload octets and the CRC.
- */
-#define MAX_BUILT_PAYLOAD (MAX_LE_SYMBOLS - 9)
+/* The longest payload the decoder's buffer holds. */
+#define MAX_BUILT_PAYLOAD MAX_LE_PAYLOAD_LENGTH
 
 /*
  * Section 2.3: the header's first octet is the 4-bit PDU Type, one reserved
@@ -235,8 +232,10 @@ static void test_advertising_pdu_length_is_eight_bits(void)
 
 	/*
 	 * The field reaches 255, which is 264 bytes of packet, more than the
-	 * symbol buffer holds. The length is capped at the 251 payload bytes
-	 * it does hold, so nothing reads past it.
+	 * 260-byte symbol buffer holds. Such a PDU comes back as the 251
+	 * payload bytes the buffer does hold. (Both the explicit cap and the
+	 * bound on what was captured give that answer, since the buffer is
+	 * what the captured length is counted from.)
 	 */
 	{
 		uint8_t stream[MAX_LE_SYMBOLS];
