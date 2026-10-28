@@ -328,10 +328,12 @@ void lell_allocate_and_decode_n(const uint8_t *stream, size_t stream_len,
 		memcpy((*pkt)->symbols, stream, copy_len);
 
 	(*pkt)->channel_idx = le_channel_index(phys_channel);
-	/* k counts the 2 MHz steps above 2402 MHz, the lowest LE channel, so
-	 * that a PCAP reader can turn it back into a frequency as 2402 + 2k.
-	 * It is bounded to the band for the same reason as the index above:
-	 * outside it a byte cannot hold the count, and 2400 MHz would be
+	/* k is the RF channel a PCAP record carries: 0 to 39, the 2 MHz steps
+	 * from 2402 MHz up, which a reader turns back into a frequency as
+	 * 2402 + 2k. Outside the band it is bounded to that range, as the
+	 * index is, but for a different reason at each end. Above 2480 MHz the
+	 * count is simply past the last channel. Below 2402 MHz it is
+	 * negative, and a byte stores it as a large one: 2400 MHz would be
 	 * recorded as 2912 MHz. */
 	if (phys_channel <= 2402)
 		(*pkt)->channel_k = 0;

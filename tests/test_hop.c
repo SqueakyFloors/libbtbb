@@ -376,6 +376,25 @@ static void test_generated_sequence_matches_single_hop(void)
 /* An address no other test uses, so the first call below has to build it. */
 #define SILENT_TEST_LAP 0x9abcde
 
+/*
+ * Read a captured stream into buf as a string, and close the capture. A read
+ * that fails returns no bytes, which would look like a silent stream, so it
+ * is reported.
+ */
+static void read_capture(FILE *capture, char *buf, size_t buflen)
+{
+	size_t got;
+
+	rewind(capture);
+	got = fread(buf, 1, buflen - 1, capture);
+	if (ferror(capture)) {
+		printf("FAIL: could not read a capture file\n");
+		++failures;
+	}
+	buf[got] = '\0';
+	fclose(capture);
+}
+
 /* Run get_hop_pattern() with stdout and stderr redirected into out and err. */
 static int capture_get_hop_pattern(btbb_piconet *pn,
 				   char *out, size_t outlen,
@@ -383,7 +402,7 @@ static int capture_get_hop_pattern(btbb_piconet *pn,
 {
 	FILE *out_capture, *err_capture;
 	int saved_out, saved_err;
-	size_t got;
+	int restored;
 
 	out[0] = '\0';
 	err[0] = '\0';
@@ -427,26 +446,21 @@ static int capture_get_hop_pattern(btbb_piconet *pn,
 	fflush(stdout);
 	fflush(stderr);
 
-	/* A failed restore sends the rest of the test's output into a capture
-	 * file, where nobody reads it, so it counts as a failure rather than
-	 * passing quietly. */
-	if (dup2(saved_out, fileno(stdout)) < 0 ||
-	    dup2(saved_err, fileno(stderr)) < 0) {
-		fprintf(stderr, "FAIL: could not restore the output\n");
-		++failures;
-	}
+	/* Both streams are put back before anything is reported, so that the
+	 * report does not go into a capture file itself. A stream left
+	 * redirected would swallow the rest of the test's output, so it counts
+	 * as a failure rather than passing quietly. */
+	restored = dup2(saved_out, fileno(stdout)) >= 0;
+	restored &= dup2(saved_err, fileno(stderr)) >= 0;
 	close(saved_out);
 	close(saved_err);
+	if (!restored) {
+		printf("FAIL: could not restore the output\n");
+		++failures;
+	}
 
-	rewind(out_capture);
-	got = fread(out, 1, outlen - 1, out_capture);
-	out[got] = '\0';
-	fclose(out_capture);
-
-	rewind(err_capture);
-	got = fread(err, 1, errlen - 1, err_capture);
-	err[got] = '\0';
-	fclose(err_capture);
+	read_capture(out_capture, out, outlen);
+	read_capture(err_capture, err, errlen);
 	return 0;
 }
 

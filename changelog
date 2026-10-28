@@ -4,8 +4,9 @@ libbtbb (2020-12-R1+fork5) unstable; urgency=low
     sequence in cache." note is gone. A tool streaming its capture to stdout
     no longer has them mixed into the stream.
   * The LE decoder now bounds the channel a frequency outside 2402-2480 MHz
-    decodes as. A frequency below the band used to come back as channel index
-    254, which is no channel at all, and as a PCAP record saying 2912 MHz.
+    decodes as. A frequency below the band used to come back as a channel
+    index of 254 or 255, which is no channel at all, and 2400 MHz as a PCAP
+    record saying 2912 MHz.
 
  -- Russell Wagner <152923636+SqueakyFloors@users.noreply.github.com>  27 Oct 2026 20:00:00 -0700
 
