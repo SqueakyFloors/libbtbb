@@ -78,6 +78,20 @@ add_custom_command(OUTPUT ${OUTPUT}/timestamp
 
 add_custom_target(pcapdump ALL DEPENDS ${OUTPUT}/timestamp)
 
+# The module is installed where the install prefix says, which the
+# interpreter searches only when that prefix is its own, so btaptap looks
+# there itself. This checks that it does, on an install of its own.
+if(BUILD_TESTING)
+	add_test(NAME btaptap_install_prefix COMMAND ${CMAKE_COMMAND}
+	         -DPYTHON=${Python3_EXECUTABLE}
+	         -DBTAPTAP=${CMAKE_CURRENT_SOURCE_DIR}/btaptap
+	         -DWHEEL_DIR=${OUTPUT}
+	         -DBINDIR=${INSTALL_DEFAULT_BINDIR}
+	         -DPREFIX=${CMAKE_CURRENT_BINARY_DIR}/install-prefix-test
+	         -P ${CMAKE_CURRENT_SOURCE_DIR}/test_install_prefix.cmake)
+	set_tests_properties(btaptap_install_prefix PROPERTIES TIMEOUT 120)
+endif()
+
 # DESTDIR is how a packager stages an install under a temporary root, and
 # BUILD_ROOT is this project's own version of the same idea; both are honoured,
 # as is CMAKE_INSTALL_PREFIX, which is read at install time so that

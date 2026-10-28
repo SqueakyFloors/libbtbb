@@ -187,6 +187,12 @@ libbtbb (2020-12-R1+fork5) unstable; urgency=low
   * New TESTING.md: what the test suite covers and where its vectors come from,
     every defect the tests found and what a user saw, and the numbers the fixes
     moved.
+  * btaptap now finds its pcapdump module wherever it is installed. The module
+    goes into the install prefix's site directory, which the interpreter
+    searches only when that prefix is the one it was built for, so an install
+    with a prefix of its own - or a staged package - gave "No module named
+    'pcapdump'" as soon as the script was run. It now works the directory out
+    from its own location, as a fallback after the plain import has failed.
 
  -- Russell Wagner <152923636+SqueakyFloors@users.noreply.github.com>  27 Oct 2026 22:30:00 -0700
 
