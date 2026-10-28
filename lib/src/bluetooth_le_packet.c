@@ -283,9 +283,21 @@ lell_packet_unref(lell_packet *pkt)
 		free(pkt);
 }
 
+/*
+ * The channel index for a frequency in MHz. 2402 MHz is advertising channel
+ * 37, 2426 MHz is 38 and 2480 MHz is 39; the data channels 0 to 36 fill the
+ * 2 MHz steps between them.
+ *
+ * A frequency outside 2402-2480 MHz is not an LE channel at all, so it takes
+ * the index of the nearest one: anything at or below 2402 MHz is 37, as
+ * anything at or above 2480 MHz is 39. Both ends have to be bounded, because
+ * an index is kept in a uint8_t and lell_packet_is_data() reads any value
+ * below 37 as a data channel: 2400 MHz would otherwise compute -2, be stored
+ * as 254, and have its packet decoded as advertising.
+ */
 static uint8_t le_channel_index(uint16_t phys_channel) {
 	uint8_t ret;
-	if (phys_channel == 2402) {
+	if (phys_channel <= 2402) {
 		ret = 37;
 	} else if (phys_channel < 2426) { // 0 - 10
 		ret = (phys_channel - 2404) / 2;
@@ -315,7 +327,12 @@ void lell_allocate_and_decode_n(const uint8_t *stream, size_t stream_len,
 		memcpy((*pkt)->symbols, stream, copy_len);
 
 	(*pkt)->channel_idx = le_channel_index(phys_channel);
-	(*pkt)->channel_k = (phys_channel-2402)/2;
+	/* k counts the 2 MHz steps above 2402 MHz, the lowest LE channel.
+	 * Below it there are none to count, and a negative count would be
+	 * stored as a large one: a PCAP reader turns k back into a frequency
+	 * as 2402 + 2k, so 2400 MHz would be recorded as 2912 MHz. */
+	(*pkt)->channel_k = phys_channel > 2402 ?
+		(uint8_t) ((phys_channel - 2402) / 2) : 0;
 	(*pkt)->clk100ns = clk100ns;
 
 	/* the casts keep the shift out of a signed int, where it would
