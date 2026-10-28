@@ -17,9 +17,58 @@
 # the Free Software Foundation, Inc., 51 Franklin Street,
 # Boston, MA 02110-1301, USA.
 
-# btaptap is a script, it needs no packaging.
-add_custom_target(btaptap ALL DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/btaptap)
-install(PROGRAMS btaptap DESTINATION ${INSTALL_DEFAULT_BINDIR})
+# btaptap is a script, it needs no packaging. It does need to know how far
+# below the install prefix it is installed, because that is where it looks
+# for the pcapdump module: the module goes into the prefix's site directory,
+# which the interpreter searches only when the prefix is its own. So the
+# copy that is installed carries the depth of INSTALL_DEFAULT_BINDIR, and
+# the script in the source tree, where the module is beside it, is left as
+# it is.
+set(BTAPTAP ${CMAKE_CURRENT_SOURCE_DIR}/btaptap)
+set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS ${BTAPTAP})
+
+# The depth is the number of directories the path descends: "." counts for
+# nothing and ".." for one back up, so bin, bin/ and ./bin are all 1. A path
+# that leaves the prefix at any point, like an absolute one or ../bin, puts
+# the script outside its own install, where there is no prefix of its own to
+# look in.
+set(BINDIR_DEPTH 0)
+set(bindir_escapes FALSE)
+if(IS_ABSOLUTE "${INSTALL_DEFAULT_BINDIR}")
+	set(bindir_escapes TRUE)
+endif()
+string(REGEX MATCHALL "[^/]+" bindir_parts "${INSTALL_DEFAULT_BINDIR}")
+foreach(part IN LISTS bindir_parts)
+	if(part STREQUAL "..")
+		math(EXPR BINDIR_DEPTH "${BINDIR_DEPTH} - 1")
+		if(BINDIR_DEPTH LESS 0)
+			set(BINDIR_DEPTH 0)
+			set(bindir_escapes TRUE)
+		endif()
+	elseif(NOT part STREQUAL ".")
+		math(EXPR BINDIR_DEPTH "${BINDIR_DEPTH} + 1")
+	endif()
+endforeach()
+
+if(bindir_escapes)
+	message(WARNING
+	        "INSTALL_DEFAULT_BINDIR leaves the install prefix, so btaptap "
+	        "is installed outside it and will look for the pcapdump module "
+	        "outside it too")
+endif()
+
+file(READ ${BTAPTAP} btaptap_text)
+if(NOT btaptap_text MATCHES "\nBINDIR_DEPTH = [0-9]+\n")
+	message(FATAL_ERROR "btaptap has no BINDIR_DEPTH line to set")
+endif()
+string(REGEX REPLACE "\nBINDIR_DEPTH = [0-9]+\n"
+                     "\nBINDIR_DEPTH = ${BINDIR_DEPTH}\n"
+                     btaptap_text "${btaptap_text}")
+set(BTAPTAP_INSTALLED ${CMAKE_CURRENT_BINARY_DIR}/btaptap)
+file(WRITE ${BTAPTAP_INSTALLED} "${btaptap_text}")
+
+add_custom_target(btaptap ALL DEPENDS ${BTAPTAP_INSTALLED})
+install(PROGRAMS ${BTAPTAP_INSTALLED} DESTINATION ${INSTALL_DEFAULT_BINDIR})
 
 # setup.py install is gone from current setuptools, so the pcapdump module is
 # built into a wheel with pip and the wheel is installed.
@@ -78,6 +127,25 @@ add_custom_command(OUTPUT ${OUTPUT}/timestamp
 
 add_custom_target(pcapdump ALL DEPENDS ${OUTPUT}/timestamp)
 
+# The module is installed where the install prefix says, which the
+# interpreter searches only when that prefix is its own, so btaptap looks
+# there itself. This checks that it does, on an install of its own.
+#
+# It runs on the copy that is installed, in the binary directory that copy
+# was made for, so a configured INSTALL_DEFAULT_BINDIR is covered as it is -
+# unless it leaves the prefix, where the warning above says the module will
+# not be found and there is nothing to test for.
+if(BUILD_TESTING AND NOT bindir_escapes)
+	add_test(NAME btaptap_install_prefix COMMAND ${CMAKE_COMMAND}
+	         -DPYTHON=${Python3_EXECUTABLE}
+	         -DBTAPTAP=${BTAPTAP_INSTALLED}
+	         -DWHEEL_DIR=${OUTPUT}
+	         -DBINDIR=${INSTALL_DEFAULT_BINDIR}
+	         -DPREFIX=${CMAKE_CURRENT_BINARY_DIR}/install-prefix-test
+	         -P ${CMAKE_CURRENT_SOURCE_DIR}/test_install_prefix.cmake)
+	set_tests_properties(btaptap_install_prefix PROPERTIES TIMEOUT 60)
+endif()
+
 # DESTDIR is how a packager stages an install under a temporary root, and
 # BUILD_ROOT is this project's own version of the same idea; both are honoured,
 # as is CMAKE_INSTALL_PREFIX, which is read at install time so that
@@ -89,9 +157,14 @@ install(CODE "
 		message(FATAL_ERROR
 			\"expected one pcapdump wheel in ${OUTPUT}, found \${wheel_count}\")
 	endif()
+	# --ignore-installed because pip otherwise leaves the prefix empty, and
+	# says so and exits 0, when the same version is already installed where
+	# the interpreter itself looks. The wheel is a file, so nothing has to
+	# be looked up or checked for over the network.
 	execute_process(
 		COMMAND \"${Python3_EXECUTABLE}\" -m pip install
-			--no-deps --upgrade
+			--no-deps --upgrade --ignore-installed
+			--no-index --disable-pip-version-check
 			--prefix \"\$ENV{DESTDIR}${BUILD_ROOT}\${CMAKE_INSTALL_PREFIX}\"
 			\${wheels}
 		RESULT_VARIABLE pip_result)

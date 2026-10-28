@@ -2,13 +2,14 @@ This directory contains supplemental tools for working with pcap files produced
 by libbtbb.  (Actually libbtbb doesn't produce such files by itself at this
 time, but you can produce them with the Ubertooth tools.
 
-These tools are not automatically installed as part of the libbtbb
-installation but can be used right out of this directory or manually installed.
+These tools are installed with libbtbb when the build finds python3 and is not
+configured with ENABLE_PYTHON=OFF; the pcapdump module also needs pip.  They
+can be used right out of this directory too.
 
 pcapdump: a Python module for pcap
 
-Pcapdump us used by btaptap to read and write pcap files.  It should work with
-python 2.4 and above (python 3 support requires using the 2to3 tool).
+Pcapdump is used by btaptap to read and write pcap files.  It needs python 3.6
+or newer.
 
 
 btaptap: a Bluetooth keyboard sniffer
@@ -18,3 +19,7 @@ simplified HID messaging that can be interpreted, for example, by a PC BIOS.
 Some of those keyboards also transmit these messages over unencrypted
 Bluetooth.  This tool can be used to extract keystrokes from such
 transmissions.
+
+Note that btaptap gets no keystrokes out of a capture on python 3: it reads
+every byte through ord(), which python 3 does not accept, and it reports the
+capture as finished instead.  See issue 55.

@@ -19,10 +19,81 @@
 # the Free Software Foundation, Inc., 51 Franklin Street,
 # Boston, MA 02110-1301, USA.
 
+import glob
+import os
 import sys
 import struct
 import time
-from pcapdump.pcapdump import *
+
+# Where to look under an install prefix for a site directory. The name
+# varies: Debian and Ubuntu call it dist-packages, and their own install
+# scheme adds a "local" level; a distribution that separates architectures
+# uses lib64. These two patterns cover all of those.
+SITE_DIR_PATTERNS = (
+    "lib*/python*/*-packages",
+    "local/lib*/python*/*-packages",
+)
+
+
+# How many directories below its install prefix this script is. The build
+# sets this in the copy it installs, from INSTALL_DEFAULT_BINDIR; the script
+# in the source tree, where the pcapdump module is beside it, does not use
+# it. Keep the line in this shape: the build looks for it.
+BINDIR_DEPTH = 1
+
+
+def site_dir_for(module):
+    '''
+    The directory of this install that holds the named module, or None.
+
+    An install with a prefix of its own - cmake --install --prefix, or a
+    package staged under DESTDIR - puts this script in <prefix>/bin and the
+    pcapdump module in a site directory under <prefix>. The interpreter
+    searches that directory only when <prefix> happens to be the one it was
+    built for, so look under the prefix this script is installed in, which
+    is where the module that goes with it is.
+
+    Only that prefix is looked in, never a directory above it: what is up
+    there belongs to another install, and where a prefix sits under a
+    directory anyone can write to, that is a module anyone could have put
+    there.
+
+    The site directory is searched for rather than worked out, because which
+    one pip chose depends on both the interpreter and the version of pip.
+    '''
+    prefix = os.path.dirname(os.path.realpath(__file__))
+    for _ in range(BINDIR_DEPTH):
+        prefix = os.path.dirname(prefix)
+
+    candidates = []
+    for pattern in SITE_DIR_PATTERNS:
+        # The prefix is a path, not a pattern: a directory named with a glob
+        # metacharacter stands for itself.
+        candidates.extend(
+            glob.glob(os.path.join(glob.escape(prefix), pattern)))
+
+    # The module is pure Python, so a directory belonging to another
+    # interpreter version would serve; the running one's is preferred.
+    running = "python%d.%d" % sys.version_info[:2]
+    candidates.sort(key=lambda path: (running not in path.split(os.sep), path))
+
+    for path in candidates:
+        if os.path.isdir(os.path.join(path, module)):
+            return path
+    return None
+
+
+try:
+    from pcapdump.pcapdump import *
+except ImportError:
+    # Only once the plain import has failed, so an install whose module the
+    # interpreter already finds keeps the sys.path it has. The directory goes
+    # on the end of sys.path, since the module is not on it at all.
+    site_dir = site_dir_for("pcapdump")
+    if site_dir is None:
+        raise
+    sys.path.append(site_dir)
+    from pcapdump.pcapdump import *
 
 DLT_EN10MB = 1
 DLT_BLUETOOTH_HCI_H4 = 187
