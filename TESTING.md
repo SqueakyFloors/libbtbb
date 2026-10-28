@@ -89,7 +89,7 @@ clang, with the `esco` test counted the same way when it was added:
 
 | | Count | How it was counted |
 |---|---|---|
-| Tests in the build | 15 | `ctest` case count; 13 C programs and two CMake script tests, one of which is only built with the Python tools enabled |
+| Tests in the build | 17 | `ctest` case count; 13 C programs and four script tests, two of them only with the Python tools enabled |
 | Assertion sites | 870 | 856 `CHECK`, `CHECK_EQ`, `CHECK_EQUALS`, `CHECK_CONTAINS`, `CHECK_LACKS` and `XFAIL` call sites across the eleven programs that use those macros, plus the 14 explicit failure conditions in `test_le_long.c`, which checks with plain `if` |
 | Assertions executed per run | 176,054 | a scratch copy of the tree with a counter added to each `CHECK` macro body and reported from a destructor, then every test binary run once and the counts summed. The macros do not nest, so nothing is double counted. `test_le_long` is not in this figure |
 | Published spec vectors | 7680 hop frequencies | 15 tables of `TABLE_ENTRIES` (512) in `tests/test_spec_hop.c`: three addresses, the basic sequence and four channel maps each |
