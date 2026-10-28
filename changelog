@@ -15,13 +15,15 @@ libbtbb (2020-12-R1+fork5) unstable; urgency=low
     is now one "error:" line on standard error and a non-zero exit, where the
     tool used to exit 0 or stop with a traceback. The pcapdump module the
     README offers writes a capture file again, where joining the bytes of its
-    header raised a TypeError, and a capture's timestamps come out right: 5
-    microseconds past the second read as half a second, and the
-    nanosecond-resolution capture files this library's own writer produces -
-    which is what the Ubertooth tools' pcap files are - had every timestamp
-    a thousand times too far into the second. A file that is not a capture at
-    all is now refused as one: the check for the magic number could not be
-    reached.
+    header raised a TypeError, and a record's timestamp is worked out from the
+    fraction of a second it holds rather than written after the decimal point:
+    a fraction that did not fill its field came out up to a second late, 5
+    microseconds past the second reading as half a second. Which unit that
+    fraction is in is taken from the capture's magic number, so the
+    nanosecond-resolution files this library's own writer produces - the
+    Ubertooth tools' pcap files - are read as nanoseconds, and a file that is
+    not a capture at all is refused rather than read as one, which the magic
+    number check could not do before.
   * A build asking for no library is refused while configuring. The check for
     it named an option that does not exist, so "cmake -DBUILD_SHARED_LIB=OFF"
     - the obvious way to ask for a static build, which also has to set

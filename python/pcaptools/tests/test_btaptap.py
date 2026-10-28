@@ -262,8 +262,10 @@ class Failures(CaptureFileTestCase):
         cap = pcap_file(self.path("bredr.pcap"), DLT_BLUETOOTH_BREDR_BB,
                         frames)
 
-        self.assertFailed(btaptap("-r", cap),
-                          "unsupported libpcap data link layer: 255")
+        done = btaptap("-r", cap)
+        self.assertFailed(done, "unsupported libpcap data link layer: 255")
+        # Said once about the capture, not once per packet in it.
+        self.assertEqual(done.stderr.count("unsupported"), 1)
 
     def test_not_an_ellisys_export(self):
         path = self.path("other.csv")
