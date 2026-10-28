@@ -25,7 +25,9 @@ get_filename_component(script_name "${BTAPTAP}" NAME)
 # interpreter itself looks.
 function(install_wheel prefix)
 	execute_process(COMMAND "${PYTHON}" -m pip install --no-deps --upgrade
-	                        --ignore-installed --prefix "${prefix}" "${wheel}"
+	                        --ignore-installed --no-index
+	                        --disable-pip-version-check
+	                        --prefix "${prefix}" "${wheel}"
 	                RESULT_VARIABLE result
 	                OUTPUT_VARIABLE output ERROR_VARIABLE output)
 	if(NOT result EQUAL 0)

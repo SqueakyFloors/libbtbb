@@ -27,14 +27,35 @@
 set(BTAPTAP ${CMAKE_CURRENT_SOURCE_DIR}/btaptap)
 set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS ${BTAPTAP})
 
+# The depth is the number of directories the path descends: "." counts for
+# nothing and ".." for one back up, so bin, bin/ and ./bin are all 1. A path
+# that leaves the prefix at any point, like an absolute one or ../bin, puts
+# the script outside its own install, where there is no prefix of its own to
+# look in.
+set(BINDIR_DEPTH 0)
+set(bindir_escapes FALSE)
 if(IS_ABSOLUTE "${INSTALL_DEFAULT_BINDIR}")
-	message(WARNING
-	        "INSTALL_DEFAULT_BINDIR is an absolute path, so btaptap is not "
-	        "installed under the install prefix and will not find the "
-	        "pcapdump module")
+	set(bindir_escapes TRUE)
 endif()
 string(REGEX MATCHALL "[^/]+" bindir_parts "${INSTALL_DEFAULT_BINDIR}")
-list(LENGTH bindir_parts BINDIR_DEPTH)
+foreach(part IN LISTS bindir_parts)
+	if(part STREQUAL "..")
+		math(EXPR BINDIR_DEPTH "${BINDIR_DEPTH} - 1")
+		if(BINDIR_DEPTH LESS 0)
+			set(BINDIR_DEPTH 0)
+			set(bindir_escapes TRUE)
+		endif()
+	elseif(NOT part STREQUAL ".")
+		math(EXPR BINDIR_DEPTH "${BINDIR_DEPTH} + 1")
+	endif()
+endforeach()
+
+if(bindir_escapes)
+	message(WARNING
+	        "INSTALL_DEFAULT_BINDIR leaves the install prefix, so btaptap "
+	        "is installed outside it and will look for the pcapdump module "
+	        "outside it too")
+endif()
 
 file(READ ${BTAPTAP} btaptap_text)
 if(NOT btaptap_text MATCHES "\nBINDIR_DEPTH = [0-9]+\n")
@@ -111,8 +132,10 @@ add_custom_target(pcapdump ALL DEPENDS ${OUTPUT}/timestamp)
 # there itself. This checks that it does, on an install of its own.
 #
 # It runs on the copy that is installed, in the binary directory that copy
-# was made for, so a configured INSTALL_DEFAULT_BINDIR is covered as it is.
-if(BUILD_TESTING)
+# was made for, so a configured INSTALL_DEFAULT_BINDIR is covered as it is -
+# unless it leaves the prefix, where the warning above says the module will
+# not be found and there is nothing to test for.
+if(BUILD_TESTING AND NOT bindir_escapes)
 	add_test(NAME btaptap_install_prefix COMMAND ${CMAKE_COMMAND}
 	         -DPYTHON=${Python3_EXECUTABLE}
 	         -DBTAPTAP=${BTAPTAP_INSTALLED}
@@ -136,10 +159,12 @@ install(CODE "
 	endif()
 	# --ignore-installed because pip otherwise leaves the prefix empty, and
 	# says so and exits 0, when the same version is already installed where
-	# the interpreter itself looks.
+	# the interpreter itself looks. The wheel is a file, so nothing has to
+	# be looked up or checked for over the network.
 	execute_process(
 		COMMAND \"${Python3_EXECUTABLE}\" -m pip install
 			--no-deps --upgrade --ignore-installed
+			--no-index --disable-pip-version-check
 			--prefix \"\$ENV{DESTDIR}${BUILD_ROOT}\${CMAKE_INSTALL_PREFIX}\"
 			\${wheels}
 		RESULT_VARIABLE pip_result)
