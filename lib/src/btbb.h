@@ -345,9 +345,25 @@ int btbb_init_hop_reversal(int aliased, btbb_piconet *pn);
 /* narrow a list of candidate clock values based on all observed hops */
 int btbb_winnow(btbb_piconet *pn);
 
+/* Survey every piconet heard instead of one given piconet.
+ * btbb_process_packet() then keeps a piconet of its own per LAP it
+ * sees, and recovers each one's UAP, ignoring the piconet it is
+ * given. */
 int btbb_init_survey(void);
-/* Destructively iterate over survey results - optionally remove elements */
+
+/* Take the next piconet out of the survey, or NULL once none is left.
+ * The piconet is no longer in the survey and the caller owns the
+ * reference, so this empties the survey as it walks it. To read a
+ * piconet while the survey is still running, use the accessor below. */
 btbb_piconet *btbb_next_survey_result(void);
+
+/* The piconet the survey keeps for this LAP, or NULL where the survey
+ * has not heard that LAP. The piconet stays in the survey and goes on
+ * being updated as packets arrive, and the reference belongs to the
+ * survey: read it, do not unref it. This is how a tool reads the UAP
+ * the survey has recovered for a LAP without taking the piconet out of
+ * the survey. */
+btbb_piconet *btbb_survey_piconet(uint32_t lap);
 
 typedef struct btbb_pcapng_handle btbb_pcapng_handle;
 /* create a PCAPNG file for BREDR captures */

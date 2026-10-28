@@ -1055,10 +1055,12 @@ btbb_piconet *get_piconet(uint32_t lap)
 	HASH_FIND(hh, piconet_survey, &lap, 4, s);
 
 	if (s == NULL) {
+		s = malloc(sizeof(survey_hash));
+		if (s == NULL)
+			return NULL;
 		pn = btbb_piconet_new();
 		btbb_init_piconet(pn, lap);
 
-		s = malloc(sizeof(survey_hash));
 		s->key = lap;
 		s->pn = pn;
 		HASH_ADD(hh, piconet_survey, key, 4, s);
@@ -1068,15 +1070,30 @@ btbb_piconet *get_piconet(uint32_t lap)
 	return pn;
 }
 
+/* The survey's own piconet for a LAP, left where it is */
+btbb_piconet *btbb_survey_piconet(uint32_t lap)
+{
+	survey_hash *s;
+
+	HASH_FIND(hh, piconet_survey, &lap, 4, s);
+	return (s != NULL) ? s->pn : NULL;
+}
+
 /* Destructively iterate over survey results */
 btbb_piconet *btbb_next_survey_result() {
 	btbb_piconet *pn = NULL;
 	survey_hash *tmp;
 
 	if (piconet_survey != NULL) {
-		pn = piconet_survey->pn;
 		tmp = piconet_survey;
-		piconet_survey = piconet_survey->hh.next;
+		pn = tmp->pn;
+		/* Out of the hash table, not just off the front of the list.
+		 * The entry used to be freed while the table's buckets still
+		 * pointed at it, so a later lookup of that LAP - which is
+		 * what happens when a survey carries on after some of its
+		 * results have been read - walked freed memory and handed
+		 * back a piconet that had been released. */
+		HASH_DEL(piconet_survey, tmp);
 		free(tmp);
 	}
 	return pn;
@@ -1234,6 +1251,10 @@ int btbb_piconet_drop_clock(btbb_piconet *pn)
 int btbb_process_packet(btbb_packet *pkt, btbb_piconet *pn) {
 	if (survey_mode) {
 		pn = get_piconet(btbb_packet_get_lap(pkt));
+		/* out of memory: the packet is dropped rather than written
+		 * through a piconet that was never made */
+		if (pn == NULL)
+			return 0;
 		btbb_piconet_set_channel_seen(pn, pkt->channel);
 		if(btbb_header_present(pkt) && !btbb_piconet_get_flag(pn, BTBB_UAP_VALID))
 			btbb_uap_from_header(pkt, pn);
