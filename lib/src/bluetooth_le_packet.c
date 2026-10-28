@@ -366,7 +366,9 @@ void lell_allocate_and_decode_n(const uint8_t *stream, size_t stream_len,
 	 * Only six bits of it used to be read on an advertising channel, which
 	 * was the Core 4.x header. Legacy advertising PDUs stay at or below 37
 	 * octets, so they were unaffected, but an extended advertising PDU on
-	 * a primary channel reaches 64 octets, and 64 came out as 0. */
+	 * a primary channel goes past 63: its extended header alone is up to
+	 * 63 octets after the octet that gives their length, so 64 octets came
+	 * out as 0. */
 	if (copy_len >= 6)
 		declared_len = (*pkt)->symbols[5];
 

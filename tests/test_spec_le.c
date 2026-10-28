@@ -196,8 +196,8 @@ static void test_advertising_pdu_header(void)
  * Section 2.3: "The valid range of the Length field shall be 1 to 255
  * octets", so the whole second header octet is the length. Legacy advertising
  * PDUs stay at or below 37, but an extended advertising PDU on a primary
- * channel reaches 64 octets, which six bits of the field reported as 0, and
- * every length above that modulo 64.
+ * channel goes past 63 - its extended header alone reaches 63 octets - which
+ * six bits of the field reported modulo 64, so 64 came back as 0.
  */
 static void test_advertising_pdu_length_is_eight_bits(void)
 {

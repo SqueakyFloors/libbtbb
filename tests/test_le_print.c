@@ -431,10 +431,10 @@ static void test_an_over_claimed_advertising_length(void)
 }
 
 /*
- * An extended advertising PDU on a primary channel reaches 64 payload
+ * An extended advertising PDU on a primary channel goes past 63 payload
  * octets, where a legacy one stops at 37. Only six bits of the length field
- * were read, so such a PDU came out as 0 bytes and none of its payload was
- * dumped.
+ * were read, so a 64-octet PDU came out as 0 bytes and none of its payload
+ * was dumped.
  */
 static void test_an_extended_advertising_length(void)
 {
