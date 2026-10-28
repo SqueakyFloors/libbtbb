@@ -10,12 +10,11 @@ The following are flags that may be of use when configuing this project.
     module is skipped and the rest of the build carries on.
   * The module is installed into the install prefix's site directory, which
     the interpreter searches only when that prefix is the one it was built
-    for. btaptap looks for the module in the prefix it is installed in - the
-    directory above its own - so the prefix does not have to be the
-    interpreter's, and an install staged under DESTDIR works once it is
-    moved into place. Nothing above that prefix is looked in, so an
-    INSTALL_DEFAULT_BINDIR deeper than one directory does not find the
-    module this way.
+    for. btaptap looks for the module in the prefix it is installed in, so
+    the prefix does not have to be the interpreter's, and an install staged
+    under DESTDIR works once it is moved into place. The copy that is
+    installed carries the depth of INSTALL_DEFAULT_BINDIR, so that it finds
+    its prefix and never looks above it.
  * INSTALL_DEFAULT_BINDIR
   * The directory the tools are installed in, under the install prefix.
     It defaults to bin.

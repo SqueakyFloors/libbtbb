@@ -35,6 +35,13 @@ SITE_DIR_PATTERNS = (
 )
 
 
+# How many directories below its install prefix this script is. The build
+# sets this in the copy it installs, from INSTALL_DEFAULT_BINDIR; the script
+# in the source tree, where the pcapdump module is beside it, does not use
+# it. Keep the line in this shape: the build looks for it.
+BINDIR_DEPTH = 1
+
+
 def site_dir_for(module):
     '''
     The directory of this install that holds the named module, or None.
@@ -46,17 +53,17 @@ def site_dir_for(module):
     built for, so look under the prefix this script is installed in, which
     is where the module that goes with it is.
 
-    The prefix is the directory above this script's, and nothing further up
-    is looked in: what is in a prefix above this one belongs to another
-    install, and where a prefix sits under a directory anyone can write to,
-    that is a module anyone could have put there. An install configured with
-    a binary directory deeper than one level therefore does not find the
-    module this way.
+    Only that prefix is looked in, never a directory above it: what is up
+    there belongs to another install, and where a prefix sits under a
+    directory anyone can write to, that is a module anyone could have put
+    there.
 
     The site directory is searched for rather than worked out, because which
     one pip chose depends on both the interpreter and the version of pip.
     '''
-    prefix = os.path.dirname(os.path.dirname(os.path.realpath(__file__)))
+    prefix = os.path.dirname(os.path.realpath(__file__))
+    for _ in range(BINDIR_DEPTH):
+        prefix = os.path.dirname(prefix)
 
     candidates = []
     for pattern in SITE_DIR_PATTERNS:

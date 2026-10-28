@@ -17,9 +17,37 @@
 # the Free Software Foundation, Inc., 51 Franklin Street,
 # Boston, MA 02110-1301, USA.
 
-# btaptap is a script, it needs no packaging.
-add_custom_target(btaptap ALL DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/btaptap)
-install(PROGRAMS btaptap DESTINATION ${INSTALL_DEFAULT_BINDIR})
+# btaptap is a script, it needs no packaging. It does need to know how far
+# below the install prefix it is installed, because that is where it looks
+# for the pcapdump module: the module goes into the prefix's site directory,
+# which the interpreter searches only when the prefix is its own. So the
+# copy that is installed carries the depth of INSTALL_DEFAULT_BINDIR, and
+# the script in the source tree, where the module is beside it, is left as
+# it is.
+set(BTAPTAP ${CMAKE_CURRENT_SOURCE_DIR}/btaptap)
+set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS ${BTAPTAP})
+
+if(IS_ABSOLUTE "${INSTALL_DEFAULT_BINDIR}")
+	message(WARNING
+	        "INSTALL_DEFAULT_BINDIR is an absolute path, so btaptap is not "
+	        "installed under the install prefix and will not find the "
+	        "pcapdump module")
+endif()
+string(REGEX MATCHALL "[^/]+" bindir_parts "${INSTALL_DEFAULT_BINDIR}")
+list(LENGTH bindir_parts BINDIR_DEPTH)
+
+file(READ ${BTAPTAP} btaptap_text)
+if(NOT btaptap_text MATCHES "\nBINDIR_DEPTH = [0-9]+\n")
+	message(FATAL_ERROR "btaptap has no BINDIR_DEPTH line to set")
+endif()
+string(REGEX REPLACE "\nBINDIR_DEPTH = [0-9]+\n"
+                     "\nBINDIR_DEPTH = ${BINDIR_DEPTH}\n"
+                     btaptap_text "${btaptap_text}")
+set(BTAPTAP_INSTALLED ${CMAKE_CURRENT_BINARY_DIR}/btaptap)
+file(WRITE ${BTAPTAP_INSTALLED} "${btaptap_text}")
+
+add_custom_target(btaptap ALL DEPENDS ${BTAPTAP_INSTALLED})
+install(PROGRAMS ${BTAPTAP_INSTALLED} DESTINATION ${INSTALL_DEFAULT_BINDIR})
 
 # setup.py install is gone from current setuptools, so the pcapdump module is
 # built into a wheel with pip and the wheel is installed.
@@ -82,17 +110,12 @@ add_custom_target(pcapdump ALL DEPENDS ${OUTPUT}/timestamp)
 # interpreter searches only when that prefix is its own, so btaptap looks
 # there itself. This checks that it does, on an install of its own.
 #
-# btaptap looks one directory above itself and no further, so a binary
-# directory deeper inside the prefix does not find the module - as
-# README.cmake says - and there is nothing to test for.
-if(INSTALL_DEFAULT_BINDIR MATCHES "/")
-	message(STATUS
-	        "INSTALL_DEFAULT_BINDIR is more than one directory deep - "
-	        "btaptap will not find the pcapdump module of its install")
-elseif(BUILD_TESTING)
+# It runs on the copy that is installed, in the binary directory that copy
+# was made for, so a configured INSTALL_DEFAULT_BINDIR is covered as it is.
+if(BUILD_TESTING)
 	add_test(NAME btaptap_install_prefix COMMAND ${CMAKE_COMMAND}
 	         -DPYTHON=${Python3_EXECUTABLE}
-	         -DBTAPTAP=${CMAKE_CURRENT_SOURCE_DIR}/btaptap
+	         -DBTAPTAP=${BTAPTAP_INSTALLED}
 	         -DWHEEL_DIR=${OUTPUT}
 	         -DBINDIR=${INSTALL_DEFAULT_BINDIR}
 	         -DPREFIX=${CMAKE_CURRENT_BINARY_DIR}/install-prefix-test
