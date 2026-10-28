@@ -23,7 +23,6 @@ import glob
 import os
 import sys
 import struct
-import time
 
 # Where to look under an install prefix for a site directory. The name
 # varies: Debian and Ubuntu call it dist-packages, and their own install
@@ -496,22 +495,28 @@ def parse_ellisys_export(exportfile):
         return 1
 
     with cap:
-        # Check to make sure the CSV file header matches out expectations
-        hdr=cap.readline()
-        if (hdr.rstrip("\r\n") != ELLISYS_CSV_HDR.rstrip("\r\n")):
-            error("%s does not match the Ellisys export format" % exportfile)
+        try:
+            # Check to make sure the CSV file header matches out expectations
+            hdr=cap.readline()
+            if (hdr.rstrip("\r\n") != ELLISYS_CSV_HDR.rstrip("\r\n")):
+                error("%s does not match the Ellisys export format" % exportfile)
+                return 1
+
+            for packetline in cap:
+                try:
+                    (edepth, etime, ename, edata) = packetline.replace('"', '').strip().split(",")
+                except ValueError:
+                    continue
+
+                # We are only interedted in HID Input data
+                if (ename != ELLISYS_HID_INPUT): continue
+
+                parse_ellisys_keydata(edata)
+        except UnicodeDecodeError:
+            # Not text, so not an export: a capture file handed to -e, or an
+            # export saved in an encoding this cannot read.
+            error("%s is not text, so it is not an Ellisys export" % exportfile)
             return 1
-
-        for packetline in cap:
-            try:
-                (edepth, etime, ename, edata) = packetline.replace('"', '').strip().split(",")
-            except ValueError:
-                continue
-
-            # We are only interedted in HID Input data
-            if (ename != ELLISYS_HID_INPUT): continue
-
-            parse_ellisys_keydata(edata)
 
     return 0
 

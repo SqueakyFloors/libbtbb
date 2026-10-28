@@ -26,11 +26,13 @@ jobs:
             os: ubuntu-24.04
             cc: gcc
             options: -DENABLE_PYTHON=ON -DBUILD_SHARED_LIB=ON
+            python: true
           # Apple silicon runner.
           - name: macos-15 clang
             os: macos-15
             cc: clang
             options: -DENABLE_PYTHON=ON -DBUILD_SHARED_LIB=ON
+            python: true
           # The static library on its own, which is how a statically linked
           # Ubertooth build takes libbtbb. Nothing in the python tools depends
           # on which library is built, so this job leaves them out.
@@ -38,6 +40,7 @@ jobs:
             os: ubuntu-24.04
             cc: gcc
             options: -DENABLE_PYTHON=OFF -DBUILD_SHARED_LIB=OFF -DBUILD_STATIC_LIB=ON
+            python: false
     steps:
       - uses: actions/checkout@v5
 
@@ -80,7 +83,7 @@ jobs:
       # The install rule has to put the pcapdump module where the installed
       # btaptap finds it, which is not where the interpreter looks.
       - name: Run the installed tool
-        if: contains(matrix.options, 'ENABLE_PYTHON=ON')
+        if: matrix.python
         run: |
           "$RUNNER_TEMP/prefix/bin/btaptap" -h
           # The keystrokes the recorded Ellisys export holds, from the copy

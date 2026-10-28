@@ -262,7 +262,7 @@ map changes, and the replaced allocator.
 | | Before | After | Source |
 |---|---|---|---|
 | Keystrokes `btaptap` recovered from the recorded Ellisys export, 864 keyboard reports | 0, and the export refused | 543 characters, the paragraph that was typed | PR #64, `python3 btaptap -e python/pcaptools/tests/ellysis-keyboard.csv` on each build |
-| The 32 cases of the new `btaptap` test, run against the tree before the fix | 37 failures and 6 errors | all pass | PR #64, the test file copied into a checkout of `master` at `622b6c2` |
+| The 33 cases of the new `btaptap` test, run against the tree before the fix | 38 failures and 6 errors | all pass | PR #64, the test file copied into a checkout of `master` at `622b6c2` |
 | Test programs a `-DBUILD_SHARED_LIB=OFF` build links | none: the build stopped at the first one | the configuration is refused, and `-DBUILD_SHARED_LIB=OFF -DBUILD_STATIC_LIB=ON` builds and passes all 15 | PR #64, `ctest` in a static-only build |
 
 Each capture-file fix was also reverted on its own: 1 to 8 failing checks each,

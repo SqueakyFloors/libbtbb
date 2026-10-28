@@ -319,6 +319,14 @@ class Failures(CaptureFileTestCase):
             output = fh.read()
         self.assertTrue(output.startswith("a\nerror: "), output)
 
+    def test_a_capture_given_to_the_ellisys_option(self):
+        # -e and -r the wrong way round, or an export saved in an encoding
+        # this cannot read: either way the file is not text.
+        cap = pcap_file(self.path("one.pcap"), DLT_EN10MB,
+                        [dm1_frame(l2cap_keystroke([0x04]))])
+
+        self.assertFailed(btaptap("-e", cap), "not text")
+
     def test_missing_ellisys_file(self):
         self.assertFailed(btaptap("-e", self.path("nothing.csv")),
                           "nothing.csv")
@@ -373,7 +381,7 @@ class CommandLine(CaptureFileTestCase):
             (("-e", ELLISYS_CSV, "-c", "1"), "-c needs -r"),
             (("--count", "1"), "unknown option"),
             (("-r", cap, "extra"), "unknown option"),
-            ("--", "unknown option"),
+            (("--",), "unknown option"),
         )
         for args, expected in cases:
             with self.subTest(args=args):

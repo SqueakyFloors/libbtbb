@@ -20,7 +20,7 @@ Before this fork the library had three test programs from 2012 and 2015 that
 only an old `tests/Makefile` built, one of which had not compiled in years, and
 a Travis configuration that no longer ran. Nothing checked a change.
 
-It now has 13 tests in the build: 870 assertions in their source, 176,054
+It now has 17 tests in the build: 870 assertions in their source, 176,054
 assertion executions per run, driven in large part by the Bluetooth Core
 Specification v5.4's own sample data — all 7680 hop frequencies of Vol 2,
 Part G, Section 2, the access code, HEC, CRC, FEC and whitening vectors and the
@@ -29,7 +29,7 @@ rules of Vol 6, Part B. CI builds and runs them on Linux with gcc and macOS
 with clang under `-Wall -Wextra -Werror`, and again under AddressSanitizer and
 UndefinedBehaviorSanitizer.
 
-They found 51 defects: AUX1, EV3, EV4, EV5 and DV packets never produced a
+They found 63 defects: AUX1, EV3, EV4, EV5 and DV packets never produced a
 payload at all, every connection parameter a PCAPNG file recorded for a
 CONNECT_IND belonged to another part of the packet, and buffers were written
 and read past their ends. [TESTING.md](TESTING.md) has what each test covers
