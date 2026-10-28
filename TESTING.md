@@ -10,7 +10,7 @@ Specification's own published sample data, and they run on every push and pull
 request on Linux and macOS, plain and under AddressSanitizer and
 UndefinedBehaviorSanitizer.
 
-They found 63 defects — what you would expect of decoders nothing had
+They found 62 defects — what you would expect of decoders nothing had
 exercised: packet types that never produced a payload at all, a capture file
 whose connection parameters all belonged to other parts of the packet, buffers
 written and read past their ends, and hop predictions for channels the piconet
@@ -78,7 +78,7 @@ linkage, and `tests/CMakeLists.txt` says which tests do it.
 | `le_print` | What `lell_print()` writes and on which stream: a `CONNECT_REQ`, advertising data carrying 16-bit service UUIDs, the four value lines that carry their own indentation, and seven malformed packets, one per diagnostic message | Hand-built packets, each case comparing the whole of stderr against the expected text and checking stdout carries none of it |
 | `smoke` | The public API end to end: one known packet of each kind decoded, `btbb_gen_syncword()` and `btbb_find_ac()` with and without a bit error, and every frequency from 2400 to 2480 MHz decoded to a channel index and a PCAP `channel_k` | Sync words computed independently from the (64,30) block code in `python/utils/encode_sw.py`, not from the library's own tables |
 | `release_version` | That `cmake/set_release.cmake` produces the version the build claims | The script itself |
-| `btaptap` | The keystroke decoder end to end, run as a user runs it: keystrokes out of baseband and HCI captures, modifier keys, a held key, `-c`, a frame cut short, and the nine ways a run can fail, each one an `error:` line on stderr and a non-zero exit. Also the `pcapdump` module the README offers on its own, which writes a capture file and reads it back | The Ellisys export recorded in `python/pcaptools/tests`, 864 keyboard reports of someone typing, and captures the test builds itself from the HID boot-mode report layout |
+| `btaptap` | The keystroke decoder end to end, run as a user runs it: keystrokes out of baseband and HCI captures, modifier keys, a held key, `-c`, `-h` beside a capture, a frame cut short, and every way a run can fail, each one an `error:` line on stderr and a non-zero exit. Also the `pcapdump` module the README offers on its own, which writes a capture file and reads it back | The Ellisys export recorded in `python/pcaptools/tests`, 864 keyboard reports of someone typing, and captures the test builds itself from the HID boot-mode report layout |
 | `library_config` | The library configurations the build offers: that one building neither library is refused while configuring, and that a static-only build builds a test program | Configures, and builds, a tree of its own, because a build is in one configuration only |
 
 ## How big the suite is
@@ -200,7 +200,6 @@ vectors.
 |---|---|---|---|---|
 | `btaptap` read every byte of a capture through `ord()`, which python 3 raises a `TypeError` for, and the read loop took any `TypeError` as the end of the capture | no capture ever gave up a keystroke: the tool printed nothing, said nothing and exited 0, since the changelog claimed python 3 support in 2020-12-R1 | `btaptap`, keystrokes out of a baseband and an HCI capture and out of the recorded Ellisys export | #64 | #55 |
 | The Ellisys path opened the CSV in text mode, so the CR LF line endings its header comparison expects never matched, and past that point it called `xreadlines()`, converted hex with `str.decode("hex")` and built its faked L2CAP packet with `chr()` | `-e` refused the repository's own example export as not an Ellisys export, and exited 0 | `btaptap`, the recorded export decoded, and a CSV that is not one refused | #64 | #55 |
-| `parse_l2cap_keydata()` read the first 11 bytes of what it was given on the strength of the packet's own length field | a frame cut short, which a snapshot length or a capture that stopped leaves, ended the run with an `IndexError` traceback partway through the capture | `btaptap`, a short frame followed by a good one | #64 | #55 |
 | An unsupported data link layer was reported once per packet, and the run still exited 0 | a capture from the Ubertooth tools, whose link type `btaptap` does not read, printed one line per packet and reported success | `btaptap`, a `DLT_BLUETOOTH_BREDR_BB` capture | #64 | #55 |
 | `PcapDumper` joined the bytes of its file and record headers with `''.join()` | the half of the `pcapdump` module the README offers could not write a capture at all | `btaptap`'s module cases, which write a capture and read it back | #64 | #55 |
 | `PcapReader` built a record's timestamp by writing the fraction-of-a-second field after the decimal point, `float("%s.%s")`, which is only right when the field is written in as many digits as it is wide | a fraction starting with a zero came out up to a second late: 5 microseconds past the second read as half a second, and one record in ten of a nanosecond capture, where the fraction is below 0.1 s, was wrong | `btaptap`'s timestamp cases, a microsecond and a nanosecond capture | #64 | #55 |
@@ -262,7 +261,7 @@ map changes, and the replaced allocator.
 | | Before | After | Source |
 |---|---|---|---|
 | Keystrokes `btaptap` recovered from the recorded Ellisys export, 864 keyboard reports | 0, and the export refused | 543 characters, the paragraph that was typed | PR #64, `python3 btaptap -e python/pcaptools/tests/ellysis-keyboard.csv` on each build |
-| The 22 cases of the new `btaptap` test, run against the tree before the fix | 26 failures and 4 errors | all pass | PR #64, the test file copied into a checkout of `master` |
+| The 28 cases of the new `btaptap` test, run against the tree before the fix | 32 failures and 5 errors | all pass | PR #64, the test file copied into a checkout of `master` at `622b6c2` |
 | Test programs a `-DBUILD_SHARED_LIB=OFF` build links | none: the build stopped at the first one | the configuration is refused, and `-DBUILD_SHARED_LIB=OFF -DBUILD_STATIC_LIB=ON` builds and passes all 15 | PR #64, `ctest` in a static-only build |
 
 Each capture-file fix was also reverted on its own: 1 to 8 failing checks each,

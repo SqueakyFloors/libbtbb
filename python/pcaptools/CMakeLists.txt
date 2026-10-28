@@ -77,7 +77,8 @@ install(PROGRAMS ${BTAPTAP_INSTALLED} DESTINATION ${INSTALL_DEFAULT_BINDIR})
 if(BUILD_TESTING)
 	add_test(NAME btaptap COMMAND ${Python3_EXECUTABLE}
 	         ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_btaptap.py)
-	set_tests_properties(btaptap PROPERTIES TIMEOUT 60)
+	# Two seconds, most of it starting the interpreter once per case.
+	set_tests_properties(btaptap PROPERTIES TIMEOUT 30)
 endif()
 
 # setup.py install is gone from current setuptools, so the pcapdump module is

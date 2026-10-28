@@ -175,16 +175,31 @@ class Keystrokes(CaptureFileTestCase):
         self.assertEqual(done.stderr, "")
         self.assertEqual(done.returncode, 0)
 
-    def test_frames_after_a_short_one_are_still_read(self):
-        # A frame cut short mid-L2CAP-packet, as a snapshot length or a
-        # capture that stopped leaves it: its length field claims a full
-        # report, and the bytes the report needs are not there.
+    def test_a_frame_too_short_to_hold_a_report_is_skipped(self):
+        # A frame the snapshot length cut short, or that a capture stopped
+        # part way through: the frame carries no report, and the capture goes
+        # on past it.
         short = dm1_frame(l2cap_keystroke([0x04]))[:30]
         frames = [short, dm1_frame(l2cap_keystroke([0x05]))]
         cap = pcap_file(self.path("short.pcap"), DLT_EN10MB, frames)
 
         done = btaptap("-r", cap)
         self.assertEqual(done.stdout, "b\n")
+        self.assertNotIn("Traceback", done.stderr)
+        self.assertEqual(done.returncode, 0)
+
+    def test_short_ellisys_report(self):
+        # A row with too few bytes in its data column to hold a report. The
+        # faked L2CAP packet's length field carries that shortness, so the
+        # row is skipped and the rest of the export is read.
+        path = self.path("short.csv")
+        with open(path, "w", newline="") as fh:
+            fh.write('"Depth","Time","Name","Data"\r\n')
+            fh.write('"0","1.0","HID Input 1","01 00"\r\n')
+            fh.write('"0","2.0","HID Input 1","01 00 00 04 00 00 00 00 00"\r\n')
+
+        done = btaptap("-e", path)
+        self.assertEqual(done.stdout, "a\n")
         self.assertNotIn("Traceback", done.stderr)
         self.assertEqual(done.returncode, 0)
 
@@ -285,6 +300,17 @@ class CommandLine(CaptureFileTestCase):
         done = btaptap("-h")
         self.assertIn("Usage: btaptap", done.stdout)
         self.assertEqual(done.stderr, "")
+        self.assertEqual(done.returncode, 0)
+
+    def test_help_beside_a_capture_prints_both(self):
+        # Help does not cancel the job it was asked beside, and it is the
+        # last thing printed.
+        cap = pcap_file(self.path("one.pcap"), DLT_EN10MB,
+                        [dm1_frame(l2cap_keystroke([0x04]))])
+
+        done = btaptap("-r", cap, "-h")
+        self.assertEqual(done.stdout, "a\nUsage: btaptap [-r pcapfile.pcap |"
+                                      " -e ellisysfile.csv] [-c count] [-h]\n")
         self.assertEqual(done.returncode, 0)
 
     def test_no_arguments_gives_the_usage_text(self):

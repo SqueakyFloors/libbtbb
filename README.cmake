@@ -15,6 +15,11 @@ The following are flags that may be of use when configuing this project.
     under DESTDIR works once it is moved into place. The copy that is
     installed carries the depth of INSTALL_DEFAULT_BINDIR, so that it finds
     its prefix and never looks above it.
+ * BUILD_SHARED_LIB, BUILD_STATIC_LIB
+  * Which library to build. The shared one is on by default and the static
+    one off; both can be on. A configuration with neither is refused while
+    configuring, so a static-only build is
+    -DBUILD_SHARED_LIB=OFF -DBUILD_STATIC_LIB=ON.
  * INSTALL_DEFAULT_BINDIR
   * The directory the tools are installed in, under the install prefix.
     It defaults to bin.

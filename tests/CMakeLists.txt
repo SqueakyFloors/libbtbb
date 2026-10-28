@@ -118,5 +118,7 @@ if(BUILD_TESTING)
              -DSOURCE_DIR=${PROJECT_SOURCE_DIR}
              -DBINARY_DIR=${CMAKE_CURRENT_BINARY_DIR}/library-config-test
              -P ${CMAKE_CURRENT_SOURCE_DIR}/test_library_config.cmake)
-    set_tests_properties(library_config PROPERTIES TIMEOUT 120)
+    # Two configures and one compile: 5.5 s on an arm64 Mac, 15 s on a
+    # slower CI runner.
+    set_tests_properties(library_config PROPERTIES TIMEOUT 60)
 endif()
