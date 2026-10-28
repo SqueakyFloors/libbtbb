@@ -254,11 +254,72 @@ static void test_candidates_follow_the_map_as_it_is_learned(void)
 
 	CHECK(btbb_piconet_get_flag(pn, BTBB_CLK27_VALID));
 	CHECK_EQ(1, pn->num_candidates);
+	CHECK(!candidates_superseded(pn));
 	CHECK(candidate_listed(pn, true_clock));
 	/* clk_offset is in CLKN ticks, so twice the CLK1-27 difference. */
 	CHECK_EQ(0, pn->clk_offset);	/* the first packet was the true clock */
 	btbb_piconet_unref(pn);
 	btbb_piconet_unref(device);
+}
+
+/*
+ * Choosing the candidates again is a walk over 2^21 clock values, and during
+ * discovery a channel is seen for the first time often, so it has to happen
+ * only when the hops really would be predicted differently: when hop
+ * selection is adapted to the map at all, and then only if the map itself
+ * changed.
+ */
+static void test_candidates_rechosen_only_for_a_new_sequence(void)
+{
+	/* Channels 0-17, below the minimum AFH is defined for. */
+	static const uint8_t map_18[10] = {0xff, 0xff, 0x03};
+	btbb_piconet *pn = discovered(NULL, 0);
+
+	first_hop(pn, channel_at(pn, 0));
+	CHECK(btbb_init_hop_reversal(0, pn) > 1);
+	/* Basic hopping: the map does not come into hop selection. */
+	CHECK_EQ(1, btbb_piconet_set_channel_seen(pn, 40));
+	CHECK(!candidates_superseded(pn));
+	btbb_piconet_unref(pn);
+
+	pn = discovered(map_18, 1);
+	pn->pattern_channels[0] = channel_at(pn, 0);
+	pn->packets_observed = 1;
+	CHECK_EQ(18, pn->used_channels);
+	CHECK(btbb_init_hop_reversal(0, pn) > 1);
+	/* One more used channel, still below the minimum: the same basic
+	 * sequence, so the candidates stand. */
+	CHECK_EQ(1, btbb_piconet_set_channel_seen(pn, 20));
+	CHECK_EQ(19, pn->used_channels);
+	CHECK(!candidates_superseded(pn));
+	/* The one that reaches the minimum starts adapting the sequence. */
+	CHECK_EQ(1, btbb_piconet_set_channel_seen(pn, 21));
+	CHECK_EQ(AFH_MIN_USED_CHANNELS, pn->used_channels);
+	CHECK(candidates_superseded(pn));
+	btbb_piconet_unref(pn);
+}
+
+/*
+ * Filling the candidate list stops at the size it was given. The count the
+ * size comes from is exact, so this cap is only the backstop that keeps a
+ * future miscount from writing past the end.
+ */
+static void test_candidate_fill_stops_at_the_size_given(void)
+{
+	btbb_piconet *pn = discovered(NULL, 0);
+	uint32_t room_for_eight[8];
+	int i, count;
+
+	first_hop(pn, channel_at(pn, 0));
+	count = init_candidates(pn->pattern_channels[0], 0, pn, NULL, 0);
+	CHECK(count > 8);
+	memset(room_for_eight, 0, sizeof(room_for_eight));
+	CHECK_EQ(8, init_candidates(pn->pattern_channels[0], 0, pn,
+				    room_for_eight, 8));
+	for (i = 0; i < 8; i++)
+		CHECK_EQ(pn->pattern_channels[0],
+			 channel_at(pn, room_for_eight[i]));
+	btbb_piconet_unref(pn);
 }
 
 /*
@@ -301,7 +362,10 @@ static void test_remembered_pattern_is_bounded(void)
 
 	/* The pattern arrays are full. */
 	pn->packets_observed = MAX_PATTERN_LENGTH;
-	pn->pattern_channels[0] = 7;	/* a marker just past pattern_indices */
+	/* A marker where the write past pattern_indices would land on a
+	 * little-endian host; the two flag checks below are the assertion
+	 * that holds whatever the byte order. */
+	pn->pattern_channels[0] = 7;
 	btbb_packet_set_data(pkt, symbols, (int) sizeof(symbols), 11,
 			     (pn->first_pkt_time + 123) << 1);
 	try_hop(pkt, pn);
@@ -319,6 +383,8 @@ int main(void)
 	test_first_hop_alone_does_not_look_like_afh();
 	test_two_hops_on_one_channel_look_like_afh();
 	test_candidates_follow_the_map_as_it_is_learned();
+	test_candidates_rechosen_only_for_a_new_sequence();
+	test_candidate_fill_stops_at_the_size_given();
 	test_clk6_offset_fixes_the_known_clock_bits();
 	test_remembered_pattern_is_bounded();
 

@@ -12,8 +12,8 @@ libbtbb (2020-12-R1+fork5) unstable; urgency=low
     list was sized as though the hopping sequence visited all 79 channels
     evenly, which it does not under AFH, and nothing stopped the search
     filling it past the end. Any map with 20 to 39 used channels overflowed,
-    whether the map came from observed packets or was read from an adapter and
-    set by ubertooth-follow.
+    once the library had decided the piconet was hopping adaptively - which
+    the first-packet bug below could also make it decide wrongly.
   * The first packet of a clock recovery attempt no longer makes the library
     announce "Hopping pattern appears to be AFH" and adapt to a map it never
     observed. It compared that packet with a non-existent previous one, so

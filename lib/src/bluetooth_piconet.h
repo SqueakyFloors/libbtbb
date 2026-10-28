@@ -83,10 +83,12 @@ struct btbb_piconet {
 	/* number of candidates for CLK1-27 */
 	int num_candidates;
 
-	/* Set when the AFH map changes, because the candidates in
-	 * clock_candidates were chosen from the hop sequence of the map as it
-	 * was then.  Cleared when they are chosen again. */
-	int candidates_stale;
+	/* The hop sequence clock_candidates was chosen from: whether hop
+	 * selection was adapted to candidates_afh_map, and that map.  A
+	 * piconet whose map has moved on since would winnow against a
+	 * sequence it no longer follows. */
+	uint8_t candidates_afh;
+	uint8_t candidates_afh_map[10];
 
 	/* number of packets observed during one attempt at UAP/clock discovery */
 	int packets_observed;
