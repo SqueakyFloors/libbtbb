@@ -30,8 +30,9 @@
 #include <sys/types.h>
 #include <unistd.h>
 
-/* The option code of a padding option: a reader steps over it without
-   interpreting the bytes it covers. */
+/* The option code used for padding. The format defines no padding option;
+   this is a code in the range reserved for local use, and a reader steps
+   over an option it does not know by its length. */
 #define PCAPNG_OPTION_PADDING 0xffff
 
 /* An option's length field is 16 bits wide, so one option can cover at most

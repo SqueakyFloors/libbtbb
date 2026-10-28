@@ -34,6 +34,7 @@ typedef enum {
 	PCAP_INVALID_HANDLE,
 	PCAP_FILE_NOT_ALLOWED,
 	PCAP_NO_MEMORY,
+	PCAP_FILE_WRITE_ERROR,
 } PCAP_RESULT;
 
 typedef struct __attribute__((packed)) pcap_hdr_s {
@@ -112,10 +113,20 @@ typedef struct {
 	pcap_bluetooth_bredr_bb_header bredr_bb_header;
 } pcap_bredr_packet;
 
-void btbb_pcap_dump(FILE *file, pcaprec_hdr_t *pcap_header, u_char *data) {
-	fwrite(pcap_header, sizeof(*pcap_header), 1, file);
-	fwrite(data, pcap_header->incl_len, 1, file);
-	fflush(file);
+/* Write one record. Returns 0, or -PCAP_FILE_WRITE_ERROR if any of it did not
+   reach the file, so a capture that runs out of disk space is reported to the
+   caller rather than left to look like a short capture. */
+int btbb_pcap_dump(FILE *file, pcaprec_hdr_t *pcap_header, u_char *data) {
+	if (fwrite(pcap_header, sizeof(*pcap_header), 1, file) != 1) {
+		return -PCAP_FILE_WRITE_ERROR;
+	}
+	if (fwrite(data, pcap_header->incl_len, 1, file) != 1) {
+		return -PCAP_FILE_WRITE_ERROR;
+	}
+	if (fflush(file) != 0) {
+		return -PCAP_FILE_WRITE_ERROR;
+	}
+	return 0;
 }
 
 static void
@@ -214,8 +225,8 @@ btbb_pcap_append_packet(btbb_pcap_handle * h, const uint64_t ns,
 					      btbb_packet_get_header_packed(pkt),
 					      flags,
 					      payload_bytes );
-		btbb_pcap_dump(h->pcap_file, &pcap_pkt.pcap_header, (u_char *)&pcap_pkt.bredr_bb_header);
-		return 0;
+		return btbb_pcap_dump(h->pcap_file, &pcap_pkt.pcap_header,
+				      (u_char *)&pcap_pkt.bredr_bb_header);
 	}
 	return -PCAP_INVALID_HANDLE;
 }
@@ -378,8 +389,8 @@ lell_pcap_append_packet(lell_pcap_handle * h, const uint64_t ns,
 					   refAA,
 					   flags,
 					   &pkt->symbols[0] );
-		btbb_pcap_dump(h->pcap_file, &pcap_pkt.pcap_header, (u_char *)&pcap_pkt.le_ll_header);
-		return 0;
+		return btbb_pcap_dump(h->pcap_file, &pcap_pkt.pcap_header,
+				      (u_char *)&pcap_pkt.le_ll_header);
 	}
 	return -PCAP_INVALID_HANDLE;
 }
@@ -432,8 +443,8 @@ lell_pcap_append_ppi_packet(lell_pcap_handle * h, const uint64_t ns,
 		pcap_pkt.le_ll_ppi_header.rssi_avg = rssi_avg;
 		pcap_pkt.le_ll_ppi_header.rssi_count = rssi_count;
 		(void) memcpy( &pcap_pkt.le_packet[0], &pkt->symbols[0], incl_len);
-		btbb_pcap_dump(h->pcap_file, &pcap_pkt.pcap_header, (u_char *)&pcap_pkt.ppi_packet_header);
-		return 0;
+		return btbb_pcap_dump(h->pcap_file, &pcap_pkt.pcap_header,
+				      (u_char *)&pcap_pkt.ppi_packet_header);
 	}
 	return -PCAP_INVALID_HANDLE;
 }

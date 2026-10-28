@@ -674,64 +674,73 @@ static void test_bredr_failed_checks(void)
  */
 static void test_bredr_voice_payload_has_no_crc(void)
 {
-	const char *filename = "test_capture_hv3.pcapng";
-	char header_symbols[55];
-	char payload[241];
-	char stream[1024];
-	btbb_pcapng_handle *h = NULL;
-	btbb_packet *pkt;
-	size_t blk, data;
-	int length, hec, i;
+	/* HV3, EV4 and EV5: the first has no CRC at all, and the other two
+	   look for their payload length by checking a CRC at every candidate
+	   until they run out of symbols. */
+	static const uint8_t TYPES[] = { 7, 12, 13 };
+	size_t row;
 
-	unlink_quietly(filename);
-	/* LT_ADDR 1 in the low three bits, TYPE 7 (HV3) in the next four */
-	hec = hec_for(1 | (7 << 3), SPEC_DH1_UAP);
-	CHECK(hec >= 0);
-	if (hec < 0)
-		return;
-	encode_header_13((uint16_t) (1 | (7 << 3)), (uint8_t) hec,
-			 header_symbols);
-	/* 30 payload bytes, which is what an HV3 carries, with no CRC after
-	   them */
-	for (i = 0; i < 240; i++)
-		payload[i] = (char) ('0' + ((0x9c5a3 >> (i % 19)) & 1));
-	payload[240] = '\0';
-	length = build_bredr_stream(stream, SPEC_DH1_LAP, header_symbols,
-				    payload);
-	CHECK(length == 362);
-	pkt = decode_bredr(stream, length, SPEC_DH1_UAP);
-	CHECK(pkt != NULL);
-	if (pkt == NULL)
-		return;
-	CHECK(btbb_packet_get_type(pkt) == 7);
-	CHECK(btbb_packet_get_payload_length(pkt) == 30);
+	for (row = 0; row < sizeof(TYPES) / sizeof(TYPES[0]); row++) {
+		const char *filename = "test_capture_voice.pcapng";
+		char header_symbols[55];
+		char payload[241];
+		char stream[1024];
+		btbb_pcapng_handle *h = NULL;
+		btbb_packet *pkt;
+		uint16_t header_data =
+			(uint16_t) (1 | (TYPES[row] << 3));
+		size_t blk, data;
+		int length, hec, i;
 
-	CHECK(btbb_pcapng_create_file(filename, "test", &h) == 0);
-	if (h == NULL) {
+		unlink_quietly(filename);
+		hec = hec_for(header_data, SPEC_DH1_UAP);
+		CHECK(hec >= 0);
+		if (hec < 0)
+			return;
+		encode_header_13(header_data, (uint8_t) hec, header_symbols);
+		/* 30 bytes of payload, which is what an HV3 carries, and not
+		   enough for either eSCO type to finish its search */
+		for (i = 0; i < 240; i++)
+			payload[i] =
+				(char) ('0' + ((0x9c5a3 >> (i % 19)) & 1));
+		payload[240] = '\0';
+		length = build_bredr_stream(stream, SPEC_DH1_LAP,
+					    header_symbols, payload);
+		CHECK(length == 362);
+		pkt = decode_bredr(stream, length, SPEC_DH1_UAP);
+		CHECK(pkt != NULL);
+		if (pkt == NULL)
+			return;
+		CHECK(btbb_packet_get_type(pkt) == TYPES[row]);
+
+		CHECK(btbb_pcapng_create_file(filename, "test", &h) == 0);
+		if (h == NULL) {
+			btbb_packet_unref(pkt);
+			return;
+		}
+		CHECK(btbb_pcapng_append_packet(h, 13ull, -20, -80,
+						SPEC_DH1_LAP, SPEC_DH1_UAP,
+						pkt) == 0);
+		(void) btbb_pcapng_close(h);
 		btbb_packet_unref(pkt);
-		return;
-	}
-	CHECK(btbb_pcapng_append_packet(h, 13ull, -20, -80, SPEC_DH1_LAP,
-					SPEC_DH1_UAP, pkt) == 0);
-	(void) btbb_pcapng_close(h);
-	btbb_packet_unref(pkt);
 
-	CHECK(read_capture(filename));
-	unlink_quietly(filename);
-	if (capture_len == 0)
-		return;
-	blk = find_block(BLOCK_TYPE_ENHANCED_PACKET, 0);
-	CHECK(blk < capture_len);
-	if (blk >= capture_len)
-		return;
-	data = blk + 28;
-	CHECK(rd16(data + 20) ==
-	      (BREDR_DEWHITENED | BREDR_SIGPOWER_VALID |
-	       BREDR_NOISEPOWER_VALID | BREDR_REFLAP_VALID |
-	       BREDR_REFUAP_VALID | BREDR_PAYLOAD_PRESENT |
-	       BREDR_HEC_CHECKED | BREDR_HEC_VALID));
-	CHECK((rd16(data + 20) & BREDR_CRC_CHECKED) == 0);
-	CHECK((rd16(data + 20) & BREDR_CRC_VALID) == 0);
+		CHECK(read_capture(filename));
+		unlink_quietly(filename);
+		if (capture_len == 0)
+			return;
+		blk = find_block(BLOCK_TYPE_ENHANCED_PACKET, 0);
+		CHECK(blk < capture_len);
+		if (blk >= capture_len)
+			return;
+		data = blk + 28;
+		/* the header decoded, so the HEC result is there; no CRC
+		   result describes any of these payloads */
+		CHECK((rd16(data + 20) &
+		       (BREDR_HEC_CHECKED | BREDR_HEC_VALID)) ==
+		      (BREDR_HEC_CHECKED | BREDR_HEC_VALID));
+		CHECK((rd16(data + 20) &
+		       (BREDR_CRC_CHECKED | BREDR_CRC_VALID)) == 0);
+	}
 }
 
 /*
@@ -998,6 +1007,81 @@ static void test_bredr_pcap_record(void)
 
 	/* the record is the only thing in the file */
 	CHECK(capture_len == 24 + 16 + 30);
+}
+
+/* An LE packet in a plain pcap file, and the PPI form of the same file. */
+static void test_le_pcap_records(void)
+{
+	const char *filename = "test_capture_le.pcap";
+	const char *ppi_name = "test_capture_le_ppi.pcap";
+	lell_pcap_handle *h = NULL;
+	lell_packet *pkt = NULL;
+	int i;
+
+	lell_allocate_and_decode_n(CONNECT_IND, sizeof(CONNECT_IND),
+				   CONNECT_IND_CHANNEL_MHZ, 42, &pkt);
+	CHECK(pkt != NULL);
+	if (pkt == NULL)
+		return;
+
+	unlink_quietly(filename);
+	CHECK(lell_pcap_create_file(filename, &h) == 0);
+	if (h != NULL) {
+		CHECK(lell_pcap_append_packet(h, 2000000003ull, -20, -80,
+					      LE_ADV_AA, pkt) == 0);
+		CHECK(lell_pcap_close(h) == 0);
+		CHECK(read_capture(filename));
+		unlink_quietly(filename);
+		if (capture_len != 0) {
+			/* the snapshot length is the longest record this
+			   writer produces: the pseudoheader and a full frame */
+			CHECK(rd32(16) ==
+			      sizeof(pcap_bluetooth_le_ll_header) +
+			      LE_MAX_PAYLOAD);
+			CHECK(rd32(16) == 270);
+			CHECK(rd32(20) == DLT_BLUETOOTH_LE_LL_WITH_PHDR);
+			CHECK(rd32(24) == 2);			/* seconds */
+			CHECK(rd32(28) == 3);			/* nanoseconds */
+			CHECK(rd32(32) == 10 + sizeof(CONNECT_IND));
+			CHECK(rd32(36) == 10 + sizeof(CONNECT_IND));
+			CHECK(capture[40] == 0);		/* channel k */
+			CHECK((int8_t) capture[41] == -20);
+			CHECK((int8_t) capture[42] == -80);
+			CHECK(capture[43] == 0);		/* AA offenses */
+			CHECK(rd32(44) == LE_ADV_AA);
+			CHECK(rd16(48) ==
+			      (LE_DEWHITENED | LE_AA_OFFENSES_VALID |
+			       LE_SIGPOWER_VALID | LE_NOISEPOWER_VALID |
+			       LE_REF_AA_VALID));
+			for (i = 0; i < (int) sizeof(CONNECT_IND); i++)
+				CHECK(capture[50 + i] == CONNECT_IND[i]);
+			CHECK(capture_len == 24 + 16 + 10 +
+			      sizeof(CONNECT_IND));
+		}
+	}
+
+	/* the PPI form carries a larger per-packet header, so its snapshot
+	   length is larger too */
+	h = NULL;
+	unlink_quietly(ppi_name);
+	CHECK(lell_pcap_ppi_create_file(ppi_name, 2, &h) == 0);
+	if (h != NULL) {
+		CHECK(lell_pcap_append_ppi_packet(h, 2000000003ull, 0, -80,
+						  -20, -40, 3, pkt) == 0);
+		CHECK(lell_pcap_close(h) == 0);
+		CHECK(read_capture(ppi_name));
+		unlink_quietly(ppi_name);
+		if (capture_len != 0) {
+			CHECK(rd32(16) == 24 + LE_MAX_PAYLOAD);
+			CHECK(rd32(16) == 284);
+			CHECK(rd32(20) == DLT_PPI);
+			CHECK(rd32(32) == 24 + sizeof(CONNECT_IND));
+			CHECK(capture_len == 24 + 16 + 24 +
+			      sizeof(CONNECT_IND));
+		}
+	}
+
+	lell_packet_unref(pkt);
 }
 
 /*
@@ -1445,6 +1529,7 @@ int main(void)
 	test_bredr_uap_search();
 	test_bredr_interface_options();
 	test_bredr_pcap_record();
+	test_le_pcap_records();
 	test_le_connect_ind_option();
 	test_le_short_connect_ind();
 	test_header_padding_options();
