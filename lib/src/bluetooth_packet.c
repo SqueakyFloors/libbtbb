@@ -502,14 +502,32 @@ void btbb_packet_set_data(btbb_packet *pkt, char *data, int length,
 	pkt->channel = channel;
 	pkt->clkn = clkn >> 1; // really CLK1
 
-	/* Nothing is known about these symbols yet, so drop what the decoder
-	 * worked out about the last ones. A caller hands one packet object a
-	 * frame after another - btbb_find_ac() gives out the same object
-	 * again - and not every route into the decoder starts by clearing
-	 * this: the search for a piconet's address part goes through
-	 * try_clock() and crc_check(), neither of which does. Whatever is
-	 * left here is then reported for a frame it does not describe. */
+	/* Nothing is known about these symbols yet, so drop everything the
+	 * decoder worked out about the last ones: what it checked, the header
+	 * it read, the payload header, and the payload. A caller hands one
+	 * packet object a frame after another - btbb_find_ac() gives out the
+	 * same object again - and not every route into the decoder starts by
+	 * clearing this: the search for a piconet's address part goes through
+	 * try_clock() and crc_check(), neither of which reads the header. So
+	 * whatever is left here is reported for a frame it does not describe,
+	 * which for a capture file means a record saying another frame's HEC
+	 * was checked and holding another frame's header bits.
+	 *
+	 * What the caller set - the address part, the clock, whether the
+	 * symbols are whitened, the modulation - is the caller's and stays. */
 	btbb_packet_set_flag(pkt, BTBB_HAS_PAYLOAD, 0);
+	btbb_packet_set_flag(pkt, BTBB_HEC_CHECKED, 0);
+	btbb_packet_set_flag(pkt, BTBB_HEC_VALID, 0);
+	btbb_packet_set_flag(pkt, BTBB_CRC_CHECKED, 0);
+	btbb_packet_set_flag(pkt, BTBB_CRC_CORRECT, 0);
+	memset(pkt->packet_header, 0, sizeof(pkt->packet_header));
+	pkt->packet_lt_addr = 0;
+	pkt->packet_type = 0;
+	pkt->packet_flags = 0;
+	pkt->packet_hec = 0;
+	memset(pkt->payload_header, 0, sizeof(pkt->payload_header));
+	pkt->payload_llid = 0;
+	pkt->payload_flow = 0;
 	pkt->payload_length = 0;
 	pkt->payload_header_length = 0;
 	pkt->corrected_header_bits = 0;

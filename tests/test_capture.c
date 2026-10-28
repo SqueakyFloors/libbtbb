@@ -1100,6 +1100,98 @@ static void test_bredr_undecoded_payload_is_not_reported(void)
 }
 
 /*
+ * A packet object reused for a second frame, where the second frame goes down
+ * the search for the piconet's address part. That search reads the header
+ * through try_clock(), which records nothing on the packet, so none of the
+ * first frame's decoded header - the bits, the HEC answer, the count of
+ * corrected header bits - may reach the second frame's record.
+ */
+static void test_bredr_reused_packet_in_the_uap_search(void)
+{
+	const char *filename = "test_capture_reuse_search.pcapng";
+	char header_symbols[55];
+	char stream[1024];
+	btbb_pcapng_handle *h = NULL;
+	btbb_piconet *pn;
+	btbb_packet *pkt = NULL;
+	size_t blk, data;
+	int length;
+
+	/* Frame A: the specification's DH1 with three wrong header symbols,
+	   which the rate 1/3 code puts right, decoded in full. */
+	strcpy(header_symbols, SPEC_DH1_HEADER);
+	header_symbols[0] = (char) ('0' + '1' - header_symbols[0]);
+	header_symbols[4] = (char) ('0' + '1' - header_symbols[4]);
+	header_symbols[8] = (char) ('0' + '1' - header_symbols[8]);
+	length = build_bredr_stream(stream, SPEC_DH1_LAP, header_symbols,
+				    SPEC_DH1_PAYLOAD);
+	CHECK(btbb_find_ac(stream, 1, SPEC_DH1_LAP, 0, &pkt) == 0);
+	CHECK(pkt != NULL);
+	if (pkt == NULL)
+		return;
+	btbb_packet_set_data(pkt, stream, length, 0, 0);
+	btbb_packet_set_flag(pkt, BTBB_WHITENED, 0);
+	btbb_packet_set_flag(pkt, BTBB_CLK6_VALID, 1);
+	btbb_packet_set_uap(pkt, SPEC_DH1_UAP);
+	CHECK(btbb_decode_header(pkt) == 1);
+	CHECK(btbb_decode_payload(pkt) == 10);
+	CHECK(pkt->corrected_header_bits == 3);
+	CHECK(btbb_packet_get_flag(pkt, BTBB_HEC_VALID) == 1);
+
+	/* Frame B in the same object, with a clean header, through the search
+	   for the address part: the state btbb_process_packet() is in before
+	   it starts following. */
+	strcpy(header_symbols, SPEC_DH1_HEADER);
+	length = build_bredr_stream(stream, SPEC_DH1_LAP, header_symbols,
+				    SPEC_DH1_PAYLOAD);
+	btbb_packet_set_data(pkt, stream, length, 0, 0);
+	btbb_packet_set_flag(pkt, BTBB_WHITENED, 0);
+	pn = btbb_piconet_new();
+	CHECK(pn != NULL);
+	if (pn == NULL) {
+		btbb_packet_unref(pkt);
+		return;
+	}
+	btbb_init_piconet(pn, SPEC_DH1_LAP);
+	CHECK(btbb_process_packet(pkt, pn) == 0);
+	CHECK(btbb_piconet_get_flag(pn, BTBB_UAP_VALID) == 1);
+
+	/* none of frame A's header survives on frame B */
+	CHECK(pkt->corrected_header_bits == 0);
+	CHECK(btbb_packet_get_flag(pkt, BTBB_HEC_CHECKED) == 0);
+	CHECK(btbb_packet_get_flag(pkt, BTBB_HEC_VALID) == 0);
+	CHECK(btbb_packet_get_header_packed(pkt) == 0);
+
+	unlink_quietly(filename);
+	CHECK(btbb_pcapng_create_file(filename, "test", &h) == 0);
+	if (h == NULL) {
+		btbb_packet_unref(pkt);
+		btbb_piconet_unref(pn);
+		return;
+	}
+	CHECK(btbb_pcapng_append_packet(h, 29ull, -20, -80, SPEC_DH1_LAP,
+					btbb_piconet_get_uap(pn), pkt) == 0);
+	(void) btbb_pcapng_close(h);
+	btbb_packet_unref(pkt);
+	btbb_piconet_unref(pn);
+
+	CHECK(read_capture(filename));
+	unlink_quietly(filename);
+	if (capture_len == 0)
+		return;
+	blk = find_block(BLOCK_TYPE_ENHANCED_PACKET, 0);
+	CHECK(blk < capture_len);
+	if (blk >= capture_len)
+		return;
+	data = blk + 28;
+	CHECK(capture[data + 5] == 0);			/* corrected header bits */
+	CHECK(rd16(data + 6) == 0);			/* corrected payload bits */
+	CHECK(rd32(data + 16) == 0);			/* bt header */
+	CHECK((rd16(data + 20) &
+	       (BREDR_HEC_CHECKED | BREDR_HEC_VALID)) == 0);
+}
+
+/*
  * The corrected-bits fields of a BR/EDR record. The format gives neither a
  * validity flag, so a reader takes both at face value, and both writers used
  * to fill them with 0 whatever the forward error correction had done.
@@ -1996,6 +2088,7 @@ int main(void)
 	test_bredr_uap_search();
 	test_bredr_reused_packet();
 	test_bredr_undecoded_payload_is_not_reported();
+	test_bredr_reused_packet_in_the_uap_search();
 	test_bredr_corrected_bits();
 	test_bredr_interface_options();
 	test_bredr_pcap_record();

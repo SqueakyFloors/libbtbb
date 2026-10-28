@@ -161,7 +161,14 @@ static void discard_partial_record(FILE *file, off_t start_of_record)
 		return;
 	}
 	/* The record is out of the file, so the stream can be used again:
-	   clearing the error is what lets the seek below be accepted. */
+	   clearing the error is what lets the seek below be accepted.
+
+	   The seek cannot fail in practice, the truncation just above having
+	   succeeded on this same descriptor, so the position is one the file
+	   can be set to. Were it ever to fail, the file would still end on a
+	   whole record; only the stream's own idea of where it is would be
+	   wrong, and the caller has already been told that this record did
+	   not get written. */
 	clearerr(file);
 	(void) fseeko(file, start_of_record, SEEK_SET);
 }
