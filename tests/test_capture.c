@@ -745,6 +745,14 @@ static void test_bredr_voice_payload_has_no_crc(void)
 		      (BREDR_HEC_CHECKED | BREDR_HEC_VALID));
 		CHECK((rd16(data + 20) &
 		       (BREDR_CRC_CHECKED | BREDR_CRC_VALID)) == 0);
+		/* The FHS gave up on every whitening input it tried, so what
+		   was left in its payload was the last one, known to be
+		   wrong. The record carries no payload at all. */
+		if (TYPES[row] == 2) {
+			CHECK((rd16(data + 20) &
+			       BREDR_PAYLOAD_PRESENT) == 0);
+			CHECK(rd32(blk + 20) == 22);
+		}
 	}
 }
 

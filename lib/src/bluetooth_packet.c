@@ -889,7 +889,10 @@ int fhs(int clock, btbb_packet* pkt)
 		}
 	}
 
-	/* failed to unwhiten */
+	/* No whitening input made the CRC come out, so what is left in the
+	 * payload is the last one tried and known to be wrong: report none,
+	 * as the two give-up paths above do. */
+	pkt->payload_length = 0;
 	free(corrected);
 	return 0;
 }

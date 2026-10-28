@@ -52,7 +52,10 @@ typedef struct __attribute__((packed)) {
 
 /* --------------------------------- BR/EDR ----------------------------- */
 
-typedef struct __attribute__((packed)) {
+/* The writers put the options word and the trailing block length in place a
+   word at a time, so a record has to be aligned for that even though its
+   members are packed. */
+typedef struct __attribute__((packed, aligned(4))) {
   enhanced_packet_block blk_header;
   pcap_bluetooth_bredr_bb_header bredr_bb_header;
 
@@ -97,7 +100,7 @@ typedef struct __attribute__((packed)) {
 
 /* --------------------------------- Low Energy ---------------------------- */
 
-typedef struct __attribute__((packed)) {
+typedef struct __attribute__((packed, aligned(4))) {
   enhanced_packet_block blk_header;
   pcap_bluetooth_le_ll_header le_ll_header;
   uint8_t le_packet[LE_MAX_PAYLOAD];
@@ -142,9 +145,8 @@ typedef struct __attribute__((packed)) {
 
 #define PCAPNG_LE_LL_CONNECTION_INFO 0xd380
 
-/* The number of bytes of LLData a CONNECT_IND carries: InitA and AdvA, 6
-   bytes each, then the 22 bytes of connection parameters. It is also the
-   payload length the specification gives the PDU. */
+/* The payload length a CONNECT_IND PDU declares: InitA and AdvA, 6 bytes
+   each, then the 22 bytes of LLData that carry the connection parameters. */
 #define LE_CONNECT_IND_PDU_LENGTH 34
 
 /* The writers build a block at the start of one of these records, so each
