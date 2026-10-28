@@ -13,6 +13,30 @@ This software has been developed and tested on Linux, it should work on other
 platforms but this has yet to be tested.
 
 
+Tested against the Bluetooth specification
+==========================================
+
+Before this fork the library had three test programs from 2012 and 2015 that
+only an old `tests/Makefile` built, one of which had not compiled in years, and
+a Travis configuration that no longer ran. Nothing checked a change.
+
+It now has 12 tests in the build: 772 assertions in their source, 175,934
+assertion executions per run, driven in large part by the Bluetooth Core
+Specification v5.4's own sample data — all 7680 hop frequencies of Vol 2,
+Part G, Section 2, the access code, HEC, CRC, FEC and whitening vectors and the
+complete DH1 and DM1 packets of Sections 3 to 9, and the Low Energy link layer
+rules of Vol 6, Part B. CI builds and runs them on Linux with gcc and macOS
+with clang under `-Wall -Wextra -Werror`, and again under AddressSanitizer and
+UndefinedBehaviorSanitizer.
+
+They found 51 defects: AUX1, EV3, EV4, EV5 and DV packets never produced a
+payload at all, every connection parameter a PCAPNG file recorded for a
+CONNECT_IND belonged to another part of the packet, and buffers were written
+and read past their ends. [TESTING.md](TESTING.md) has what each test covers
+and where its vectors come from, a row per defect with what a user saw, and the
+numbers the fixes moved, measured before and after.
+
+
 Concepts
 ========
 

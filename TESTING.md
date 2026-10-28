@@ -1,0 +1,281 @@
+# Testing libbtbb
+
+This fork put the library under test. Upstream had three test programs, two
+from 2012 and one from 2015, built only by a `tests/Makefile` from 2011 that
+the normal build never ran; one of the three had not compiled in years. There
+was a Travis configuration that no longer ran. So nothing checked a change.
+
+There are now 12 tests in the build, driven in large part by the Bluetooth Core
+Specification's own published sample data, and they run on every push and pull
+request on Linux and macOS, plain and under AddressSanitizer and
+UndefinedBehaviorSanitizer.
+
+They found 51 defects — what you would expect of decoders nothing had
+exercised: packet types that never produced a payload at all, a capture file
+whose connection parameters all belonged to other parts of the packet, buffers
+written and read past their ends, and hop predictions for channels the piconet
+was not on.
+
+- [How to run them](#how-to-run-them)
+- [What each test covers](#what-each-test-covers)
+- [How big the suite is](#how-big-the-suite-is)
+- [What the tests found](#what-the-tests-found)
+- [Measured improvements](#measured-improvements)
+- [Still unverified on air](#still-unverified-on-air)
+- [Adding to this page](#adding-to-this-page)
+
+## How to run them
+
+```
+$ cmake -S . -B build -DENABLE_PYTHON=OFF -DCMAKE_C_FLAGS="-Wall -Wextra -Werror -Wno-error=implicit-fallthrough"
+$ cmake --build build -j8
+$ ctest --test-dir build
+```
+
+Under the sanitizers, which is what CI's third job does:
+
+```
+$ cmake -S . -B build-asan -DENABLE_PYTHON=OFF \
+        -DCMAKE_C_FLAGS="-Wall -Wextra -Werror -Wno-error=implicit-fallthrough -fsanitize=address,undefined -fno-sanitize-recover=all"
+$ cmake --build build-asan -j8
+$ ctest --test-dir build-asan
+```
+
+One test, `ctest -R piconet --output-on-failure`. Each test is also a plain
+program you can run on its own: `build/tests/test_piconet`. A failure prints
+`FAIL <file>:<line>: <condition>` and the program exits non-zero, so the line
+that failed names the vector.
+
+CI (`.github/workflows/ci.yml`) runs three jobs: Ubuntu 24.04 with gcc,
+macOS 15 with clang, both with `-Wall -Wextra -Werror` and an install into a
+temporary prefix, and Ubuntu 24.04 with clang under AddressSanitizer and
+UndefinedBehaviorSanitizer with `-fno-sanitize-recover=all`.
+
+## What each test covers
+
+Several tests reach functions that are internal to the library, so they
+`#include` the translation unit under test rather than linking the library.
+That is the only way to pin a `static` function without widening the library's
+linkage, and `tests/CMakeLists.txt` says which tests do it.
+
+| Test | Covers | Where the vectors come from |
+|---|---|---|
+| `spec_bredr` | BR/EDR baseband: access codes and sync words, the header HEC, the payload CRC, both FEC codes, the whitening sequence, complete DH1 and DM1 packets, a payload at the longest length every ACL, SCO, eSCO, DV, AUX1 and FHS type allows, truncated captures, uncorrectable FEC blocks, and UAP and CLK6 recovery | Bluetooth Core Specification v5.4, Vol 2, Part G "Sample Data", Sections 3 to 9, with the definitions of Vol 2, Part B. Where the specification publishes no vector for something the library still has to get right, the test builds the packet with its own `spec_hec()`, `spec_whiten()` and `spec_fec23()`, each pinned by published sample data before it is used, so a built packet is the specification's answer and not libbtbb's |
+| `spec_hop` | Connection-state hop selection: the basic kernel, the AFH re-mapping function, the AFH same channel mechanism, and the Nmin fallback | Vol 2, Part G, Section 2: three addresses, the basic sequence and four channel maps each, 512 clock values per table. 7680 vectors, transcribed from the published tables |
+| `spec_le` | Low Energy link layer: physical channel indices, advertising and data PDU headers including Data Length Extension lengths up to 251, and the access address rules | Vol 6, Part B, Sections 1.4.1, 2.1.2, 2.3 and 2.4. The CRC-24, the per-channel whitening and the channel selection algorithms are not in this library, so they have no vectors here |
+| `hop` | `single_hop()` with and without AFH, and `get_hop_pattern()`'s streams and cache | The Ubertooth project's `firmware/tests/test_bluetooth_hop.c`, an independent transcription of Vol 2, Part B, Section 2.6 computed outside either code base. Using them here pins the host's predictions and the channels the board tunes to against one source of truth |
+| `piconet` | Clock recovery (hop reversal): the CLK1-27 candidate list, winnowing it against observed hops, the AFH detector, and the confirmation rule | The hops are produced by `single_hop()`, which `hop` and `spec_hop` pin against the specification, so a "truth" piconet standing in for the device under observation hops the way a real one does |
+| `internal` | The FEC 2/3 code, the sync word syndrome tables, and the packet header decode through both the pieces and `btbb_decode_header()` | The 20 FEC 2/3 blocks and two syndrome values from upstream's `test_fec23.c` (2012) and `test_syndromes.c` (2012), plus the table of 20 UAP, header and HEC rows that was the only real content of upstream's `test_header.c` (2015), whose program never compiled |
+| `capture` | What reaches a capture file: block and option layout, record fields, the four snapshot lengths, header block padding, the option-space limit, and a write to a closed descriptor and to a file at `RLIMIT_FSIZE` | The pcapng specification and the published `LINKTYPE_BLUETOOTH_BREDR_BB` and `LINKTYPE_BLUETOOTH_LE_LL_WITH_PHDR` layouts. Every record is read back out of the file by a small block and option walker rather than compared with the struct that wrote it, so a field at the wrong offset shows up |
+| `capture_internal` | The two record assemblers called directly, so the test owns the record's memory and can set the padding to a known pattern before the record is built | The same layouts; this is the half `capture` cannot see, because a file cannot say what a padding byte held beforehand |
+| `le_long` | A data PDU's length read from all eight bits of the field, payload lengths 0, 1, 27, 31, 32, 55, 56, 100 and 251 preserved with their last byte intact, a header claiming 251 bytes in a 50-byte capture, and the longest packet written to PCAP and PCAPNG and read back | Vol 6, Part B, Section 2.4 lengths and the two published record layouts |
+| `le_print` | What `lell_print()` writes and on which stream: a `CONNECT_REQ`, advertising data carrying 16-bit service UUIDs, the four value lines that carry their own indentation, and seven malformed packets, one per diagnostic message | Hand-built packets, each case comparing the whole of stderr against the expected text and checking stdout carries none of it |
+| `smoke` | The public API end to end: one known packet of each kind decoded, `btbb_gen_syncword()` and `btbb_find_ac()` with and without a bit error, and every frequency from 2400 to 2480 MHz decoded to a channel index and a PCAP `channel_k` | Sync words computed independently from the (64,30) block code in `python/utils/encode_sw.py`, not from the library's own tables |
+| `release_version` | That `cmake/set_release.cmake` produces the version the build claims | The script itself |
+
+## How big the suite is
+
+Counted on 2026-10-28, at `374a48c` on `master`, macOS 15 arm64 with Apple
+clang:
+
+| | Count | How it was counted |
+|---|---|---|
+| Tests in the build | 12 | `ctest` case count; 11 C programs and one CMake script test |
+| Assertion sites | 772 | 758 `CHECK`, `CHECK_EQ`, `CHECK_EQUALS`, `CHECK_CONTAINS`, `CHECK_LACKS` and `XFAIL` call sites across the ten programs that use those macros, plus the 14 explicit failure conditions in `test_le_long.c`, which checks with plain `if` |
+| Assertions executed per run | 175,934 | a scratch copy of the tree with a counter added to each `CHECK` macro body and reported from a destructor, then every test binary run once and the counts summed. The macros do not nest, so nothing is double counted. `test_le_long` is not in this figure |
+| Published spec vectors | 7680 hop frequencies | 15 tables of `TABLE_ENTRIES` (512) in `tests/test_spec_hop.c`: three addresses, the basic sequence and four channel maps each |
+
+Where the assertions are:
+
+| Test | Assertions executed |
+|---|---|
+| `piconet` | 131,575 |
+| `spec_bredr` | 31,707 |
+| `spec_hop` | 7,199 |
+| `capture` | 3,474 |
+| `spec_le` | 984 |
+| `internal` | 457 |
+| `hop` | 221 |
+| `smoke` | 157 |
+| `le_print` | 82 |
+| `capture_internal` | 78 |
+
+The large counts are loops over vectors: `piconet` walks candidate clock lists,
+`spec_bredr` walks every truncation of several packet types, `spec_hop` walks
+the published tables.
+
+## What the tests found
+
+One row per defect a test exposed or holds down. "User impact" is what someone
+running the Ubertooth tools would have seen. Most rows were confirmed by
+reverting that fix alone and watching the suite fail; PRs #28, #30, #34, #36
+and #49 carry the revert tables, and PR #11 a before and after count of wrong
+vectors.
+
+### Decoders: packet types that produced no payload, or the wrong one
+
+| What was wrong | User impact | Pinned by | PR | Issue |
+|---|---|---|---|---|
+| `decode_payload_header()`'s maximum-length table had no AUX1 case, so the length it had just read was clamped to zero | `ubertooth-rx` showed every AUX1 packet as `payload length: 0` | `spec_bredr` | #28 | #18 |
+| `EV3()` and `EV5()` passed the start of the payload to `unwhiten()` for every byte | an eSCO packet's payload was the first byte repeated; no EV3 or EV5 payload ever decoded | `spec_bredr` | #28 | #16 |
+| `EV4()` checked the payload CRC at a length of 1, indexing `payload[-8]`, where `crcgen()` with a negative length returns a constant that reads as "CRC good" 1 time in 65536 | no EV4 payload decoded, and a packet could be reported as CRC-verified without being checked | `spec_bredr` | #28 | #17 |
+| All three eSCO types only tried a candidate length once a further byte had been decoded | no eSCO payload at the longest length its type allows could ever be found | `spec_bredr`, each type at its shortest, longest and a middle length | #28 | #16 |
+| A DV packet's data field was dewhitened from bit 18, where the payload header starts on every other type, instead of continuing past the 80-bit voice field at bit 98 | the length, the data and the CRC of every DV packet were wrong | `spec_bredr`, every clock | #28 | #24 |
+| `DM()` and `fhs()` compared a bit count against the symbols they had, and a rate 2/3 FEC payload arrives in half again as many symbols as it has bits | a capture that ended partway through a packet decoded a payload out of symbols that were not there | `spec_bredr`, every truncation of a DM1, DH1, DM3, DH5, FHS and DV | #28 | #13 |
+| `btbb_decode_header()` and `try_clock()` read the 122 symbols of the access code and header with no check that the packet held them, and the header's majority vote covers for the missing ones | a capture cut one symbol short still decoded to a header that looked good | `spec_bredr` | #28 | #13 |
+| A symbol count below zero, which a caller reaches by subtracting an offset from a capture's length, came back out of the unsigned field as 65535 | every one of the bound checks above was defeated by a negative count | `spec_bredr` | #28 | #13 |
+| The promiscuous access code search read the end of a sync word before checking it had any offset to search | a heap read past the end of the caller's buffer | `spec_bredr`, against streams allocated at exactly the length the header promises is enough (AddressSanitizer catches the revert) | #28 | #13 |
+| An uncorrectable payload FEC block, or a payload header that would not decode, left the length the payload header claimed in place, and `btbb_decode_payload()` marks a packet as having a payload whatever it returns | undecoded bytes reached the dump and the capture files; during clock recovery they were the previous candidate clock's decode | `spec_bredr` | #28 | #13, #33 |
+| `btbb_find_ac()`'s documented bound said it reads `search_length + 72` symbols where it reads `search_length + 63` | a caller sizing its buffer from the header over-allocated, and could not tell what was really required | `spec_bredr`, several offsets with the match at the last of them | #28 | #32 |
+| An LE data PDU's length was read from 5 of the 8 bits of the field, and only 64 bytes of a packet were kept | a Bluetooth 4.2 Data Length Extension packet came out short and misdecoded; on air, 46 bytes where the whole packet had arrived | `le_long`, `spec_le` | #2 | — |
+| `lell_print()` and the PCAP writer read fixed offsets past the 64-byte buffer on a long or noisy packet | a read past the end of the packet's storage | `le_long`, `le_print` | #2, #49 | #35 |
+| `lell_print()` read a `CONNECT_REQ`'s connection parameters, and an advertising PDU's fields, at fixed offsets without checking the payload held them | a `CONNECT_REQ` carrying ten bytes printed a connection access address, a hop increment and a clock accuracy out of whatever followed in the buffer | `le_print` | #49 | #35 |
+| A flags element with no flags in it read its flags byte from past the end of the advertising data | the dump invented a flags byte | `le_print` | #49 | — |
+| An LE data PDU that arrived with no payload reported an LL Control opcode read from the first byte of its CRC | the dump invented an opcode | `le_print` | #49 | — |
+| `le_channel_index()` computed a negative index for a frequency below 2402 MHz and stored it in a `uint8_t` | 2400 MHz decoded as channel 254, which is no channel at all, and a frequency far enough below the band wrapped into the 0 to 36 that `lell_packet_is_data()` reads as a data channel | `smoke`, every frequency from 2400 to 2480 MHz | #30 | #23 |
+| The PCAP pseudo-header's `channel_k` wrapped the same way, at both ends | a reader turning `k` back into a frequency as 2402 + 2k saw 2400 MHz recorded as 2912 MHz | `smoke` | #30 | #23 |
+
+### Hop selection and clock recovery
+
+| What was wrong | User impact | Pinned by | PR | Issue |
+|---|---|---|---|---|
+| AFH hop selection ran every slot through the reduced table of used channels, where the specification keeps a basic-sequence channel the map marks used and re-maps only an unused one | following an adaptive piconet, the host predicted channels the piconet was not on: 12 of 18 reference vectors wrong | `hop`, `spec_hop` | #11 | — |
+| The peripheral slot did not repeat the central slot's channel | the two slots of a pair disagreed in 96% of slots | `hop`, `spec_hop` | #11 | — |
+| A map with fewer used channels than Nmin (20), or no map at all, was adapted to, with a division by zero | a sequence over too few channels, or a crash | `hop`, `spec_hop` | #11 | — |
+| `gen_hops()` took F' from F, already reduced mod 79, rather than from 16 × CLK27-7 | wrong adapted channels | `spec_hop` | #11 | — |
+| The hopping-pattern cache compared only the low four bytes of its key | an adaptive piconet could be handed the basic sequence cached for the same address | `hop`, cache hit and miss | #11, #30 | — |
+| `init_candidates()` sized the candidate list as though the sequence visited all 79 channels evenly, and appended unbounded | starting recovery on an adaptive piconet wrote about 200 kB past the end of a 212 kB heap allocation; any map with 20 to 39 used channels overflowed | `piconet` (AddressSanitizer reports the revert) | #34 | #20 |
+| `channel_winnow()`'s look-back was guarded by `packets_observed > 0`, which is always true inside that loop, so the first packet read `pattern_indices[-1]` | about one attempt in 79 announced "Hopping pattern appears to be AFH" off the first packet alone and then searched a sequence the piconet was not using | `piconet` (UndefinedBehaviorSanitizer reports the revert) | #34 | #19 |
+| Predictions came from a hopping sequence generated once, when recovery started | every channel seen for the first time afterwards left the predictions describing a map the library no longer held, so the true clock was dropped with the wrong candidates and discovery started over | `piconet` | #34 | #12 |
+| `try_hop()` wrote `pattern_indices[packets_observed]` with no bound, unlike the sibling path that checks and resets | writing past the end of the array after 1000 packets | `piconet` | #34 | #23 |
+| One public `clk_offset` field carried 312.5 µs CLKN ticks from one writer and 6-bit 625 µs slots from another | a caller reading it between CLK1-6 and CLK1-27 being found got a number in the wrong unit | `piconet` | #34 | #23 |
+| `btbb_piconet_unref()` did not free the candidate list, and `btbb_init_hop_reversal()` leaked a previous call's | a piconet released during recovery leaked its candidates | `piconet` | #34 | — |
+| A candidate CLK1-27 was accepted as soon as it was the last one left | `ubertooth-rx` reported it had the clock, started following, and decoded nothing, with no way back, because while the AFH map is still being learned a clock that is not the piconet's can match every hop observed so far | `piconet`, a synthetic sequence where the observer is one channel short of the device's map | #49 | #44 |
+| `btbb_piconet_set_afh_map()` generated the whole 2^27-entry hopping sequence, and the allocation was unchecked and written through | `ubertooth-follow` read an adapter's AFH map and then stalled for about 0.6 s per address, holding 128 MB, building a sequence nothing had read since hops started being predicted one at a time; a failed allocation was written through and crashed | `piconet`, which replaces the library's `malloc` and asserts the call allocates nothing | #49 | #41, #38 |
+| The UAP was shifted into a piconet's address as a signed `int` | undefined behaviour for any UAP of 0x80 or more, which the sanitizers report | `piconet` under UndefinedBehaviorSanitizer | #49 | #23 |
+| `fill_hop_pattern()` and `get_hop_pattern()` wrote "Calculating complete hopping sequence.", "Hopping sequence calculated." and "Found hopping sequence in cache." to stdout | a tool streaming its capture to stdout had them mixed into the stream, where a script cannot tell them from capture data | `hop`, both streams captured, on a cache miss and a cache hit | #30 | #14 |
+
+### Capture files
+
+| What was wrong | User impact | Pinned by | PR | Issue |
+|---|---|---|---|---|
+| The PCAPNG CONNECT_IND option was filled from `symbols[0]` where the 34 bytes of the payload start at `symbols[6]` | every connection parameter in the capture belonged to another part of the packet: the access address was the first four bytes of the advertiser's address, the hop increment came out of the supervision timeout, and the last six bytes were not recorded. A reader given that option cannot follow the connection, which is the only reason the option exists | `capture` | #36 | #21 |
+| BR/EDR records never set the four flag bits the published layout defines for the HEC and CRC results | every packet read as "neither checked", so nothing downstream could tell a CRC-verified payload from a guess | `capture`, `capture_internal` | #36 | #27 |
+| A record's alignment padding was whatever the caller's memory held | up to three bytes of unrelated process memory in every record | `capture_internal`, which owns the record's memory and sets it to a known pattern first | #2, #36 | #22 |
+| `pcapng_append_packet()` reported a failed or short write as success | a capture that ran out of disk space was invisible, and the file ended mid-block | `capture`, against a closed descriptor and a file at `RLIMIT_FSIZE` | #36 | #22 |
+| The plain PCAP writers ignored `fwrite()` and always returned success | the same, on that path | `capture` | #36 | #22 |
+| The CONNECT_IND, BD_ADDR and clock interface options declared a length four bytes too long | a reader walking the options falls out of step and `memcpy` reads past the struct | `capture` | #36 | — |
+| Appending an interface option past the space set aside for it wrote beyond the end of the mmapped header block | a long capture with many connections corrupted the file and crashed the writer | `capture` (the revert dies with SIGSEGV) | #36 | #43 |
+| The BR/EDR record struct was 450 bytes for a block of up to 460 | a capture length of 391 or more wrote past the object | `capture_internal`, plus a compile-time assertion | #36 | #23 |
+| `ref_uap << 24` shifted into the sign bit of an `int` | undefined behaviour, which a sanitizer traps | `capture` under UndefinedBehaviorSanitizer | #36 | #23 |
+| A padding length was narrowed from `size_t` to `uint16_t` | at a 64 kB page size the section header written was malformed | `capture`, with a block too large for one padding option | #36 | #23 |
+| Every file declared a snapshot length of 400 | short of the 422 a BR/EDR record reaches, so a reader sizing a buffer from it had too little room, and wrong for the 270 and 284 an LE and a PPI record need | `capture`, all four writers | #36 | — |
+| A packet with no payload declared a zero-length array | undefined behaviour, which a sanitizer traps | `capture` | #36 | #27 |
+| `btbb_decode_header()` did not clear the previous frame's decoded state, and a short frame returned before the clear | a short frame was recorded with the earlier frame's HEC and CRC results, payload and length | `capture` | #36 | — |
+| Records written while the library was still guessing a piconet's upper address part carried a rejected candidate clock's payload and CRC answer | a capture claimed results about traffic that had not been decoded | `capture` | #36 | — |
+| The captured and original lengths in LE PCAP and PCAPNG records were the wrong way round | a reader saw the two lengths swapped | `le_long`, both files read back | #2 | — |
+| `btbb_pcapng_close()` and `lell_pcapng_close()` reported a failure on every close and could not report a real one | a caller could not tell a closed file from a failed one | `capture` | #36 | — |
+
+### Output streams
+
+| What was wrong | User impact | Pinned by | PR | Issue |
+|---|---|---|---|---|
+| `lell_print()` complained about malformed packets with `printf` | the six diagnostic messages landed on stdout in the middle of the packet dump, so a tool writing its capture to stdout had them mixed in and a script could not tell them from packet fields | `le_print`, seven malformed packets, one per message, each comparing the whole of stderr and checking stdout carries none of it | #8 | #4 |
+| Four advertising-data fields printed their indentation before deciding whether the field could be read | with the complaint moved to stderr, a blank indented line would have been left in the dump | `le_print`, a packet whose four fields are all readable | #8 | #4 |
+
+The vectors ported from upstream's own test programs in #9 — the FEC 2/3
+blocks, the syndrome values and the 20-row header table — all passed. They
+found nothing, which is the result: that part of the library was right and is
+now held down.
+
+## Measured improvements
+
+Numbers marked **re-measured** were taken again for this page on 2026-10-28,
+on macOS 15 arm64 with Apple clang and `-DCMAKE_BUILD_TYPE=RelWithDebInfo`,
+comparing `master` at `374a48c` with `53dbf50`, the commit before #49, which is
+where the hopping sequence was removed. The rest are quoted from the PR or
+issue that recorded them, with the source named.
+
+### Memory and time
+
+| | Before | After | Source |
+|---|---|---|---|
+| `btbb_piconet_set_afh_map()`, first call for an address: the `ubertooth-follow` path | 0.61 s | 43 µs | **re-measured**, a program that calls it three times, timed with `CLOCK_MONOTONIC`. The second and third calls were already a microsecond, because the sequence was cached per address |
+| Peak resident memory of that program | 136,347,648 bytes (130 MiB) | 1,540,096 bytes (1.5 MiB) | **re-measured**, `/usr/bin/time -l` |
+| Peak resident memory of `test_hop`, which reached the sequence twice | 270,336,000 bytes (258 MiB) | 2,113,536 bytes (2.0 MiB) | **re-measured** |
+| `test_hop` wall time | 5.76 s | 0.05 s | **re-measured** |
+| Whole `ctest` suite | 16.9 s and 18.9 s, 12/12 | 7.5 s and 6.5 s, 12/12 | **re-measured**, two runs each |
+| Largest single allocation `btbb_piconet_set_afh_map()` requests | 134,217,728 bytes | 0 | `tests/test_piconet.c`, which replaces the library's `malloc` and asserts the call allocates nothing at all |
+
+The 128 MB is `SEQUENCE_LENGTH`, 2^27 bytes: one entry per CLK1-27 value. It
+was built per piconet address and cached, so a tool following several piconets
+paid for it again with each new address. Hops are predicted one at a time now.
+
+`test_piconet` is the one test that got slower, 0.71 s to 1.03 s, because it
+covers more: the confirmation rule, the candidates being chosen again when the
+map changes, and the replaced allocator.
+
+### Correctness
+
+| | Before | After | Source |
+|---|---|---|---|
+| AFH reference hop vectors wrong | 12 of 18 | 0 of 18 | PR #11, the same program against each build |
+| Peripheral slot differs from the central slot it repeats | 63,104 of 65,536 | 0 of 65,536 | PR #11 |
+| Clock recovery against a device whose map the observer is one channel short of, over 400 true-clock values: a wrong CLK1-27 accepted | 99 of 400 | 10 of 400 | PR #49 review, reproduced independently by both reviewers. It is not impossible, and a piconet followed on a wrong clock still has no way back |
+| The same 400: no lock within the hops observed, which is recoverable | 194 | 276 | PR #49. This is what the wrong locks were traded for |
+| The same 400: the true clock found | 84 | 88 | PR #49 |
+| Cost of the confirmation rule where the predictions are exact | — | four more packets to lock (10.7 → 14.7, 45.3 → 49.3, 34.2 → 38.2 over three scenarios) | PR #49, both reviewers independently |
+| Candidate lists rebuilt during a four-minute follow of a non-adaptive piconet, 26,634 candidates each time | 12 | 0 | PR #34, lab board against live traffic |
+| LE symbol storage, and the length the decoder reads | 64 bytes, 5 bits of the field | 260 bytes, all 8 bits, clamped to the 251 the specification allows | PR #2. On air, a packet whose length field claimed more than one record's worth came out whole, where the old library showed 46 bytes |
+| CONNECT_IND option bytes recorded | `symbols[0..33]` | `symbols[6..39]`, confirmed on 8438 real records in one lab run | PR #36. Reverting the offset alone fails 39 checks, every connection parameter among them |
+
+Each capture-file fix was also reverted on its own: 1 to 8 failing checks each,
+two compile errors, one SIGSEGV and two sanitizer reports, 20 rows in PR #36.
+Each clock recovery fix likewise: an AddressSanitizer heap overflow, an
+UndefinedBehaviorSanitizer index of -1, a stack overflow and four check
+failures, 7 rows in PR #34.
+
+## Still unverified on air
+
+Most of the fixes above are in the Classic (BR/EDR) decoders, and the lab has
+Low Energy transmitters only. So these rest on the unit tests until Classic
+test hardware is on the bench. The full test plan for the pin bump, including
+what has been checked on hardware, is
+[SqueakyFloors/ubertooth#736](https://github.com/SqueakyFloors/ubertooth/issues/736).
+
+Waiting on Classic hardware (for example a phone and a headset):
+
+- AFH hop selection and clock recovery: PR #11 and PR #34, and the confirmation
+  rule in PR #49. The results are statistical, so this needs many follow runs
+  compared against the previous pin rather than one pass or fail.
+- BR/EDR capture records: the HEC and CRC flags (#27) and the padding (#22).
+- The eSCO payload decode (#16) over a headset link.
+- The stdout and stale-payload behaviour of the Classic path (#33, #31, #14).
+
+Unit tests only, because they need packet types real stacks rarely send,
+malformed input, or a rare chance event:
+
+- AUX1 (#18), DV (#24), EV4 (#17) and EV5 (#16) payloads.
+- The buffer bounds of #13 and #32, and the channel index bound in PR #30.
+- The over-claimed LE advertising length (#35).
+
+Checked on Low Energy hardware already: the stream split of PR #8 under live
+traffic, the CONNECT_IND option read back from a real connection's capture
+(PR #36), the LE dump bounds of PR #49, and the capture-file layout over
+thousands of real records.
+
+## Adding to this page
+
+If you fix a defect in this library, add its row to the right table in
+[What the tests found](#what-the-tests-found) in the same PR: what was wrong,
+what a user saw, the test that holds it down, your PR and the issue. If your PR
+measured something — memory, time per call, a sweep of clock values, a count of
+vectors that were wrong before and right after — add it to
+[Measured improvements](#measured-improvements) with the source, and say
+whether the figure was measured for that PR or quoted. If the fix cannot be
+exercised on air yet, add it to
+[Still unverified on air](#still-unverified-on-air).
+
+The assertion counts in [How big the suite is](#how-big-the-suite-is) go stale
+as tests are added. They are worth re-counting when a release is cut; the
+method is in that section.
