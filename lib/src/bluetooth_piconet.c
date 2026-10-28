@@ -1141,8 +1141,8 @@ static int give_up_clock(btbb_piconet *pn, uint32_t clkn)
 		 * left range would otherwise have the library reporting the
 		 * same loss for as long as the capture runs. */
 		piconet_note("note: %d clocks given up for this piconet; it may have ended "
-			     "or left range. Still listening, and this is the last time "
-			     "it is reported\n", pn->lock_losses);
+			     "or left range. Still listening, and not saying so again "
+			     "until a clock works\n", pn->lock_losses);
 		pn->lock_loss_reported = 1;
 	}
 

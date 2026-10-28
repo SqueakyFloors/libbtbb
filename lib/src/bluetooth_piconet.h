@@ -75,9 +75,9 @@
  * couple of bit errors in 64: a packet noisy enough to break its own
  * majority-voted header hardly ever gets that far.  Measured over a run of
  * noisy packets (tests/test_clock_sweep.c), of the headers that reach the HEC
- * check under the right clock and UAP, 0.15% fail it at a bit error rate of
- * 0.5% and 24% fail at 10%, where the access code already rejects 96 packets
- * in 100.  Twenty in a row is 4e-57 and 5e-13 of a chance in those two
+ * check under the right clock and UAP, 0.13% fail it at a bit error rate of
+ * 0.5% and 29% fail at 10%, where the access code already rejects 96 packets
+ * in 100.  Twenty in a row is 2e-58 and 2e-11 of a chance in those two
  * cases.  Against a wrong CLK1-6 or UAP it costs almost nothing: the HEC is 8
  * bits, so about one header in 256 passes by chance and twenty failures in a
  * row arrive in about twenty packets.
@@ -98,9 +98,9 @@
  * clock up well inside a second.  A slow link is what this is for: there
  * twenty headers can take minutes, and all that time the caller's receiver is
  * hopping on an offset that has never decoded anything.  Once the run has
- * been failing this long, half the count is taken as enough, so a link at
- * four packets a second costs 2.3 s rather than 4.8 (tests/test_clock_sweep.c
- * measures both).
+ * been failing this long, half the count is taken as enough: at four packets
+ * a second that is the 2.3 s tests/test_clock_sweep.c measures, where twenty
+ * headers at that rate would have taken 4.8.
  *
  * This halves the packets, not the time: the library is called per packet and
  * keeps no timer, so a link slow enough still waits for its tenth failing

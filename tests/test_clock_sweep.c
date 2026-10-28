@@ -340,8 +340,10 @@ static enum outcome attempt(btbb_piconet *pn, btbb_piconet *device,
  * Follow a lock the way the caller does, and see whether the library keeps
  * it.  The receiver sits on the offset the library gave it and hops and
  * counts from there, so the observer hears a packet only in the slot pairs
- * where that lands on the device's channel, and every packet it does hear
- * arrives stamped with the locked clock rather than the device's.  The
+ * where that lands on the device's channel.  Which channel that is comes from
+ * the piconet the library has built, map and all, as the board the caller
+ * hops is given it; every packet the observer does hear arrives stamped with
+ * the locked clock rather than the device's.  The
  * packets are whitened at the device's clock, as the air carries them, so
  * whether a header decodes is decided by the clock under test: a lock whose
  * CLK1-6 differed from the device's would dewhiten to another header and fail
@@ -361,7 +363,7 @@ static int follow_the_lock(btbb_piconet *pn, btbb_piconet *device,
 		uint32_t step = (uint32_t) (i * 2);
 		char stream[200];
 
-		if (channel_at(device, locked + step) !=
+		if (channel_at(pn, locked + step) !=
 		    channel_at(device, true_clock + step))
 			continue;	/* the receiver is on another channel */
 		build_packet(stream, sizeof(stream), hec, 1,
@@ -636,6 +638,18 @@ static void recovery_sweep(const char *label, int trials, int step,
 	 * the time it takes is. */
 	CHECK(r.locks > 0);
 	CHECK(r.lost == r.locks);
+	/* And it takes the same headers and the same time every trial: the
+	 * full count, or half of it where that already spans the time the
+	 * shorter run needs. */
+	if (r.lost > 0) {
+		int expected = (int) slots_apart * (FOLLOW_FAILURES_IN_TIME - 1)
+				>= FOLLOW_FAILURE_SLOTS
+			? FOLLOW_FAILURES_IN_TIME : FOLLOW_HEADER_FAILURES;
+
+		CHECK(r.headers == (long) r.lost * expected);
+		CHECK(r.slots == (long) r.lost * (expected - 1) *
+				 (long) slots_apart);
+	}
 	/* And then the whole point: a clock that never decoded a header is
 	 * not chosen again, where before the same search ended on it. */
 	if (remember)

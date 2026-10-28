@@ -1230,6 +1230,53 @@ static void test_a_clock_that_never_worked_is_not_chosen_again(void)
 }
 
 /*
+ * The clock is remembered as the offset between the two clocks, which is what
+ * makes it the same clock to the next attempt: that attempt has a different
+ * first packet, so the candidate CLK1-27 value standing for the clock given
+ * up is a different number. Here the new first packet is late enough that the
+ * piconet's clock wraps between it and that clock.
+ */
+static void test_a_rejected_clock_survives_a_new_first_packet(void)
+{
+	btbb_piconet *pn = discovered(NULL, 0);
+	btbb_packet *pkt = failed_header_packet();
+	const uint32_t offset = 10;	/* slots between the two clocks */
+	const uint32_t first = SEQUENCE_LENGTH - 4;
+	const uint32_t same_clock = (first + offset) & (SEQUENCE_LENGTH - 1);
+	int with_it, without_it;
+
+	CHECK(pkt != NULL);
+	if (pkt == NULL) {
+		btbb_piconet_unref(pn);
+		return;
+	}
+	follow_a_clock(pn, (int) offset * 2);	/* in CLKN ticks */
+	CHECK(headers_until_the_clock_is_given_up(pn, pkt, 1) > 0);
+	CHECK_EQ(1, pn->num_rejected);
+	CHECK_EQ(offset, pn->rejected_offsets[0]);
+
+	/* discovery again, from a first packet at another time */
+	btbb_piconet_set_uap(pn, TEST_UAP);
+	btbb_piconet_set_flag(pn, BTBB_CLK6_VALID, 1);
+	btbb_piconet_set_flag(pn, BTBB_GOT_FIRST_PACKET, 1);
+	pn->first_pkt_time = first;
+	pn->clk6_offset = (int) (offset & 0x3f);
+	first_hop(pn, channel_at(pn, same_clock));
+	with_it = btbb_init_hop_reversal(0, pn);
+	CHECK(with_it > 1);
+	CHECK(same_clock < offset);	/* the clock really did wrap */
+	CHECK(!candidate_listed(pn, same_clock));
+
+	/* and it is that clock that is missing, not something else */
+	pn->num_rejected = 0;
+	without_it = btbb_init_hop_reversal(0, pn);
+	CHECK_EQ(with_it + 1, without_it);
+	CHECK(candidate_listed(pn, same_clock));
+	btbb_packet_unref(pkt);
+	btbb_piconet_unref(pn);
+}
+
+/*
  * A rejection is only about the hops one UAP predicts. A failed header says
  * the clock or the UAP was wrong without saying which, and both go into the
  * address hop selection runs on, so discovery that goes on to find a
@@ -1303,14 +1350,15 @@ static void test_a_clock_that_worked_is_not_ruled_out(void)
 }
 
 /*
- * How long the clock is kept is bounded in time, not only in packets. On a
- * busy link the full count of failures arrives in a few tens of milliseconds;
- * on a quiet one it could take minutes, and all that time the caller's
- * receiver hops on an offset that has never decoded anything. Once the run
- * has been failing for FOLLOW_FAILURE_SLOTS, the failures it already holds
- * are enough.
+ * A slow link gives a wrong clock up on half the failures. On a busy link the
+ * full count arrives in a few tens of milliseconds; at four packets a second
+ * twenty headers take 4.75 s, and all that time the caller's receiver hops on
+ * an offset that has never decoded anything. Once the run has been failing for
+ * FOLLOW_FAILURE_SLOTS, FOLLOW_FAILURES_IN_TIME of them are enough. It still
+ * takes a packet to answer on, so this halves the headers rather than putting
+ * an upper bound on the time.
  */
-static void test_a_wrong_clock_is_given_up_within_a_few_seconds(void)
+static void test_a_slow_link_gives_a_wrong_clock_up_on_fewer_failures(void)
 {
 	/* 400 slots is a quarter of a second between headers: quiet for a
 	 * followed link, and slow enough that the time bound is reached
@@ -1698,9 +1746,10 @@ int main(void)
 	test_a_failed_payload_is_not_evidence();
 	test_a_clock_the_caller_set_is_kept();
 	test_a_clock_that_never_worked_is_not_chosen_again();
+	test_a_rejected_clock_survives_a_new_first_packet();
 	test_a_rejected_clock_binds_only_under_its_own_uap();
 	test_a_clock_that_worked_is_not_ruled_out();
-	test_a_wrong_clock_is_given_up_within_a_few_seconds();
+	test_a_slow_link_gives_a_wrong_clock_up_on_fewer_failures();
 	test_rejected_clocks_are_forgotten_with_the_lap();
 	test_the_rejected_clocks_are_a_short_list();
 	test_giving_up_is_reported_once();
