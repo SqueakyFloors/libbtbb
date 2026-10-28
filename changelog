@@ -127,14 +127,23 @@ libbtbb (2020-12-R1+fork5) unstable; urgency=low
     winnows again, so every packet after it failed to decode and there was no
     way back. Four further hops now have to agree with a candidate before it
     is accepted, which also gives the map time to gain a channel that rules it
-    out. Of 24 simulated recoveries against a device whose map the observer
-    was one channel short of, 7 locked a wrong clock before and none do now.
-  * An LE advertising PDU that claims a longer payload than arrived no longer
-    has its fields printed out of bytes that were never received. A
-    CONNECT_REQ carrying ten bytes reported a connection access address, a hop
-    increment and a clock accuracy read from whatever followed in the buffer.
-    The dump now says what is missing, on stderr, and prints the bytes that
-    did arrive.
+    out. Simulated against a device whose map the observer is one channel
+    short of, a wrong clock is accepted about a tenth as often: 10 of 400
+    recoveries, where 99 of the same 400 locked one before. It is not
+    impossible, and a piconet followed on a wrong clock still has no way back.
+    What it is traded for is restarts, which are recoverable: in the same 400,
+    the clock went unfound within the hops observed 276 times rather than 194.
+    btbb_winnow() also does nothing once the clock is known, rather than
+    comparing the hop it was found on again.
+  * An LE advertising PDU whose payload is shorter than the fields read from
+    it - because it claims more than arrived, or because its length field is
+    too small for its own type - no longer has those fields printed out of
+    bytes that were never received. A CONNECT_REQ carrying ten bytes reported
+    a connection access address, a hop increment and a clock accuracy read
+    from whatever followed in the buffer. The dump now says what is missing,
+    on stderr, and prints the bytes that did arrive.
+  * An LE data PDU that arrived with no payload no longer reports an LL
+    Control opcode, which was read from the first byte of its CRC.
   * A flags element with no flags in it no longer has a flags byte read from
     past the end of the advertising data.
   * The UAP is widened before it is shifted into a piconet's address. A signed
