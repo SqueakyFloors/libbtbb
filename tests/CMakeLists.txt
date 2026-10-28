@@ -30,6 +30,14 @@ if(BUILD_TESTING)
 
     # The Bluetooth Core specification's own sample data. These also reach
     # library internals, so they compile the translation unit under test.
+    # Also internal, so it compiles the two translation units it reaches into.
+    add_executable(test_piconet test_piconet.c)
+    target_include_directories(test_piconet PRIVATE ${PROJECT_SOURCE_DIR}/lib/src)
+    target_compile_options(test_piconet PRIVATE -std=gnu90)
+    add_test(NAME piconet COMMAND test_piconet)
+    # Each candidate list is chosen by walking 2^21 clock values twice.
+    set_tests_properties(piconet PROPERTIES TIMEOUT 300)
+
     add_executable(test_spec_bredr test_spec_bredr.c)
     target_include_directories(test_spec_bredr PRIVATE ${PROJECT_SOURCE_DIR}/lib/src)
     target_compile_options(test_spec_bredr PRIVATE -std=gnu90)

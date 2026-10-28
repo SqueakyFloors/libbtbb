@@ -83,6 +83,11 @@ struct btbb_piconet {
 	/* number of candidates for CLK1-27 */
 	int num_candidates;
 
+	/* Set when the AFH map changes, because the candidates in
+	 * clock_candidates were chosen from the hop sequence of the map as it
+	 * was then.  Cleared when they are chosen again. */
+	int candidates_stale;
+
 	/* number of packets observed during one attempt at UAP/clock discovery */
 	int packets_observed;
 
@@ -99,10 +104,18 @@ struct btbb_piconet {
 	int pattern_indices[MAX_PATTERN_LENGTH];
 	uint8_t pattern_channels[MAX_PATTERN_LENGTH];
 
-	/* offset between CLKN (local) and CLK of piconet */
+	/* Offset between CLKN (local) and CLK of piconet, in 312.5 us CLKN
+	 * ticks.  Valid once BTBB_CLK27_VALID is set, and what
+	 * btbb_piconet_get_clk_offset() returns. */
 	int clk_offset;
 
-	/* local clock (clkn) at time of first packet */
+	/* Offset between the local and the piconet clock in 625 us CLK1-6
+	 * slots, 6 bits wide.  Found first, while BTBB_CLK6_VALID is set and
+	 * CLK1-27 is still being searched for, so it is a separate field:
+	 * masking clk_offset's CLKN ticks to 6 bits would not give slots. */
+	int clk6_offset;
+
+	/* local clock (CLK1-27) at time of first packet */
 	uint32_t first_pkt_time;
 
 	/* queue of packets to be decoded */

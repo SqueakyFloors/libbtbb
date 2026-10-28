@@ -7,8 +7,33 @@ libbtbb (2020-12-R1+fork5) unstable; urgency=low
     decodes as. A frequency below the band used to come back as a channel
     index of 254 or 255, which is no channel at all, and 2400 MHz as a PCAP
     record saying 2912 MHz.
+  * Recovering a piconet's clock no longer writes about 200 kB past the end of
+    its candidate list when adaptive frequency hopping (AFH) is in use. The
+    list was sized as though the hopping sequence visited all 79 channels
+    evenly, which it does not under AFH, and nothing stopped the search
+    filling it past the end. Any map with 20 to 39 used channels overflowed,
+    whether the map came from observed packets or was read from an adapter and
+    set by ubertooth-follow.
+  * The first packet of a clock recovery attempt no longer makes the library
+    announce "Hopping pattern appears to be AFH" and adapt to a map it never
+    observed. It compared that packet with a non-existent previous one, so
+    roughly one attempt in 79 - whenever the first packet arrived on 2402 MHz -
+    started out searching the wrong hopping sequence and could not find the
+    clock.
+  * Hop predictions during clock recovery now follow the AFH map as it is
+    learned. They used to come from a hopping sequence generated once, when
+    recovery started, so every channel seen for the first time afterwards left
+    the predictions describing a map the library no longer held, and the real
+    clock was often discarded with the wrong candidates. Recovery now also
+    predicts hops one at a time instead of building a 128 MB table of the whole
+    sequence first, so it starts without that allocation or the wait for it.
+  * The hop pattern remembered while reversing hops is bounded, as it already
+    was while finding the UAP, rather than running off the end of the array
+    after 1000 packets.
+  * A piconet released while its clock was still being recovered no longer
+    leaks its candidate list.
 
- -- Russell Wagner <152923636+SqueakyFloors@users.noreply.github.com>  27 Oct 2026 20:00:00 -0700
+ -- Russell Wagner <152923636+SqueakyFloors@users.noreply.github.com>  29 Oct 2026 03:00:00 -0700
 
 libbtbb (2020-12-R1+fork4) unstable; urgency=low
   * LE packets from Bluetooth 4.2 and later devices keep their whole payload.
