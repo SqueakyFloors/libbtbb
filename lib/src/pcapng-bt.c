@@ -254,7 +254,16 @@ int btbb_pcapng_append_packet(btbb_pcapng_handle * h, const uint64_t ns,
 	uint32_t caplen = 0;
 	/* The format gives neither corrected-bits field a validity flag, so a
 	   reader takes both at face value. The payload's count describes the
-	   payload in the record, so it is only recorded alongside one. */
+	   payload in the record, so it is only recorded alongside one.
+
+	   The count goes in as the decoder made it. The published layout
+	   describes this field as running to +180 for the rate 2/3 code,
+	   which corrects one bit per 15-symbol block; the longest payload
+	   that code carries is a DM5's 228 bytes, which is 183 blocks, so a
+	   reception that needed a correction in every block records 183. A
+	   reader is better served by the real number than by one capped to a
+	   description three short of the format's own definition, and a
+	   signed 16-bit field holds it. */
 	int16_t corrected_payload_bits = 0;
 	pcapng_bredr_packet pcapng_pkt;
 

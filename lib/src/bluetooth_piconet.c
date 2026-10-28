@@ -88,6 +88,13 @@ int btbb_init_survey() {
 
 void btbb_init_piconet(btbb_piconet *pn, uint32_t lap)
 {
+	/* The clocks given up so far are this piconet's.  Another LAP is
+	 * another piconet, whose clock has nothing to do with them. */
+	if (lap != pn->LAP) {
+		pn->num_rejected = 0;
+		pn->lock_losses = 0;
+		pn->lock_loss_reported = 0;
+	}
 	pn->LAP = lap;
 	btbb_piconet_set_flag(pn, BTBB_LAP_VALID, 1);
 }
@@ -388,6 +395,63 @@ static char observed_channel(uint32_t clk1_27, btbb_piconet *pn)
 }
 
 /*
+ * A clock as the offset between the piconet's clock and the observer's, in
+ * 625 us slots: the form a clock is remembered in once it has been given up.
+ * A CLK1-27 candidate value cannot be remembered as it stands, because it is
+ * the piconet's clock at the first packet of one discovery attempt and the
+ * next attempt has a different first packet.  The observer's own clock runs
+ * on through both, so the difference identifies the same clock either side of
+ * a restart.  Both clocks count slots and both wrap at SEQUENCE_LENGTH, so
+ * the subtraction is taken modulo that.
+ */
+static uint32_t clock_as_offset(const btbb_piconet *pn, uint32_t clk1_27)
+{
+	return (clk1_27 - pn->first_pkt_time) & (SEQUENCE_LENGTH - 1);
+}
+
+/* The clock being followed, in that same form.  It is read back out of the
+ * CLKN-tick offset the caller was given, which is twice the slot offset. */
+static uint32_t followed_offset(const btbb_piconet *pn)
+{
+	return ((uint32_t) pn->clk_offset >> 1) & (SEQUENCE_LENGTH - 1);
+}
+
+/* Was this clock given up under the UAP the piconet is searching with now?
+ * A rejection made under another UAP describes hops this search does not
+ * predict, so it is not held against it. */
+static int clock_rejected(const btbb_piconet *pn, uint32_t offset)
+{
+	int i;
+
+	for (i = 0; i < pn->num_rejected; i++) {
+		if (pn->rejected_offsets[i] == offset &&
+		    pn->rejected_uaps[i] == pn->UAP)
+			return 1;
+	}
+	return 0;
+}
+
+/* Remember a clock as one not to accept again for this LAP and UAP.  The
+ * oldest is dropped once the list is full: the newest rejection is the one a
+ * restart would otherwise choose again. */
+static void reject_clock(btbb_piconet *pn, uint32_t offset)
+{
+	int i;
+
+	if (clock_rejected(pn, offset))
+		return;
+	if (pn->num_rejected == MAX_REJECTED_CLOCKS) {
+		for (i = 1; i < MAX_REJECTED_CLOCKS; i++) {
+			pn->rejected_offsets[i - 1] = pn->rejected_offsets[i];
+			pn->rejected_uaps[i - 1] = pn->rejected_uaps[i];
+		}
+		pn->num_rejected--;
+	}
+	pn->rejected_uaps[pn->num_rejected] = pn->UAP;
+	pn->rejected_offsets[pn->num_rejected++] = offset;
+}
+
+/*
  * How many entries the candidate list starts with, and the least it grows by.
  * 16384 entries is 64 kB. The list reaches about 26500 entries for the basic
  * hopping sequence and about 105000 for the fewest channels AFH is defined
@@ -430,6 +494,11 @@ static int init_candidates(char channel, int known_clock_bits,
 	for (clk1_27 = (uint32_t) known_clock_bits; clk1_27 < SEQUENCE_LENGTH;
 	     clk1_27 += 0x40) {
 		if (observed_channel(clk1_27, pn) != channel)
+			continue;
+		/* A clock already followed and given up is not a candidate
+		 * again, so discovery starting over cannot end where it just
+		 * came from. */
+		if (clock_rejected(pn, clock_as_offset(pn, clk1_27)))
 			continue;
 		if (count == room) {
 			/* Double the list each time, so the copying costs a
@@ -633,6 +702,7 @@ static void reset(btbb_piconet *pn)
 	btbb_piconet_set_flag(pn, BTBB_FOLLOWING, 0);
 	pn->clock_recovered = 0;
 	pn->follow_header_failures = 0;
+	pn->lock_worked = 0;
 	pn->packets_observed = 0;
 	/* The candidate list has just been freed, so nothing may still read a
 	 * count of it, and the offset it produced is no longer a clock the
@@ -642,6 +712,9 @@ static void reset(btbb_piconet *pn)
 	pn->winnowed = 0;
 	pn->clk27_confirmations = 0;
 	pn->clk_offset = 0;
+	/* The clocks given up for this LAP are the one thing a reset keeps,
+	 * because keeping them is what stops the new search from ending where
+	 * the last one did.  Only a new LAP clears them. */
 
 	/*
 	 * If we have recently observed two packets in a row on the same
@@ -693,6 +766,8 @@ static int channel_winnow(int offset, char channel, btbb_piconet *pn)
 			 * again if following it does not work out. */
 			pn->clock_recovered = 1;
 			pn->follow_header_failures = 0;
+			/* nothing has decoded under this clock yet */
+			pn->lock_worked = 0;
 		}
 	}
 	else if (new_count == 0) {
@@ -1000,6 +1075,85 @@ btbb_piconet *btbb_next_survey_result() {
 	return pn;
 }
 
+/* How long the current run of failing headers has been going, in 625 us
+ * slots.  Both values are clocks the packets carried, so whichever clock the
+ * caller's receiver counts, their difference is elapsed slots; it wraps at
+ * SEQUENCE_LENGTH, so the subtraction is taken modulo that. */
+static uint32_t failure_run_slots(const btbb_piconet *pn, uint32_t clkn)
+{
+	uint32_t slots = (clkn - pn->first_failure_time) &
+			 (SEQUENCE_LENGTH - 1);
+
+	/* A run that reads as more than half the clock's range has not been
+	 * going for eleven hours: the packet clock went backwards, which a
+	 * caller handing over a capture out of order can do. Nothing has
+	 * elapsed as far as the time bound is concerned, so it takes the full
+	 * count of failures. */
+	if (slots > SEQUENCE_LENGTH / 2)
+		return 0;
+	return slots;
+}
+
+/*
+ * Has the run of failing headers said enough to give the clock up?  Either it
+ * holds the full count of failures, or half of them where the run has already
+ * been failing for FOLLOW_FAILURE_SLOTS.  The second is what a slow link
+ * costs: it still takes a packet to answer on, but ten of them rather than
+ * twenty.
+ */
+static int follow_run_is_enough(const btbb_piconet *pn, uint32_t clkn)
+{
+	if (pn->follow_header_failures >= FOLLOW_HEADER_FAILURES)
+		return 1;
+	if (pn->follow_header_failures < FOLLOW_FAILURES_IN_TIME)
+		return 0;
+	return failure_run_slots(pn, clkn) >= FOLLOW_FAILURE_SLOTS;
+}
+
+/*
+ * Give up the clock being followed and start discovery again, which is what
+ * btbb_process_packet() does once the failures have said enough.
+ */
+static int give_up_clock(btbb_piconet *pn, uint32_t clkn)
+{
+	/* A slot is 625 us, so five eighths of a millisecond. */
+	unsigned int ms = (unsigned int) (failure_run_slots(pn, clkn) * 5 / 8);
+
+	if (!pn->lock_loss_reported)
+		piconet_note("note: %d packet headers in a row failed their HEC over %u ms; "
+			     "giving up this clock and UAP and starting discovery again\n",
+			     pn->follow_header_failures, ms);
+
+	/*
+	 * A clock that never decoded one header was never the piconet's, so
+	 * discovery is not to choose it again.  A clock that did work and
+	 * then stopped is given up but not ruled out: it may still be the
+	 * piconet's, on a link that has changed or gone quiet, and ruling it
+	 * out would keep the library from ever locking it again.
+	 */
+	if (!pn->lock_worked)
+		reject_clock(pn, followed_offset(pn));
+
+	pn->lock_losses++;
+	if (pn->lock_losses >= LOCK_LOSS_TRIES && !pn->lock_loss_reported) {
+		/* Said once.  The search carries on either way, each attempt
+		 * ruling out one more clock, but a piconet that has ended or
+		 * left range would otherwise have the library reporting the
+		 * same loss for as long as the capture runs. */
+		piconet_note("note: %d clocks given up for this piconet; it may have ended "
+			     "or left range. Still listening, and not saying so again "
+			     "until a clock works\n", pn->lock_losses);
+		pn->lock_loss_reported = 1;
+	}
+
+	/* The UAP goes with the clock. Discovery cannot find another while
+	 * try_hop() is still filtering on this one, which it does for as long
+	 * as the piconet has one. */
+	pn->UAP = 0;
+	reset(pn);
+	return BTBB_PROCESS_LOCK_LOST;
+}
+
 int btbb_process_packet(btbb_packet *pkt, btbb_piconet *pn) {
 	if (survey_mode) {
 		pn = get_piconet(btbb_packet_get_lap(pkt));
@@ -1044,7 +1198,21 @@ int btbb_process_packet(btbb_packet *pkt, btbb_piconet *pn) {
 			if (btbb_packet_get_flag(pkt, BTBB_HEC_CHECKED)) {
 				if (btbb_packet_get_flag(pkt, BTBB_HEC_VALID)) {
 					pn->follow_header_failures = 0;
+					/* This clock has decoded a header, so
+					 * it was the piconet's at least once.
+					 * Recovery is working for this
+					 * piconet, so the losses that came
+					 * before are history: a loss after
+					 * this one is worth reporting again. */
+					if (pn->clock_recovered) {
+						pn->lock_worked = 1;
+						pn->lock_losses = 0;
+						pn->lock_loss_reported = 0;
+					}
 				} else if (pn->clock_recovered) {
+					if (pn->follow_header_failures == 0)
+						pn->first_failure_time =
+							pkt->clkn;
 					pn->follow_header_failures++;
 					/* Header after header of this piconet
 					 * failing under the clock and UAP
@@ -1055,21 +1223,10 @@ int btbb_process_packet(btbb_packet *pkt, btbb_piconet *pn) {
 					 * the receiver on the offset the
 					 * library gave it, and has to take it
 					 * off again. */
-					if (pn->follow_header_failures >=
-					    FOLLOW_HEADER_FAILURES) {
-						fprintf(stderr, "note: %d packet headers in a row failed their HEC; "
-							"giving up this clock and UAP and starting discovery again\n",
-							pn->follow_header_failures);
-						/* The UAP goes with the
-						 * clock. Discovery cannot find
-						 * another while try_hop() is
-						 * still filtering on this one,
-						 * which it does for as long as
-						 * the piconet has one. */
-						pn->UAP = 0;
-						reset(pn);
-						return BTBB_PROCESS_LOCK_LOST;
-					}
+					if (follow_run_is_enough(pn,
+								 pkt->clkn))
+						return give_up_clock(pn,
+								     pkt->clkn);
 				}
 			}
 		}

@@ -1,4 +1,29 @@
 libbtbb (2020-12-R1+fork5) unstable; urgency=low
+  * A clock the library gave up is not chosen again. Discovery starting over
+    had no memory of the clock that had just failed, so a piconet could lock
+    the same wrong clock, decode nothing, give it up, and go round that loop
+    for as long as the capture ran. Each piconet now remembers the clocks it
+    has given up for its LAP, cleared when the LAP changes, and the search
+    skips them, so each attempt rules one more out. Two cases are left alone:
+    a clock that did decode a header before it stopped working is given up
+    but not ruled out, because it may be the right clock on a link that went
+    bad, and a rejection is only held against a search using the same UAP,
+    because a failed header says the clock or the UAP was wrong without
+    saying which.
+  * A clock whose headers all fail is given up on half as many of them once
+    the failures have been going for two seconds. Twenty failed headers
+    arrive in 24 ms on a link carrying traffic, but at four packets a second
+    they take 4.75 s and on a slower link longer still, and all that time the
+    receiver hops on an offset that has never decoded anything. Ten are now
+    enough there, which is 2.25 s at that rate. It cannot be quicker than the
+    packets arrive: a clock that hears nothing at all leaves nothing to
+    count, and the library is called per packet and keeps no timer.
+  * A piconet that nothing works for is reported once rather than on every
+    loss. After three clocks have been given up for one piconet - which is
+    what a piconet that has ended or left range looks like - the library says
+    so and then keeps looking quietly, instead of writing a note for every
+    loss for as long as the capture runs. A clock that decodes a header
+    starts that count again, so a loss after a lock that worked is reported.
   * btaptap decodes keystrokes again. It read every byte of a capture through
     ord(), which python 3 raises a TypeError for, and the read loop treated
     any TypeError as the end of the capture, so the tool printed nothing and

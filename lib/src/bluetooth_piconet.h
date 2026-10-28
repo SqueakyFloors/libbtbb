@@ -75,9 +75,9 @@
  * couple of bit errors in 64: a packet noisy enough to break its own
  * majority-voted header hardly ever gets that far.  Measured over a run of
  * noisy packets (tests/test_clock_sweep.c), of the headers that reach the HEC
- * check under the right clock and UAP, 0.15% fail it at a bit error rate of
- * 0.5% and 24% fail at 10%, where the access code already rejects 96 packets
- * in 100.  Twenty in a row is 4e-57 and 5e-13 of a chance in those two
+ * check under the right clock and UAP, 0.13% fail it at a bit error rate of
+ * 0.5% and 29% fail at 10%, where the access code already rejects 96 packets
+ * in 100.  Twenty in a row is 2e-58 and 2e-11 of a chance in those two
  * cases.  Against a wrong CLK1-6 or UAP it costs almost nothing: the HEC is 8
  * bits, so about one header in 256 passes by chance and twenty failures in a
  * row arrive in about twenty packets.
@@ -87,6 +87,59 @@
  * rates above are what makes that safe rather than any time bound.
  */
 #define FOLLOW_HEADER_FAILURES 20
+
+/*
+ * How long a run of failing headers has to have been going, in 625 us slots,
+ * for fewer of them to be enough, and how many that is.  3200 slots is 2
+ * seconds.
+ *
+ * At the traffic a followed link carries, FOLLOW_HEADER_FAILURES headers
+ * arrive in a few tens of milliseconds, so that count alone gives a wrong
+ * clock up well inside a second.  A slow link is what this is for: there
+ * twenty headers can take minutes, and all that time the caller's receiver is
+ * hopping on an offset that has never decoded anything.  Once the run has
+ * been failing this long, half the count is taken as enough: at four packets
+ * a second that is the 2.3 s tests/test_clock_sweep.c measures, where twenty
+ * headers at that rate would have taken 4.8.
+ *
+ * This halves the packets, not the time: the library is called per packet and
+ * keeps no timer, so a link slow enough still waits for its tenth failing
+ * header, and a wrong clock that hears nothing at all leaves nothing to count
+ * at all.  Seeing that needs the caller, which knows how long it has been
+ * following in wall-clock time.
+ *
+ * Fewer failures is weaker evidence, which is why this path needs the time as
+ * well: a run that reaches it has been failing for seconds with not one
+ * header checking out.  Measured over noisy packets, the longest run of
+ * failed headers under the right clock and UAP is three in 20000 packets at a
+ * bit error rate of 10%, where the access code search already rejects 96
+ * packets in 100; ten in a row is 4e-6 of a chance there and 1e-17 at a bit
+ * error rate of 2%.  The same measurement runs those packets through the
+ * library itself, at the slowest rate this bound is measured at, and no clock
+ * that was right is ever given up.
+ */
+#define FOLLOW_FAILURE_SLOTS 3200
+#define FOLLOW_FAILURES_IN_TIME 10
+
+/*
+ * How many clock offsets a piconet remembers having given up, and how many
+ * clocks may be given up before the library says it cannot find one.
+ *
+ * Discovery starting over used to have no memory of the clock that had just
+ * failed, so it could choose the same one again, accept it again, fail to
+ * decode again, and go round that loop for as long as the capture ran.  A
+ * rejected clock is kept out of the candidate list instead, so each attempt
+ * rules out one more of them.
+ *
+ * The list is deliberately short.  A clock is rejected on the evidence of one
+ * follow attempt, which is enough to say it never decoded a header and not
+ * enough to be kept forever, so the oldest entry is dropped once the list is
+ * full and what is remembered is always the clocks that failed most recently.
+ * Each entry carries the UAP it was rejected under, because a rejection is
+ * only about the hops that UAP predicts.
+ */
+#define MAX_REJECTED_CLOCKS 8
+#define LOCK_LOSS_TRIES 3
 
 struct btbb_piconet {
 
@@ -162,6 +215,39 @@ struct btbb_piconet {
 	/* Packet headers in a row that failed their HEC while following,
 	 * counted against FOLLOW_HEADER_FAILURES above. */
 	int follow_header_failures;
+
+	/* The clock the first failure of that run arrived at, as the packet
+	 * carried it, so that how long the run has been going is known in
+	 * slots. */
+	uint32_t first_failure_time;
+
+	/* True once a header checked out under the clock being followed: that
+	 * clock has decoded something, whatever happens later, so giving it
+	 * up does not mean it was never the piconet's. */
+	uint8_t lock_worked;
+
+	/* Clocks given up for this LAP, as offsets between the piconet's
+	 * clock and the observer's in 625 us slots, each with the UAP it was
+	 * followed under.  An offset survives discovery starting over, where
+	 * a candidate CLK1-27 value could not: candidates are clocks at the
+	 * first packet of an attempt, and the next attempt has a different
+	 * first packet.  Cleared when the LAP changes, those being another
+	 * piconet's clocks.
+	 *
+	 * The UAP matters because a rejection means the clock or the UAP was
+	 * wrong without saying which: both go into the address hop selection
+	 * runs on.  So a rejected clock is only kept out of a search that is
+	 * using the same UAP; discovery that has gone on to find a different
+	 * one is predicting different hops, and the old rejection says
+	 * nothing about them. */
+	uint32_t rejected_offsets[MAX_REJECTED_CLOCKS];
+	uint8_t rejected_uaps[MAX_REJECTED_CLOCKS];
+	int num_rejected;
+
+	/* How many clocks have been given up for this LAP, and whether the
+	 * library has already said it cannot find one that works. */
+	int lock_losses;
+	uint8_t lock_loss_reported;
 
 	/* CLK1-6 candidates */
 	int clock6_candidates[64];
