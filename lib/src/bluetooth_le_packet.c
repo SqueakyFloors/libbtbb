@@ -36,8 +36,7 @@
  * its CRC. A buffer too small for that is caught here rather than in a
  * capture. */
 typedef char le_symbol_buffer_holds_the_longest_pdu[
-	(MAX_LE_PAYLOAD_LENGTH >= LE_ADV_MAX_PAYLOAD_LENGTH &&
-	 MAX_LE_PAYLOAD_LENGTH >= LE_DATA_MAX_PAYLOAD_LENGTH) ? 1 : -1];
+	(MAX_LE_PAYLOAD_LENGTH >= LE_MAX_PDU_LENGTH) ? 1 : -1];
 
 /* company identifier lookup */
 const char *bt_compidtostr(uint16_t compid);
@@ -327,7 +326,6 @@ void lell_allocate_and_decode_n(const uint8_t *stream, size_t stream_len,
 	size_t copy_len = stream_len < MAX_LE_SYMBOLS ? stream_len : MAX_LE_SYMBOLS;
 	unsigned declared_len = 0;
 	unsigned captured_len = 0;
-	unsigned max_len;
 
 	*pkt = lell_packet_new();
 	if (*pkt == NULL)
@@ -381,16 +379,16 @@ void lell_allocate_and_decode_n(const uint8_t *stream, size_t stream_len,
 	if (copy_len >= 6)
 		declared_len = (*pkt)->symbols[5];
 
-	/* A claim longer than the PDU's own kind allows is not a length the
-	 * decoder can honor, so it is capped there. The symbol buffer holds
-	 * the longest either kind may carry, so this is the spec's limit and
-	 * not the buffer's. */
-	max_len = lell_packet_is_data(*pkt) ? LE_DATA_MAX_PAYLOAD_LENGTH
-	                                    : LE_ADV_MAX_PAYLOAD_LENGTH;
-	if (declared_len > max_len)
-		declared_len = max_len;
-
-	/* The length is what arrived, not what the sender claimed. */
+	/* The length is what arrived, not what the sender claimed.
+	 *
+	 * The claim needs no cap of its own: one octet cannot ask for more
+	 * than the symbol buffer holds. In particular it is not capped at the
+	 * 251 octets a data channel PDU may carry, which would throw away
+	 * exactly the payload the buffer was grown for. A secondary
+	 * advertising channel PDU - AUX_ADV_IND and AUX_CHAIN_IND, which is
+	 * what carries the long payloads of extended advertising - arrives on
+	 * channel indices 0 to 36, the same as a data PDU, so there is
+	 * nothing here to tell the two apart. */
 	(*pkt)->length = declared_len < captured_len ? declared_len : captured_len;
 
 	if (lell_packet_is_data(*pkt)) {

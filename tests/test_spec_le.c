@@ -97,14 +97,23 @@ static void test_channel_indices(void)
  * Section 2.3: advertising physical channel PDUs
  * ------------------------------------------------------------------ */
 
+/* The longest LE frame on air: the access address, the two header octets, the
+ * 255 payload octets a one-octet Length field can claim, and the CRC. Written
+ * out rather than taken from MAX_LE_SYMBOLS, so that a library whose buffer is
+ * shorter fails the checks below instead of overflowing the test's own
+ * frame. */
+#define LONGEST_LE_FRAME 264
+
 /* Lay out a packet the way the decoder receives it, already dewhitened:
- * access address, two header octets, payload, CRC. */
-static int build_le_packet(uint8_t *stream, uint32_t aa, uint8_t header0,
-			   uint8_t length, const uint8_t *payload)
+ * access address, two header octets, payload, CRC. `stream_size` is how many
+ * bytes `stream` holds. */
+static int build_le_packet(uint8_t *stream, size_t stream_size, uint32_t aa,
+			   uint8_t header0, uint8_t length,
+			   const uint8_t *payload)
 {
 	int i;
 
-	memset(stream, 0, MAX_LE_SYMBOLS);
+	memset(stream, 0, stream_size);
 	stream[0] = (uint8_t) (aa & 0xff);
 	stream[1] = (uint8_t) ((aa >> 8) & 0xff);
 	stream[2] = (uint8_t) ((aa >> 16) & 0xff);
@@ -118,8 +127,8 @@ static int build_le_packet(uint8_t *stream, uint32_t aa, uint8_t header0,
 	return 6 + length + 3;
 }
 
-/* The longest payload the decoder's buffer holds. */
-#define MAX_BUILT_PAYLOAD MAX_LE_PAYLOAD_LENGTH
+/* The longest payload a one-octet Length field can claim. */
+#define MAX_BUILT_PAYLOAD 255
 
 /*
  * Section 2.3: the header's first octet is the 4-bit PDU Type, one reserved
@@ -152,8 +161,8 @@ static void test_advertising_pdu_header(void)
 
 		for (i = 0; i < 37; i++)
 			payload[i] = (uint8_t) i;
-		length = build_le_packet(stream, LE_ADV_AA, header0, 37,
-					 payload);
+		length = build_le_packet(stream, sizeof(stream), LE_ADV_AA,
+					 header0, 37, payload);
 
 		lell_allocate_and_decode_n(stream, (size_t) length, 2402, 0,
 					   &pkt);
@@ -176,8 +185,8 @@ static void test_advertising_pdu_header(void)
 	{
 		uint8_t stream[MAX_LE_SYMBOLS];
 		lell_packet *pkt = NULL;
-		int length = build_le_packet(stream, 0x8e89bed7, ADV_IND, 6,
-					     NULL);
+		int length = build_le_packet(stream, sizeof(stream),
+					     0x8e89bed7, ADV_IND, 6, NULL);
 
 		lell_allocate_and_decode_n(stream, (size_t) length, 2426, 0,
 					   &pkt);
@@ -213,8 +222,8 @@ static void test_advertising_pdu_length_is_eight_bits(void)
 		for (i = 0; i < LENGTHS[row]; i++)
 			payload[i] = (uint8_t) (i + 1);
 		/* ADV_EXT_IND is PDU type 0b0111 */
-		length = build_le_packet(stream, LE_ADV_AA, 0x07,
-					 LENGTHS[row], payload);
+		length = build_le_packet(stream, sizeof(stream), LE_ADV_AA,
+					 0x07, LENGTHS[row], payload);
 
 		lell_allocate_and_decode_n(stream, (size_t) length, 2402, 0,
 					   &pkt);
@@ -230,32 +239,65 @@ static void test_advertising_pdu_length_is_eight_bits(void)
 		lell_packet_unref(pkt);
 	}
 
-	/*
-	 * The top of the range: a Length of 255 is 264 bytes of packet, which
-	 * is as long as an advertising channel PDU gets. Every payload octet
-	 * has to come back, and the three bytes after them have to be the CRC
-	 * and not payload. AUX_ADV_IND and AUX_CHAIN_IND reach these lengths,
-	 * so this is not a synthetic corner.
-	 */
+	/* a claim of 255 where only 37 octets arrived still reports the 37 */
 	{
-		uint8_t stream[MAX_LE_SYMBOLS];
+		uint8_t stream[LONGEST_LE_FRAME];
+		lell_packet *pkt = NULL;
+
+		build_le_packet(stream, sizeof(stream), LE_ADV_AA, 0x07, 255,
+				NULL);
+		lell_allocate_and_decode_n(stream, 9 + 37, 2402, 0, &pkt);
+		CHECK(pkt != NULL);
+		if (pkt == NULL)
+			return;
+		CHECK(lell_get_payload_length(pkt) == 37);
+		lell_packet_unref(pkt);
+	}
+}
+
+/*
+ * Section 2.3: "The valid range of the Length field shall be 1 to 255
+ * octets", and extended advertising uses the top of it: AUX_ADV_IND and
+ * AUX_CHAIN_IND carry the payload an ADV_EXT_IND only points at.
+ *
+ * Those are secondary advertising channel PDUs, so they arrive on the same
+ * channels as connection traffic - indices 0 to 36, where the library's
+ * lell_packet_is_data() reads a packet as a data PDU. A 255-octet PDU there
+ * must still come back whole: capping it at the 251 a data PDU may carry
+ * would lose its last four octets and report three of them as its CRC, which
+ * is what a 260-byte symbol buffer used to do.
+ *
+ * Every payload octet has to come back, and the three bytes after them have
+ * to be the CRC.
+ */
+static void test_longest_pdu_on_every_channel(void)
+{
+	/* 2402 MHz is primary advertising channel 37; 2404 and 2440 MHz are
+	 * secondary advertising channel indices 0 and 17, which are also the
+	 * data channels a followed connection hops over. */
+	static const uint16_t CHANNELS[] = { 2402, 2404, 2440 };
+	size_t row;
+
+	for (row = 0; row < sizeof(CHANNELS) / sizeof(CHANNELS[0]); row++) {
+		uint8_t stream[LONGEST_LE_FRAME];
 		uint8_t payload[MAX_BUILT_PAYLOAD];
 		lell_packet *pkt = NULL;
 		int length, i;
 
-		CHECK(MAX_BUILT_PAYLOAD == 255);
 		for (i = 0; i < 255; i++)
 			payload[i] = (uint8_t) (0x40 + i);
-		/* AUX_ADV_IND is carried in an ADV_EXT_IND, PDU type 0b0111 */
-		length = build_le_packet(stream, LE_ADV_AA, 0x07, 255,
-					 payload);
-		CHECK(length == 264);
+		/* ADV_EXT_IND and AUX_ADV_IND share PDU type 0b0111; which
+		 * one it is follows from the channel it arrived on. */
+		length = build_le_packet(stream, sizeof(stream), LE_ADV_AA,
+					 0x07, 255, payload);
+		CHECK(length == LONGEST_LE_FRAME);
 
-		lell_allocate_and_decode_n(stream, (size_t) length, 2402, 0,
-					   &pkt);
+		lell_allocate_and_decode_n(stream, (size_t) length,
+					   CHANNELS[row], 0, &pkt);
 		CHECK(pkt != NULL);
 		if (pkt == NULL)
 			return;
+
 		CHECK(lell_get_payload_length(pkt) == 255);
 		for (i = 0; i < 255; i++)
 			CHECK(pkt->symbols[6 + i] == (uint8_t) (0x40 + i));
@@ -263,16 +305,6 @@ static void test_advertising_pdu_length_is_eight_bits(void)
 		for (i = 0; i < 3; i++)
 			CHECK(pkt->symbols[6 + 255 + i] ==
 			      (uint8_t) (0xc0 + i));
-		lell_packet_unref(pkt);
-
-		/* a claim of 255 where only 37 octets arrived still
-		 * reports the 37 */
-		pkt = NULL;
-		lell_allocate_and_decode_n(stream, 9 + 37, 2402, 0, &pkt);
-		CHECK(pkt != NULL);
-		if (pkt == NULL)
-			return;
-		CHECK(lell_get_payload_length(pkt) == 37);
 		lell_packet_unref(pkt);
 	}
 }
@@ -300,8 +332,8 @@ static void test_data_pdu_header_and_length(void)
 
 		for (i = 0; i < LENGTHS[row]; i++)
 			payload[i] = (uint8_t) (0x80 + i);
-		length = build_le_packet(stream, 0x50655dab, 0x01,
-					 LENGTHS[row], payload);
+		length = build_le_packet(stream, sizeof(stream), 0x50655dab,
+					 0x01, LENGTHS[row], payload);
 
 		lell_allocate_and_decode_n(stream, (size_t) length, 2440, 0,
 					   &pkt);
@@ -327,8 +359,8 @@ static void test_data_pdu_header_and_length(void)
 						(llid | (nesn << 2) |
 						 (sn << 3) | (md << 4));
 					int length = build_le_packet(
-						stream, 0x50655dab, header0,
-						4, NULL);
+						stream, sizeof(stream),
+						0x50655dab, header0, 4, NULL);
 
 					lell_allocate_and_decode_n(
 						stream, (size_t) length, 2440,
@@ -348,15 +380,19 @@ static void test_data_pdu_header_and_length(void)
 }
 
 /*
- * A length field beyond the 251 octets Section 2.4 allows is not a length the
- * decoder can honor, and neither is one longer than what was captured. The
- * symbol buffer is long enough for the 255 an advertising PDU may claim, so
- * the 251 here is the specification's limit for this kind of PDU and not the
- * buffer running out.
+ * A length longer than what was captured is not a length the decoder can
+ * honor.
+ *
+ * A claim of 255 on one of these channels is not capped at the 251 octets
+ * Section 2.4 allows a data PDU, even though 255 is more than a data PDU may
+ * carry: a secondary advertising channel PDU arrives on the same channels and
+ * does reach 255, and nothing in the packet says which it is. Reporting what
+ * arrived keeps the long PDU whole, where capping would lose its last four
+ * octets.
  */
 static void test_data_pdu_length_bounds(void)
 {
-	uint8_t stream[MAX_LE_SYMBOLS];
+	uint8_t stream[LONGEST_LE_FRAME];
 	lell_packet *pkt = NULL;
 
 	memset(stream, 0, sizeof(stream));
@@ -371,7 +407,7 @@ static void test_data_pdu_length_bounds(void)
 	CHECK(pkt != NULL);
 	if (pkt == NULL)
 		return;
-	CHECK(lell_get_payload_length(pkt) == 251);
+	CHECK(lell_get_payload_length(pkt) == 255);
 	lell_packet_unref(pkt);
 
 	/* only 20 bytes captured, so only 11 of them can be payload */
@@ -427,8 +463,9 @@ static void test_data_access_address_rules(void)
 	for (row = 0; row < sizeof(OFFENDERS) / sizeof(OFFENDERS[0]); row++) {
 		uint8_t stream[MAX_LE_SYMBOLS];
 		lell_packet *pkt = NULL;
-		int length = build_le_packet(stream, OFFENDERS[row].aa, 0x01,
-					     4, NULL);
+		int length = build_le_packet(stream, sizeof(stream),
+					     OFFENDERS[row].aa, 0x01, 4,
+					     NULL);
 
 		lell_allocate_and_decode_n(stream, (size_t) length, 2440, 0,
 					   &pkt);
@@ -448,7 +485,8 @@ static void test_data_access_address_rules(void)
 	for (row = 0; row < sizeof(COMPLIANT) / sizeof(COMPLIANT[0]); row++) {
 		uint8_t stream[MAX_LE_SYMBOLS];
 		lell_packet *pkt = NULL;
-		int length = build_le_packet(stream, COMPLIANT[row], 0x01, 4,
+		int length = build_le_packet(stream, sizeof(stream),
+					     COMPLIANT[row], 0x01, 4,
 					     NULL);
 
 		lell_allocate_and_decode_n(stream, (size_t) length, 2440, 0,
@@ -473,6 +511,7 @@ int main(void)
 	test_channel_indices();
 	test_advertising_pdu_header();
 	test_advertising_pdu_length_is_eight_bits();
+	test_longest_pdu_on_every_channel();
 	test_data_pdu_header_and_length();
 	test_data_pdu_length_bounds();
 	test_data_access_address_rules();
