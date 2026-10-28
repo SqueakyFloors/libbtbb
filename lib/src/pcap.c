@@ -210,7 +210,12 @@ btbb_pcap_append_packet(btbb_pcap_handle * h, const uint64_t ns,
 		uint32_t caplen = 0;
 		pcap_bredr_packet pcap_pkt;
 
-		if ((payload_length > 0) &&
+		/* Only a payload the decoder produced for this packet goes in
+		   the record. A rejected candidate clock from the search for
+		   a piconet's address part leaves a payload behind without
+		   that flag. */
+		if (btbb_packet_get_flag(pkt, BTBB_HAS_PAYLOAD) &&
+		    (payload_length > 0) &&
 		    (payload_length <= MAX_PAYLOAD_LENGTH / 8)) {
 			caplen = (uint32_t) btbb_get_payload_packed( pkt, (char *) &payload_bytes[0] );
 		}

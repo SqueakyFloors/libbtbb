@@ -377,6 +377,11 @@ PCAPNG_RESULT pcapng_append_packet( PCAPNG_HANDLE * handle,
 
 PCAPNG_RESULT pcapng_close( PCAPNG_HANDLE * handle )
 {
+	PCAPNG_RESULT retval = PCAPNG_OK;
+
+	if (handle == NULL) {
+		return PCAPNG_INVALID_HANDLE;
+	}
 	if (handle->interface_description &&
 	    (handle->interface_description != MAP_FAILED)) {
 		(void) munmap( handle->interface_description,
@@ -387,8 +392,10 @@ PCAPNG_RESULT pcapng_close( PCAPNG_HANDLE * handle )
 		(void) munmap( handle->section_header,
 			       handle->section_header_size );
 	}
-	if (handle->fd != -1) {
-		(void) close( handle->fd );
+	/* Closing is the last chance to notice that part of the capture never
+	   reached the file. */
+	if ((handle->fd != -1) && (close( handle->fd ) != 0)) {
+		retval = PCAPNG_FILE_WRITE_ERROR;
 	}
-	return PCAPNG_OK;
+	return retval;
 }

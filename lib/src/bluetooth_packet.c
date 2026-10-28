@@ -1410,7 +1410,9 @@ int btbb_decode_payload(btbb_packet* pkt)
 
 	/* Nothing is known about this payload's CRC until one of the type
 	 * decoders below checks it, and the types whose payload has no CRC
-	 * never will. */
+	 * never will. btbb_decode_header() has already cleared these in
+	 * every flow the library itself takes; this is for a caller that
+	 * changes the packet type between two calls here. */
 	btbb_packet_set_flag(pkt, BTBB_CRC_CHECKED, 0);
 	btbb_packet_set_flag(pkt, BTBB_CRC_CORRECT, 0);
 

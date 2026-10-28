@@ -102,6 +102,13 @@ libbtbb (2020-12-R1+fork5) unstable; urgency=low
     the same where 284 is.
   * Writing a record for a packet with no payload, and recording a reference
     UAP of 0x80 or above, no longer rely on behaviour C leaves undefined.
+  * A record carries only a payload the decoder produced for that packet.
+    While the library is still guessing a piconet's upper address part it
+    decodes the same packet at candidate clocks and throws the results away,
+    and the last one it tried used to end up in the capture.
+  * btbb_pcapng_close() and lell_pcapng_close() return 0 on success. They
+    reported a failure on every close before, and now report one when the
+    file could not be closed, as the PCAP writers do.
   * New packet flags BTBB_HEC_CHECKED, BTBB_HEC_VALID and BTBB_CRC_CHECKED,
     which with the existing BTBB_CRC_CORRECT say what the decoder checked and
     what it found. BTBB_CRC_CORRECT was never set before.

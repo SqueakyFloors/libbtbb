@@ -254,7 +254,11 @@ int btbb_pcapng_append_packet(btbb_pcapng_handle * h, const uint64_t ns,
 	uint32_t caplen = 0;
 	pcapng_bredr_packet pcapng_pkt;
 
-	if ((payload_length > 0) && (payload_length <= MAX_PAYLOAD_LENGTH / 8)) {
+	/* Only a payload the decoder produced for this packet goes in the
+	   record. A rejected candidate clock from the search for a piconet's
+	   address part leaves a payload behind without that flag. */
+	if (btbb_packet_get_flag(pkt, BTBB_HAS_PAYLOAD) &&
+	    (payload_length > 0) && (payload_length <= MAX_PAYLOAD_LENGTH / 8)) {
 		caplen = (uint32_t) btbb_get_payload_packed( pkt, &payload_bytes[0] );
 	}
 
@@ -351,11 +355,13 @@ int btbb_pcapng_record_btclock(btbb_pcapng_handle * h, const uint64_t bdaddr,
 
 int btbb_pcapng_close(btbb_pcapng_handle * h)
 {
-	pcapng_close( (PCAPNG_HANDLE *) h );
+	PCAPNG_RESULT result = PCAPNG_INVALID_HANDLE;
+
 	if (h) {
+		result = pcapng_close( (PCAPNG_HANDLE *) h );
 		free( h );
 	}
-	return -PCAPNG_INVALID_HANDLE;
+	return -result;
 }
 
 /* --------------------------------- Low Energy ---------------------------- */
@@ -546,9 +552,11 @@ lell_pcapng_record_connect_req(lell_pcapng_handle * h, const uint64_t ns,
 
 int lell_pcapng_close(lell_pcapng_handle *h)
 {
-	pcapng_close( (PCAPNG_HANDLE *) h );
+	PCAPNG_RESULT result = PCAPNG_INVALID_HANDLE;
+
 	if (h) {
+		result = pcapng_close( (PCAPNG_HANDLE *) h );
 		free( h );
 	}
-	return -PCAPNG_INVALID_HANDLE;
+	return -result;
 }

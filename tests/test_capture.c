@@ -379,7 +379,7 @@ static void test_bredr_pcapng_record(void)
 	/* a second record with a reference UAP whose top bit is set */
 	CHECK(btbb_pcapng_append_packet(h, 1000000008ull, -20, -80,
 					SPEC_DH1_LAP, 0x80, pkt) == 0);
-	CHECK(btbb_pcapng_close(h) != 0);	/* returns -PCAPNG_INVALID_HANDLE */
+	CHECK(btbb_pcapng_close(h) == 0);
 	btbb_packet_unref(pkt);
 
 	CHECK(read_capture(filename));
@@ -757,6 +757,66 @@ static void test_bredr_voice_payload_has_no_crc(void)
 }
 
 /*
+ * The other side of that: an eSCO payload whose CRC does come out is still
+ * reported. The decoder finds the length by trying each one, so this packet
+ * sends the specification's DH1 payload, whose CRC is right at 8 bytes, under
+ * an HV3 header and with one byte to spare, which is what EV3() needs to
+ * reach the check at that length.
+ */
+static void test_bredr_esco_crc_reported(void)
+{
+	const char *filename = "test_capture_ev3.pcapng";
+	char header_symbols[55];
+	char payload[sizeof(SPEC_DH1_PAYLOAD) + 8];
+	char stream[1024];
+	btbb_pcapng_handle *h = NULL;
+	btbb_packet *pkt;
+	uint16_t header_data = (uint16_t) (1 | (7 << 3));
+	size_t blk, data;
+	int length, hec;
+
+	unlink_quietly(filename);
+	hec = hec_for(header_data, SPEC_DH1_UAP);
+	CHECK(hec >= 0);
+	if (hec < 0)
+		return;
+	encode_header_13(header_data, (uint8_t) hec, header_symbols);
+	strcpy(payload, SPEC_DH1_PAYLOAD);
+	strcat(payload, "00000000");
+	length = build_bredr_stream(stream, SPEC_DH1_LAP, header_symbols,
+				    payload);
+	pkt = decode_bredr(stream, length, SPEC_DH1_UAP);
+	CHECK(pkt != NULL);
+	if (pkt == NULL)
+		return;
+	CHECK(btbb_packet_get_payload_length(pkt) == 8);
+
+	CHECK(btbb_pcapng_create_file(filename, "test", &h) == 0);
+	if (h == NULL) {
+		btbb_packet_unref(pkt);
+		return;
+	}
+	CHECK(btbb_pcapng_append_packet(h, 21ull, -20, -80, SPEC_DH1_LAP,
+					SPEC_DH1_UAP, pkt) == 0);
+	CHECK(btbb_pcapng_close(h) == 0);
+	btbb_packet_unref(pkt);
+
+	CHECK(read_capture(filename));
+	unlink_quietly(filename);
+	if (capture_len == 0)
+		return;
+	blk = find_block(BLOCK_TYPE_ENHANCED_PACKET, 0);
+	CHECK(blk < capture_len);
+	if (blk >= capture_len)
+		return;
+	data = blk + 28;
+	CHECK((rd16(data + 20) &
+	       (BREDR_CRC_CHECKED | BREDR_CRC_VALID)) ==
+	      (BREDR_CRC_CHECKED | BREDR_CRC_VALID));
+	CHECK((rd16(data + 20) & BREDR_PAYLOAD_PRESENT) != 0);
+}
+
+/*
  * While the library is still guessing a piconet's upper address part it
  * decodes the same packet at up to 64 candidate clocks and keeps the one
  * whose CRC comes out. Those failures say the guess was wrong, not that the
@@ -813,6 +873,9 @@ static void test_bredr_uap_search(void)
 		CHECK(btbb_process_packet(pkt, pn) == 0);
 		found = btbb_piconet_get_flag(pn, BTBB_UAP_VALID);
 		CHECK(found == (pass == 0));
+		/* the search decoded no payload of its own, whatever it left
+		   in the packet from a candidate it tried */
+		CHECK(btbb_packet_get_flag(pkt, BTBB_HAS_PAYLOAD) == 0);
 		/* the CRC answer stays on the packet only when it is the one
 		   that settled the address part */
 		CHECK(btbb_packet_get_flag(pkt, BTBB_CRC_CHECKED) == found);
@@ -858,13 +921,16 @@ static void test_bredr_uap_search(void)
 			CHECK((rd16(data + 20) &
 			       (BREDR_CRC_CHECKED | BREDR_CRC_VALID)) == 0);
 		}
+		/* no payload of the search's own, so none in the record */
+		CHECK((rd16(data + 20) & BREDR_PAYLOAD_PRESENT) == 0);
+		CHECK(rd32(blk + 20) == 22);
 	}
 }
 
 /*
- * A packet handed new symbols keeps its decoded state until something
- * replaces it, so a capture that reuses one packet for every frame, as the
- * Ubertooth host does, must not carry one frame's results into the next.
+ * btbb_packet_set_data() replaces a packet's symbols and resets none of its
+ * decoded state, so a caller that hands one packet a second frame must not
+ * get the first frame's results or payload recorded for it.
  */
 static void test_bredr_reused_packet(void)
 {
@@ -1703,6 +1769,7 @@ int main(void)
 	test_bredr_pcapng_empty_payload();
 	test_bredr_failed_checks();
 	test_bredr_voice_payload_has_no_crc();
+	test_bredr_esco_crc_reported();
 	test_bredr_uap_search();
 	test_bredr_reused_packet();
 	test_bredr_interface_options();
