@@ -1415,10 +1415,17 @@ static void test_esco_payload_lengths(void)
 		int fec23;
 	} CASES[] = {
 		{ "EV3",  PACKET_TYPE_HV3,   1, 0 },
+		{ "EV3",  PACKET_TYPE_HV3,  10, 0 },
 		{ "EV3",  PACKET_TYPE_HV3,  30, 0 },
 		{ "EV4",  PACKET_TYPE_EV4,   1, 1 },
+		{ "EV4",  PACKET_TYPE_EV4,   3, 1 },
+		/* 118 bytes plus the CRC is 960 bits, an exact number of FEC
+		 * blocks, so the last length the search tries is the one the
+		 * last block completes */
+		{ "EV4",  PACKET_TYPE_EV4, 118, 1 },
 		{ "EV4",  PACKET_TYPE_EV4, 120, 1 },
 		{ "EV5",  PACKET_TYPE_EV5,   1, 0 },
+		{ "EV5",  PACKET_TYPE_EV5,  60, 0 },
 		{ "EV5",  PACKET_TYPE_EV5, 180, 0 }
 	};
 	size_t row;
@@ -1501,43 +1508,43 @@ static void test_esco_truncated_capture(void)
 	static const struct {
 		const char *name;
 		uint8_t type;
-		int fec23;
 	} CASES[] = {
-		{ "EV3", PACKET_TYPE_HV3, 0 },
-		{ "EV4", PACKET_TYPE_EV4, 1 },
-		{ "EV5", PACKET_TYPE_EV5, 0 }
+		{ "EV3", PACKET_TYPE_HV3 },
+		{ "EV4", PACKET_TYPE_EV4 },
+		{ "EV5", PACKET_TYPE_EV5 }
 	};
 	size_t row;
 
 	for (row = 0; row < sizeof(CASES) / sizeof(CASES[0]); row++) {
 		/*
-		 * A body of this length was chosen because no shorter length
-		 * of it happens to agree with the CRC, so every truncation
-		 * below really has no length to find. Another body may not,
-		 * and the check that nothing claims a CRC match would then
-		 * fail for a reason that is not a bug.
+		 * This body length was chosen because no shorter length of it
+		 * happens to agree with the CRC, so every truncation below
+		 * really has no length to find. Another body may not, and the
+		 * check that nothing claims a CRC match would then fail for a
+		 * reason that is not a bug.
 		 */
-		const int body = 24;
-		char bits[(24 + 2) * 8 + 10];
+		enum { BODY = 24 };
+		char bits[(BODY + 2) * 8 + 10];
 		char payload[MAX_SYMBOLS];
 		char stream[MAX_SYMBOLS];
 		uint16_t header_data;
-		int data_bits = (body + 2) * 8;
+		int fec23 = CASES[row].type == PACKET_TYPE_EV4;
+		int data_bits = (BODY + 2) * 8;
 		int payload_symbols, full_length, cut, i, bit;
 		uint16_t crc;
 		const int clock = 0x2d;
 
 		memset(bits, 0, sizeof(bits));
-		for (i = 0; i < body; i++)
+		for (i = 0; i < BODY; i++)
 			for (bit = 0; bit < 8; bit++)
 				bits[i * 8 + bit] =
 					(char) (((0x10 + i) >> bit) & 1);
-		crc = crcgen(bits, body * 8, 0x47);
+		crc = crcgen(bits, BODY * 8, 0x47);
 		for (bit = 0; bit < 16; bit++)
-			bits[body * 8 + bit] = (char) ((crc >> bit) & 1);
+			bits[BODY * 8 + bit] = (char) ((crc >> bit) & 1);
 		spec_whiten(bits, data_bits, clock, 18);
 
-		if (CASES[row].fec23) {
+		if (fec23) {
 			int blocks = (data_bits + 9) / 10;
 
 			spec_fec23(bits, payload, blocks * 10);
@@ -1564,7 +1571,7 @@ static void test_esco_truncated_capture(void)
 				return;
 			CHECK(btbb_decode_header(pkt) == 1);
 
-			if (CASES[row].type == PACKET_TYPE_EV4) {
+			if (fec23) {
 				rv = EV4(clock, pkt);
 				/* whole FEC blocks, 15 symbols for 10 bits */
 				available = (available / 15) * 10;
