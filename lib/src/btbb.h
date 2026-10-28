@@ -202,6 +202,10 @@ uint32_t btbb_piconet_get_lap(const btbb_piconet *pn);
 uint16_t btbb_piconet_get_nap(const btbb_piconet *pn);
 uint64_t btbb_piconet_get_bdaddr(const btbb_piconet *pn);
 
+/* The offset between the local clock and the piconet's, in 312.5 us CLKN
+   ticks, which is what a receiver is told to hop on. It means something only
+   while BTBB_CLK27_VALID is set: before a clock is recovered, and again after
+   one is given up, it reads 0. */
 int btbb_piconet_get_clk_offset(const btbb_piconet *pn);
 void btbb_piconet_set_clk_offset(btbb_piconet *pn, int clk_offset);
 

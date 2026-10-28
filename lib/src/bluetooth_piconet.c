@@ -602,6 +602,14 @@ static void reset(btbb_piconet *pn)
 	pn->clock_recovered = 0;
 	pn->follow_header_failures = 0;
 	pn->packets_observed = 0;
+	/* The candidate list has just been freed, so nothing may still read a
+	 * count of it, and the offset it produced is no longer a clock the
+	 * caller can hop on: btbb_piconet_get_clk_offset() reads 0 until
+	 * BTBB_CLK27_VALID is set again. */
+	pn->num_candidates = 0;
+	pn->winnowed = 0;
+	pn->clk27_confirmations = 0;
+	pn->clk_offset = 0;
 
 	/*
 	 * If we have recently observed two packets in a row on the same

@@ -964,11 +964,56 @@ static void test_a_run_of_header_failures_gives_up_the_clock(void)
 	 */
 	for (i = 0; i < 2 * FOLLOW_HEADER_FAILURES; i++)
 		CHECK_EQ(0, btbb_process_packet(pkt, pn));
-	CHECK(btbb_piconet_get_uap(pn) != TEST_UAP);
 	/* the candidates are the UAP these headers do check out against */
 	CHECK_EQ(OTHER_UAP, pn->clock6_candidates[0]);
 	btbb_packet_unref(pkt);
 	btbb_piconet_unref(pn);
+}
+
+/*
+ * And nothing else of the old lock is left to get in the way of recovering:
+ * every field clock recovery works from reads as it does on a piconet that
+ * has only just been discovered. The AFH map is the exception, kept on
+ * purpose so the new search starts from the channels already seen.
+ */
+static void test_a_lost_lock_leaves_the_piconet_ready_to_search(void)
+{
+	btbb_piconet *pn = following_a_recovered_clock();
+	btbb_piconet *fresh = discovered(NULL, 0);
+	btbb_packet *pkt = failed_header_packet();
+	int i;
+
+	CHECK(pkt != NULL);
+	if (pkt == NULL) {
+		btbb_piconet_unref(pn);
+		btbb_piconet_unref(fresh);
+		return;
+	}
+	for (i = 0; i < FOLLOW_HEADER_FAILURES; i++)
+		(void) btbb_process_packet(pkt, pn);
+	CHECK(!btbb_piconet_get_flag(pn, BTBB_FOLLOWING));
+
+	/* nothing is left of the clock that failed */
+	CHECK(pn->clock_candidates == NULL);
+	CHECK_EQ(0, pn->num_candidates);
+	CHECK_EQ(0, pn->winnowed);
+	CHECK_EQ(0, pn->clk27_confirmations);
+	CHECK_EQ(0, pn->clk6_offset);
+	CHECK_EQ(0, btbb_piconet_get_clk_offset(pn));
+	CHECK_EQ(0, pn->packets_observed);
+	/* and the address the search starts from is the same as a fresh
+	 * piconet's: the LAP it was given, no UAP */
+	CHECK_EQ(fresh->LAP, pn->LAP);
+	CHECK_EQ(0, btbb_piconet_get_uap(pn));
+	CHECK(btbb_piconet_get_flag(pn, BTBB_LAP_VALID));
+	CHECK(!btbb_piconet_get_flag(pn, BTBB_UAP_VALID));
+	CHECK(!btbb_piconet_get_flag(pn, BTBB_CLK6_VALID));
+	CHECK(!btbb_piconet_get_flag(pn, BTBB_CLK27_VALID));
+	CHECK(!btbb_piconet_get_flag(pn, BTBB_GOT_FIRST_PACKET));
+	CHECK(!btbb_piconet_get_flag(pn, BTBB_HOP_REVERSAL_INIT));
+	btbb_packet_unref(pkt);
+	btbb_piconet_unref(pn);
+	btbb_piconet_unref(fresh);
 }
 
 /*
@@ -1093,6 +1138,7 @@ int main(void)
 	test_the_clocks_of_the_device_and_the_observer_differ();
 	test_every_candidate_agrees_on_clk1_6();
 	test_a_run_of_header_failures_gives_up_the_clock();
+	test_a_lost_lock_leaves_the_piconet_ready_to_search();
 	test_a_header_that_checks_out_ends_the_run();
 	test_a_failed_payload_is_not_evidence();
 	test_a_clock_the_caller_set_is_kept();

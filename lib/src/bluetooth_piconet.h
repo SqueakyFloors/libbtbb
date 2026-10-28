@@ -70,12 +70,21 @@
  * on a link with bit errors in it.
  *
  * The run still has to be long enough that bit errors in the headers
- * themselves do not cross it, and giving the clock up costs a fresh
- * discovery, which #49 measured at 10.7 to 14.7 packets.  Twenty is longer
- * than that, so the library cannot give up a lock faster than it can win one
- * back.  Against a wrong CLK1-6 or UAP it costs almost nothing: the HEC is 8
+ * themselves do not cross it on a clock that is right.  What protects it
+ * there is the access code search the packet came through, which allows a
+ * couple of bit errors in 64: a packet noisy enough to break its own
+ * majority-voted header hardly ever gets that far.  Measured over a run of
+ * noisy packets (tests/test_clock_sweep.c), of the headers that reach the HEC
+ * check under the right clock and UAP, 0.15% fail it at a bit error rate of
+ * 0.5% and 24% fail at 10%, where the access code already rejects 96 packets
+ * in 100.  Twenty in a row is 4e-57 and 5e-13 of a chance in those two
+ * cases.  Against a wrong CLK1-6 or UAP it costs almost nothing: the HEC is 8
  * bits, so about one header in 256 passes by chance and twenty failures in a
  * row arrive in about twenty packets.
+ *
+ * The run is counted in packets, not in seconds, so on a link quiet enough
+ * that twenty headers take hours it is twenty headers all the same.  The
+ * rates above are what makes that safe rather than any time bound.
  */
 #define FOLLOW_HEADER_FAILURES 20
 
