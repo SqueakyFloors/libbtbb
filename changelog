@@ -71,7 +71,8 @@ libbtbb (2020-12-R1+fork5) unstable; urgency=low
   * BR/EDR records now say whether the header's HEC and the payload's CRC were
     checked and whether they held, in both PCAP and PCAPNG files. Every packet
     read as "neither checked" before, so nothing downstream could tell a
-    verified payload from a guess.
+    verified payload from a guess. A voice payload, which carries no CRC, is
+    recorded as having had none checked.
   * A failed or incomplete write to a PCAPNG file is reported to the caller
     instead of returning success, and only the bytes that reached the file are
     counted into the section length, so a capture that runs out of disk space

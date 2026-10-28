@@ -254,7 +254,7 @@ int btbb_pcapng_append_packet(btbb_pcapng_handle * h, const uint64_t ns,
 	uint32_t caplen = 0;
 	pcapng_bredr_packet pcapng_pkt;
 
-	if ((payload_length > 0) && (payload_length <= BREDR_MAX_PAYLOAD)) {
+	if ((payload_length > 0) && (payload_length <= MAX_PAYLOAD_LENGTH / 8)) {
 		caplen = (uint32_t) btbb_get_payload_packed( pkt, &payload_bytes[0] );
 	}
 

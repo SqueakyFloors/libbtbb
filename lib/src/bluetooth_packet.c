@@ -818,8 +818,10 @@ static int payload_crc(btbb_packet* pkt)
 	check = air_to_host16(&pkt->payload[(pkt->payload_length - 2) * 8], 16);
 
 	/* Record the answer on the packet, so a capture file can say whether
-	   the CRC was checked and whether it passed. Types without a CRC never
-	   reach here, and so stay "not checked". */
+	   the CRC was checked and whether it passed. A type whose payload has
+	   no CRC only reaches here when the decoder is trying that type out,
+	   and clears both flags again if it settles on the type without
+	   one. */
 	btbb_packet_set_flag(pkt, BTBB_CRC_CHECKED, 1);
 	btbb_packet_set_flag(pkt, BTBB_CRC_CORRECT, crc == check);
 

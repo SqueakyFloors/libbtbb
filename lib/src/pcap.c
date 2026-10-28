@@ -190,7 +190,8 @@ btbb_pcap_append_packet(btbb_pcap_handle * h, const uint64_t ns,
 		uint32_t caplen = 0;
 		pcap_bredr_packet pcap_pkt;
 
-		if ((payload_length > 0) && (payload_length <= BREDR_MAX_PAYLOAD)) {
+		if ((payload_length > 0) &&
+		    (payload_length <= MAX_PAYLOAD_LENGTH / 8)) {
 			caplen = (uint32_t) btbb_get_payload_packed( pkt, (char *) &payload_bytes[0] );
 		}
 

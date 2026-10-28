@@ -251,10 +251,17 @@ static btbb_packet *decode_bredr(char *stream, int length, uint8_t uap)
 	btbb_packet_set_flag(pkt, BTBB_WHITENED, 0);
 	btbb_packet_set_flag(pkt, BTBB_CLK6_VALID, 1);
 	btbb_packet_set_uap(pkt, uap);
+	/* Two different values, so a record's payload_transport_rate byte
+	   pins both of its nibbles. The library never sets these itself. */
+	btbb_packet_set_transport(pkt, BTBB_TRANSPORT_ACL);
+	btbb_packet_set_modulation(pkt, BTBB_MOD_8DPSK);
 	if (btbb_decode_header(pkt))
 		(void) btbb_decode_payload(pkt);
 	return pkt;
 }
+
+/* transport ACL in the high nibble, 8DPSK modulation in the low one */
+#define EXPECTED_TRANSPORT_RATE ((BTBB_TRANSPORT_ACL << 4) | BTBB_MOD_8DPSK)
 
 /*
  * The HEC that goes with this header data and UAP, found by trying all 256 of
@@ -396,10 +403,7 @@ static void test_bredr_pcapng_record(void)
 	CHECK((int8_t) capture[data + 1] == -20);	/* signal power */
 	CHECK((int8_t) capture[data + 2] == -80);	/* noise power */
 	CHECK(capture[data + 3] == 0);			/* AC offenses */
-	/* transport in the high nibble, modulation in the low one */
-	CHECK(capture[data + 4] ==
-	      (uint8_t) ((btbb_packet_get_transport(pkt) << 4) |
-			 btbb_packet_get_modulation(pkt)));
+	CHECK(capture[data + 4] == EXPECTED_TRANSPORT_RATE);
 	CHECK(capture[data + 5] == 0);			/* corrected header bits */
 	CHECK(rd16(data + 6) == 0);			/* corrected payload bits */
 	CHECK(rd32(data + 8) == SPEC_DH1_LAP);
@@ -517,6 +521,259 @@ static void test_bredr_pcapng_empty_payload(void)
 	CHECK(rd32(blk + 56) == 60);
 }
 
+/*
+ * A checked HEC and a checked CRC that did not hold: the record must say the
+ * check was made and that it failed, which is a different answer from both
+ * "it passed" and "it was never checked".
+ */
+static void test_bredr_failed_checks(void)
+{
+	const char *filename = "test_capture_bad.pcapng";
+	char header_symbols[55];
+	char payload[sizeof(SPEC_DH1_PAYLOAD)];
+	char stream[1024];
+	btbb_pcapng_handle *h = NULL;
+	btbb_packet *pkt;
+	size_t blk, data;
+	int length, hec;
+
+	/* A DH1 with one payload byte altered, so the CRC it carries no
+	   longer matches. */
+	unlink_quietly(filename);
+	strcpy(header_symbols, SPEC_DH1_HEADER);
+	strcpy(payload, SPEC_DH1_PAYLOAD);
+	CHECK(payload[8] == '1');
+	payload[8] = '0';
+	length = build_bredr_stream(stream, SPEC_DH1_LAP, header_symbols,
+				    payload);
+	pkt = decode_bredr(stream, length, SPEC_DH1_UAP);
+	CHECK(pkt != NULL);
+	if (pkt == NULL)
+		return;
+	CHECK(btbb_packet_get_payload_length(pkt) == 8);
+
+	CHECK(btbb_pcapng_create_file(filename, "test", &h) == 0);
+	if (h == NULL) {
+		btbb_packet_unref(pkt);
+		return;
+	}
+	CHECK(btbb_pcapng_append_packet(h, 11ull, -20, -80, SPEC_DH1_LAP,
+					SPEC_DH1_UAP, pkt) == 0);
+	(void) btbb_pcapng_close(h);
+	btbb_packet_unref(pkt);
+
+	CHECK(read_capture(filename));
+	unlink_quietly(filename);
+	if (capture_len != 0) {
+		blk = find_block(BLOCK_TYPE_ENHANCED_PACKET, 0);
+		CHECK(blk < capture_len);
+		if (blk < capture_len) {
+			data = blk + 28;
+			CHECK(rd16(data + 20) ==
+			      (BREDR_DEWHITENED | BREDR_SIGPOWER_VALID |
+			       BREDR_NOISEPOWER_VALID | BREDR_REFLAP_VALID |
+			       BREDR_REFUAP_VALID | BREDR_PAYLOAD_PRESENT |
+			       BREDR_HEC_CHECKED | BREDR_HEC_VALID |
+			       BREDR_CRC_CHECKED));
+			CHECK((rd16(data + 20) & BREDR_CRC_VALID) == 0);
+			CHECK(capture[data + 23] == 0x00);
+		}
+	}
+
+	/* The same packet with a HEC that belongs to another UAP, so the
+	   header does not decode and no payload is reached. */
+	h = NULL;
+	unlink_quietly(filename);
+	hec = hec_for(0x123, SPEC_DH1_UAP);
+	CHECK(hec == 0x06);
+	encode_header_13(0x123, (uint8_t) ((hec + 1) & 0xff), header_symbols);
+	length = build_bredr_stream(stream, SPEC_DH1_LAP, header_symbols,
+				    SPEC_DH1_PAYLOAD);
+	pkt = decode_bredr(stream, length, SPEC_DH1_UAP);
+	CHECK(pkt != NULL);
+	if (pkt == NULL)
+		return;
+	CHECK(btbb_packet_get_payload_length(pkt) == 0);
+
+	CHECK(btbb_pcapng_create_file(filename, "test", &h) == 0);
+	if (h == NULL) {
+		btbb_packet_unref(pkt);
+		return;
+	}
+	CHECK(btbb_pcapng_append_packet(h, 12ull, -20, -80, SPEC_DH1_LAP,
+					SPEC_DH1_UAP, pkt) == 0);
+	(void) btbb_pcapng_close(h);
+	btbb_packet_unref(pkt);
+
+	CHECK(read_capture(filename));
+	unlink_quietly(filename);
+	if (capture_len == 0)
+		return;
+	blk = find_block(BLOCK_TYPE_ENHANCED_PACKET, 0);
+	CHECK(blk < capture_len);
+	if (blk >= capture_len)
+		return;
+	data = blk + 28;
+	CHECK(rd16(data + 20) ==
+	      (BREDR_DEWHITENED | BREDR_SIGPOWER_VALID |
+	       BREDR_NOISEPOWER_VALID | BREDR_REFLAP_VALID |
+	       BREDR_REFUAP_VALID | BREDR_HEC_CHECKED));
+	CHECK((rd16(data + 20) & BREDR_HEC_VALID) == 0);
+	CHECK((rd16(data + 20) & BREDR_CRC_CHECKED) == 0);
+}
+
+/*
+ * An HV3 voice payload has no CRC (Vol 2, Part B, Section 6.5.4.4), but the
+ * decoder reaches it by trying the packet as an EV3 first, which does check
+ * one. The record must not report that failed trial: a reader would read
+ * every SCO payload as corrupt.
+ */
+static void test_bredr_voice_payload_has_no_crc(void)
+{
+	const char *filename = "test_capture_hv3.pcapng";
+	char header_symbols[55];
+	char payload[241];
+	char stream[1024];
+	btbb_pcapng_handle *h = NULL;
+	btbb_packet *pkt;
+	size_t blk, data;
+	int length, hec, i;
+
+	unlink_quietly(filename);
+	/* LT_ADDR 1 in the low three bits, TYPE 7 (HV3) in the next four */
+	hec = hec_for(1 | (7 << 3), SPEC_DH1_UAP);
+	CHECK(hec >= 0);
+	if (hec < 0)
+		return;
+	encode_header_13((uint16_t) (1 | (7 << 3)), (uint8_t) hec,
+			 header_symbols);
+	/* 30 payload bytes, which is what an HV3 carries, with no CRC after
+	   them */
+	for (i = 0; i < 240; i++)
+		payload[i] = (char) ('0' + ((0x9c5a3 >> (i % 19)) & 1));
+	payload[240] = '\0';
+	length = build_bredr_stream(stream, SPEC_DH1_LAP, header_symbols,
+				    payload);
+	CHECK(length == 362);
+	pkt = decode_bredr(stream, length, SPEC_DH1_UAP);
+	CHECK(pkt != NULL);
+	if (pkt == NULL)
+		return;
+	CHECK(btbb_packet_get_type(pkt) == 7);
+	CHECK(btbb_packet_get_payload_length(pkt) == 30);
+
+	CHECK(btbb_pcapng_create_file(filename, "test", &h) == 0);
+	if (h == NULL) {
+		btbb_packet_unref(pkt);
+		return;
+	}
+	CHECK(btbb_pcapng_append_packet(h, 13ull, -20, -80, SPEC_DH1_LAP,
+					SPEC_DH1_UAP, pkt) == 0);
+	(void) btbb_pcapng_close(h);
+	btbb_packet_unref(pkt);
+
+	CHECK(read_capture(filename));
+	unlink_quietly(filename);
+	if (capture_len == 0)
+		return;
+	blk = find_block(BLOCK_TYPE_ENHANCED_PACKET, 0);
+	CHECK(blk < capture_len);
+	if (blk >= capture_len)
+		return;
+	data = blk + 28;
+	CHECK(rd16(data + 20) ==
+	      (BREDR_DEWHITENED | BREDR_SIGPOWER_VALID |
+	       BREDR_NOISEPOWER_VALID | BREDR_REFLAP_VALID |
+	       BREDR_REFUAP_VALID | BREDR_PAYLOAD_PRESENT |
+	       BREDR_HEC_CHECKED | BREDR_HEC_VALID));
+	CHECK((rd16(data + 20) & BREDR_CRC_CHECKED) == 0);
+	CHECK((rd16(data + 20) & BREDR_CRC_VALID) == 0);
+}
+
+/*
+ * The BD_ADDR and clock options a BR/EDR capture records, and what happens
+ * when a capture records more options than the space set aside for them.
+ */
+static void test_bredr_interface_options(void)
+{
+	const char *filename = "test_capture_options.pcapng";
+	btbb_pcapng_handle *h = NULL;
+	size_t idb, value, off, end;
+	uint16_t value_length = 0;
+	int i, refused = 0;
+
+	unlink_quietly(filename);
+	CHECK(btbb_pcapng_create_file(filename, "test", &h) == 0);
+	if (h == NULL)
+		return;
+	CHECK(btbb_pcapng_record_bdaddr(h, 0x112233445566ull, 0xff, 1) == 0);
+	CHECK(btbb_pcapng_record_btclock(h, 0x112233445566ull, 13ull,
+					 0x0abbccdd, 0x0fffffff) == 0);
+
+	/* Fill the space set aside for interface options. The extra ones must
+	   be refused, not written past the end of the header block. */
+	for (i = 0; i < 100000; i++) {
+		if (btbb_pcapng_record_bdaddr(h, (uint64_t) i, 0xff, 0) != 0) {
+			refused = 1;
+			break;
+		}
+	}
+	CHECK(refused);
+	(void) btbb_pcapng_close(h);
+
+	CHECK(read_capture(filename));
+	unlink_quietly(filename);
+	if (capture_len == 0)
+		return;
+
+	idb = find_block(BLOCK_TYPE_INTERFACE, 0);
+	CHECK(idb < capture_len);
+	if (idb >= capture_len)
+		return;
+	CHECK(rd16(idb + 8) == DLT_BLUETOOTH_BREDR_BB);
+
+	/* a BD_ADDR option: six address bytes, the UAP mask and the NAP flag */
+	value = find_option(idb, 16, PCAPNG_BREDR_OPTION_BD_ADDR,
+			    &value_length);
+	CHECK(value != 0);
+	if (value != 0) {
+		CHECK(value_length == sizeof(bredr_bd_addr_info));
+		CHECK(value_length == 8);
+		CHECK(capture[value + 0] == 0x66);
+		CHECK(capture[value + 5] == 0x11);
+		CHECK(capture[value + 6] == 0xff);
+		CHECK(capture[value + 7] == 1);
+	}
+
+	/* a clock option: a timestamp, the address, the clock and its mask */
+	value = find_option(idb, 16, PCAPNG_BREDR_OPTION_MASTER_CLOCK_INFO,
+			    &value_length);
+	CHECK(value != 0);
+	if (value != 0) {
+		CHECK(value_length == sizeof(bredr_clk_info));
+		CHECK(value_length == 20);
+		CHECK(rd32(value + 0) == 13);
+		CHECK(rd32(value + 8) == 0x33445566u);
+		CHECK(rd32(value + 12) == 0x0abbccddu);
+		CHECK(rd32(value + 16) == 0x0fffffffu);
+	}
+
+	/* the options still cover the block exactly */
+	off = idb + 16;
+	end = idb + rd32(idb + 4) - 4;
+	while (off + 4 <= end) {
+		uint16_t len = rd16(off + 2);
+
+		if (rd16(off) == OPT_ENDOFOPT)
+			break;
+		off += 4 + 4 * ((len + 3u) / 4u);
+		CHECK(off <= end);
+		if (off > end)
+			break;
+	}
+	CHECK(off + 4 >= end);
+}
+
 /* The same record in a plain pcap file. */
 static void test_bredr_pcap_record(void)
 {
@@ -553,8 +810,9 @@ static void test_bredr_pcap_record(void)
 	if (capture_len == 0)
 		return;
 
-	/* 24-byte file header: the microsecond-resolution magic, version 2.4,
-	   and the link type. */
+	/* 24-byte file header: the nanosecond-resolution magic, so the second
+	   timestamp word counts nanoseconds, then version 2.4 and the link
+	   type. */
 	CHECK(rd32(0) == 0xa1b23c4du);
 	CHECK(rd16(4) == 2);
 	CHECK(rd16(6) == 4);
@@ -922,6 +1180,36 @@ static void test_write_errors(void)
 	}
 
 	btbb_packet_unref(pkt);
+
+	/* the LE writer reports the same way */
+	{
+		const char *le_name = "test_capture_closed_le.pcapng";
+		lell_pcapng_handle *lh = NULL;
+		lell_packet *lpkt = NULL;
+
+		lell_allocate_and_decode_n(CONNECT_IND, sizeof(CONNECT_IND),
+					   CONNECT_IND_CHANNEL_MHZ, 42, &lpkt);
+		CHECK(lpkt != NULL);
+		if (lpkt == NULL)
+			return;
+		unlink_quietly(le_name);
+		CHECK(lell_pcapng_create_file(le_name, "test", &lh) == 0);
+		if (lh != NULL) {
+			raw = (PCAPNG_HANDLE *) lh;
+			section_length_before =
+				raw->section_header->section_length;
+			CHECK(close(raw->fd) == 0);
+			CHECK(lell_pcapng_append_packet(lh, 1ull, -20, -80,
+							LE_ADV_AA, lpkt) ==
+			      -PCAPNG_FILE_WRITE_ERROR);
+			CHECK(raw->section_header->section_length ==
+			      section_length_before);
+			raw->fd = -1;
+			(void) lell_pcapng_close(lh);
+			unlink_quietly(le_name);
+		}
+		lell_packet_unref(lpkt);
+	}
 }
 
 int main(void)
@@ -933,6 +1221,9 @@ int main(void)
 
 	test_bredr_pcapng_record();
 	test_bredr_pcapng_empty_payload();
+	test_bredr_failed_checks();
+	test_bredr_voice_payload_has_no_crc();
+	test_bredr_interface_options();
 	test_bredr_pcap_record();
 	test_le_connect_ind_option();
 	test_le_short_connect_ind();
