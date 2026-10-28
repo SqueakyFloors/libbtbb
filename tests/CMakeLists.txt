@@ -74,8 +74,8 @@ if(BUILD_TESTING)
         target_link_libraries(test_hop btbb-static)
     endif()
     add_test(NAME hop COMMAND test_hop)
-    # Generating a whole hopping sequence is 2^27 hops, twice over.
-    set_tests_properties(hop PROPERTIES TIMEOUT 300)
+    # A million hops, for the one case that walks a range of clock values.
+    set_tests_properties(hop PROPERTIES TIMEOUT 60)
 
     add_test(NAME release_version COMMAND ${CMAKE_COMMAND}
              -DSET_RELEASE_CMAKE=${PROJECT_SOURCE_DIR}/cmake/set_release.cmake

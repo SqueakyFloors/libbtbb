@@ -1,8 +1,8 @@
 libbtbb (2020-12-R1+fork5) unstable; urgency=low
-  * The hopping sequence notes ("Calculating complete hopping sequence." and
-    "Hopping sequence calculated.") now go to stderr, and the "Found hopping
-    sequence in cache." note is gone. A tool streaming its capture to stdout
-    no longer has them mixed into the stream.
+  * The hopping sequence notes ("Calculating complete hopping sequence.",
+    "Hopping sequence calculated." and "Found hopping sequence in cache.") are
+    gone, along with the sequence they announced. A tool streaming its capture
+    to stdout no longer has them mixed into the stream.
   * The LE decoder now bounds the channel a frequency outside 2402-2480 MHz
     decodes as. A frequency below the band used to come back as a channel
     index of 254 or 255, which is no channel at all, and 2400 MHz as a PCAP
@@ -112,6 +112,49 @@ libbtbb (2020-12-R1+fork5) unstable; urgency=low
   * New packet flags BTBB_HEC_CHECKED, BTBB_HEC_VALID and BTBB_CRC_CHECKED,
     which with the existing BTBB_CRC_CORRECT say what the decoder checked and
     what it found. BTBB_CRC_CORRECT was never set before.
+  * Reading a piconet's AFH map no longer builds a whole hopping sequence.
+    btbb_piconet_set_afh_map() generated it whenever the address was known: a
+    128 MB allocation and a wait of seconds, paid every time ubertooth-follow
+    read an adapter's map, for a sequence nothing reads any more. Hops are
+    answered one at a time from the map instead, so the allocation is gone -
+    and with it a failure of the largest allocation the library made, which
+    nothing checked and which was written through.
+  * Clock recovery no longer takes the first candidate clock left standing as
+    the piconet's. While the AFH map is still incomplete the predicted hops
+    are wrong for the channels not yet seen, so a clock that is not the
+    piconet's can match every hop observed so far and be the last one left.
+    The library then followed the piconet on that offset, and following never
+    winnows again, so every packet after it failed to decode and there was no
+    way back. Four further hops now have to agree with a candidate before it
+    is accepted, which also gives the map time to gain a channel that rules it
+    out. Simulated against a device whose map the observer is one channel
+    short of, a wrong clock is accepted about a tenth as often: 10 of 400
+    recoveries, where 99 of the same 400 locked one before. It is not
+    impossible, and a piconet followed on a wrong clock still has no way back.
+    What it is traded for is restarts, which are recoverable: in the same 400,
+    the clock went unfound within the hops observed 276 times rather than 194.
+    btbb_winnow() also does nothing once the clock is known, rather than
+    comparing the hop it was found on again.
+  * An LE advertising PDU whose payload is shorter than the fields read from
+    it - because it claims more than arrived, or because its length field is
+    too small for its own type - no longer has those fields printed out of
+    bytes that were never received. A CONNECT_REQ carrying ten bytes reported
+    a connection access address, a hop increment and a clock accuracy read
+    from whatever followed in the buffer. The dump now says what is missing,
+    on stderr, and prints the bytes that did arrive.
+  * An LE data PDU that arrived with no payload no longer reports an LL
+    Control opcode, which was read from the first byte of its CRC.
+  * A flags element with no flags in it no longer has a flags byte read from
+    past the end of the advertising data.
+  * The UAP is widened before it is shifted into a piconet's address. A signed
+    int cannot hold a UAP of 0x80 or more shifted up 24 places, so predicting
+    hops for one of those addresses was undefined behaviour, which the
+    sanitizers report.
+  * Three symbols the library exported, hop(), gen_hop_pattern() and
+    get_hop_pattern(), are gone with the hopping sequence. None of them is
+    declared in btbb.h, so no documented caller can be using them, but a
+    program linked against an older libbtbb that called them will not find
+    them in this one.
 
  -- Russell Wagner <152923636+SqueakyFloors@users.noreply.github.com>  27 Oct 2026 22:30:00 -0700
 

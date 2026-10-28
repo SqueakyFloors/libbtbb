@@ -9,7 +9,8 @@
  * device under observation hops the way a real one does.
  *
  * The functions under test are internal to the library, so this compiles the
- * translation units they live in, as tests/test_internal.c does.
+ * translation units they live in, as tests/test_internal.c does.  That also
+ * puts the allocations they make within reach, which the last few cases need.
  *
  * This file is part of libbtbb
  *
@@ -30,10 +31,34 @@
  */
 
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
+
+/*
+ * Every malloc() the library source below makes goes through this, so a test
+ * can see how large the request was and make one fail.  The system headers
+ * are included first, so that the macro rewrites the library's calls and not
+ * malloc()'s own declaration.
+ */
+static void *counted_malloc(size_t size);
+#define malloc counted_malloc
 
 #include "bluetooth_packet.c"
 #include "bluetooth_piconet.c"
+
+#undef malloc
+
+static size_t largest_request;	/* bytes, since it was last reset */
+static int refuse_allocations;
+
+static void *counted_malloc(size_t size)
+{
+	if (size > largest_request)
+		largest_request = size;
+	if (refuse_allocations)
+		return NULL;
+	return malloc(size);
+}
 
 static int failures = 0;
 
@@ -388,6 +413,170 @@ static void test_remembered_pattern_is_bounded(void)
 	btbb_piconet_unref(pn);
 }
 
+/*
+ * Setting an AFH map used to generate the whole hopping sequence when the
+ * address was known: a 128 MB allocation and a wait of seconds, which
+ * ubertooth-follow paid every time it read an adapter's map, for a sequence
+ * nothing ever read.  Hops are predicted one at a time from the map instead,
+ * so setting it allocates nothing at all.
+ */
+static void test_set_afh_map_allocates_nothing(void)
+{
+	btbb_piconet *pn = discovered(NULL, 1);
+	uint8_t map[10];
+
+	memcpy(map, MAP_20, sizeof(map));
+	largest_request = 0;
+	btbb_piconet_set_afh_map(pn, map);
+	CHECK_EQ(0, largest_request);
+	/* and the piconet is ready to predict hops on the new map */
+	CHECK_EQ(AFH_MIN_USED_CHANNELS, pn->used_channels);
+	CHECK_EQ(channel_at(pn, 0), channel_at(pn, 1));
+	btbb_piconet_unref(pn);
+}
+
+/*
+ * The UAP's top bit lands on bit 31 when it is shifted into the address, so
+ * it has to be widened first: a signed int cannot hold it.
+ */
+static void test_a_uap_with_its_top_bit_set(void)
+{
+	btbb_piconet *pn = discovered(NULL, 1);
+	btbb_piconet *same = discovered(NULL, 1);
+	uint8_t map[10];
+
+	memcpy(map, MAP_20, sizeof(map));
+	btbb_piconet_set_uap(pn, 0xff);
+	btbb_piconet_set_afh_map(pn, map);
+
+	/* the same address, from a value that was widened before it was
+	 * shifted */
+	address_precalc((int) (((((uint32_t) 0xff) << 24) | TEST_LAP) &
+			       0xfffffff), same);
+	CHECK_EQ(same->a1, pn->a1);
+	CHECK_EQ(same->b, pn->b);
+	CHECK_EQ(same->c1, pn->c1);
+	CHECK_EQ(same->d1, pn->d1);
+	CHECK_EQ(same->e, pn->e);
+	btbb_piconet_unref(pn);
+	btbb_piconet_unref(same);
+}
+
+/*
+ * The candidate list is the largest allocation clock recovery makes.  A host
+ * that cannot spare it is told so, rather than having the failure written
+ * through: hop reversal reports no candidates and leaves the piconet with
+ * none, and winnowing against no candidates starts discovery over.
+ */
+static void test_an_allocation_failure_leaves_no_candidates(void)
+{
+	btbb_piconet *pn = discovered(MAP_20, 1);
+
+	first_hop(pn, channel_at(pn, 0));
+	refuse_allocations = 1;
+	CHECK_EQ(0, btbb_init_hop_reversal(0, pn));
+	refuse_allocations = 0;
+	CHECK_EQ(0, pn->num_candidates);
+	CHECK(pn->clock_candidates == NULL);
+	CHECK(!btbb_piconet_get_flag(pn, BTBB_CLK27_VALID));
+	CHECK_EQ(0, btbb_winnow(pn));
+	CHECK(!btbb_piconet_get_flag(pn, BTBB_HOP_REVERSAL_INIT));
+	btbb_piconet_unref(pn);
+}
+
+/*
+ * With one candidate left, the clock is accepted only once that many further
+ * hops have agreed with it.  Here the piconet predicts its own hops, so the
+ * candidate that survives is the right one and the only question is when it
+ * is accepted.
+ *
+ * The hops are spread over the clock rather than taken from consecutive
+ * slots, as the packets a receiver happens to catch are: two clock values
+ * that differ only in the high bits hop alike for a long run of slots, so
+ * consecutive slots hardly narrow the list at all.
+ */
+static void test_the_clock_is_confirmed_before_it_is_accepted(void)
+{
+	btbb_piconet *pn = discovered(NULL, 0);
+	uint32_t offset;
+	int hops_with_one_candidate = 0;
+
+	first_hop(pn, channel_at(pn, 0));
+	CHECK(btbb_init_hop_reversal(0, pn) > 1);
+	for (offset = 100; offset < 100 * 40; offset += 100) {
+		observe(pn, (int) offset, channel_at(pn, offset));
+		if (pn->num_candidates == 1)
+			hops_with_one_candidate++;
+		if (btbb_piconet_get_flag(pn, BTBB_CLK27_VALID))
+			break;
+	}
+	CHECK(btbb_piconet_get_flag(pn, BTBB_CLK27_VALID));
+	/* the hop that chose it, and then the ones that confirmed it */
+	CHECK_EQ(CLK27_CONFIRM_HOPS + 1, hops_with_one_candidate);
+	CHECK_EQ(0, pn->clock_candidates[0]);
+	CHECK_EQ(0, pn->clk_offset);
+	btbb_piconet_unref(pn);
+}
+
+/*
+ * A clock that is not the piconet's can match every hop observed so far while
+ * the AFH map is still a channel short, and be the last candidate standing.
+ * Accepting it there starts following the piconet on the wrong offset, after
+ * which nothing winnows again: every packet fails to decode, forever.
+ *
+ * The device here hops on channels 0-23 and the observer has yet to see
+ * channel 7.  At this clock the candidate that stands alone partway through
+ * is a wrong one, and the hop that follows is the one that completes the map,
+ * which chooses the candidates again from the map as it then stands.  The
+ * clock accepted in the end is the piconet's.
+ */
+static void test_a_wrong_clock_is_not_accepted_on_a_short_map(void)
+{
+	/* What the device really uses: channels 0-23. */
+	static const uint8_t map_truth[10] = {0xff, 0xff, 0xff};
+	/* What has been seen of it so far: channel 7 not yet. */
+	static const uint8_t map_so_far[10] = {0x7f, 0xff, 0xff};
+	/* Found by running this scenario over a range of clock values. */
+	const uint32_t true_clock = 0x1000000;
+	btbb_piconet *device = discovered(map_truth, 1);
+	btbb_piconet *pn = discovered(map_so_far, 1);
+	uint32_t offset;
+	int wrong_candidate_stood_alone = 0;
+	int accepted_a_wrong_clock = 0;
+
+	pn->first_pkt_time = true_clock;
+	pn->clk6_offset = 0;	/* so the known clock bits are true_clock's */
+	first_hop(pn, channel_at(device, true_clock));
+	CHECK(btbb_init_hop_reversal(0, pn) > 1);
+
+	/* The device's hops, four slots apart so each is a new slot pair. */
+	for (offset = 4; offset <= 4 * 40; offset += 4) {
+		observe(pn, (int) offset,
+			channel_at(device, true_clock + offset));
+		if (!btbb_piconet_get_flag(pn, BTBB_HOP_REVERSAL_INIT))
+			break;	/* every candidate was dropped */
+		if (pn->num_candidates == 1 &&
+		    pn->clock_candidates[0] != true_clock)
+			wrong_candidate_stood_alone = 1;
+		if (btbb_piconet_get_flag(pn, BTBB_CLK27_VALID)) {
+			if (pn->clock_candidates[0] != true_clock)
+				accepted_a_wrong_clock = 1;
+			break;
+		}
+	}
+
+	/* the scenario really does leave a wrong candidate on its own */
+	CHECK(wrong_candidate_stood_alone);
+	CHECK_EQ(0, accepted_a_wrong_clock);
+	CHECK(btbb_piconet_get_flag(pn, BTBB_CLK27_VALID));
+	CHECK_EQ(1, pn->num_candidates);
+	CHECK_EQ(true_clock, pn->clock_candidates[0]);
+	CHECK_EQ(24, pn->used_channels);	/* the map completed on the way */
+	CHECK_EQ(0, pn->clk_offset);	/* the first packet was the true clock */
+	btbb_piconet_unref(pn);
+	btbb_piconet_unref(device);
+}
+
 int main(void)
 {
 	test_afh_candidates_fit_their_list();
@@ -398,6 +587,11 @@ int main(void)
 	test_candidate_fill_stops_at_the_size_given();
 	test_clk6_offset_fixes_the_known_clock_bits();
 	test_remembered_pattern_is_bounded();
+	test_set_afh_map_allocates_nothing();
+	test_a_uap_with_its_top_bit_set();
+	test_an_allocation_failure_leaves_no_candidates();
+	test_the_clock_is_confirmed_before_it_is_accepted();
+	test_a_wrong_clock_is_not_accepted_on_a_short_map();
 
 	if (failures != 0) {
 		printf("%d check(s) failed\n", failures);
