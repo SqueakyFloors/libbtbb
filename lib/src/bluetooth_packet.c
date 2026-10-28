@@ -1051,7 +1051,20 @@ int DH(int clock, btbb_packet* pkt)
 	return 2;
 }
 
-int EV3(int clock, btbb_packet* pkt)
+/*
+ * Find the length of an eSCO payload that carries no FEC, and decode it.
+ *
+ * The length is agreed when the link is set up and is not carried in the
+ * packet (Vol 2, Part B, Section 6.5.3), so the only way to find it is to
+ * unwhiten one byte at a time and see which length the CRC agrees with. A
+ * length is worth trying as soon as that many bytes have been decoded, so the
+ * byte decoded in each pass is the last one its length needs.
+ *
+ * maxlength is the longest payload the packet type allows, in bytes including
+ * the CRC. The shortest is one information byte and the two byte CRC, which
+ * payload_crc() enforces, so no length below three is tried here either.
+ */
+static int esco_payload(int clock, btbb_packet* pkt, int maxlength)
 {
 	/* skip the access code and packet header */
 	char *stream = pkt->symbols + 122;
@@ -1059,23 +1072,9 @@ int EV3(int clock, btbb_packet* pkt)
 	/* number of symbols remaining after access code and packet header */
 	int size = pkt->length - 122;
 
-	/* maximum payload length is 30 bytes + 2 bytes CRC */
-	int maxlength = 32;
-
-	/* the shortest eSCO payload is one information byte and the two byte
-	 * CRC (Vol 2, Part B, Section 6.5.3.1) */
-	int minlength = 3;
-
 	/* number of bits we have decoded */
 	int bits;
 
-	/*
-	 * The length is agreed when the link is set up and is not carried in
-	 * the packet, so the only way to find it is to unwhiten one byte at a
-	 * time and see which length the CRC agrees with. A length is worth
-	 * trying as soon as that many bytes have been decoded, so the byte
-	 * decoded in each pass is the last one the length needs.
-	 */
 	for (pkt->payload_length = 1;
 			pkt->payload_length <= maxlength; pkt->payload_length++) {
 
@@ -1085,18 +1084,25 @@ int EV3(int clock, btbb_packet* pkt)
 		if ((bits + 8) > size) {
 			/* the capture ran out, so the bytes decoded so far are
 			 * all the payload there is to report */
-			pkt->payload_length--;
+			pkt->payload_length = bits / 8;
 			return 1; //FIXME should throw exception
 		}
 		unwhiten(stream + bits, pkt->payload + bits, clock, 8,
 			 HEADER_WHITENING_BITS + bits, pkt);
 
-		if ((pkt->payload_length >= minlength) && (payload_crc(pkt)))
-				return 10;
+		if (payload_crc(pkt))
+			return 10;
 	}
 	/* no length matched, so the one left over is not a decoded length */
 	pkt->payload_length = maxlength;
 	return 2;
+}
+
+int EV3(int clock, btbb_packet* pkt)
+{
+	/* maximum payload length is 30 bytes + 2 bytes CRC
+	 * (Vol 2, Part B, Section 6.5.3.1) */
+	return esco_payload(clock, pkt, 32);
 }
 
 int EV4(int clock, btbb_packet* pkt)
@@ -1109,29 +1115,36 @@ int EV4(int clock, btbb_packet* pkt)
 	/* number of symbols remaining after access code and packet header */
 	int size = pkt->length - 122;
 
-	/* maximum payload length is 120 bytes + 2 bytes CRC, which rate 2/3
-	 * FEC turns into 98 blocks of 15 symbols */
+	/* maximum payload length is 120 bytes + 2 bytes CRC
+	 * (Vol 2, Part B, Section 6.5.3.2), which rate 2/3 FEC turns into 98
+	 * blocks of 15 symbols */
 	int maxbytes = 122;
-	int maxlength = ((maxbytes * 8 + 9) / 10) * 15;
+	int maxsymbols = ((maxbytes * 8 + 9) / 10) * 15;
 
-	/* the shortest eSCO payload is one information byte and the two byte
-	 * CRC (Vol 2, Part B, Section 6.5.3.2), which comes to 45 symbols */
+	/* the shortest payload is one information byte and the two byte CRC,
+	 * which comes to 45 symbols */
 	int minbytes = 3;
-	int minlength = ((minbytes * 8 + 9) / 10) * 15;
+	int minsymbols = ((minbytes * 8 + 9) / 10) * 15;
 
 	int syms = 0; /* number of symbols we have decoded */
 	int bits = 0; /* number of payload bits we have decoded */
 
 	pkt->payload_length = minbytes;
 
-	while (syms < maxlength) {
+	while (syms < maxsymbols) {
 
 		/* unfec/unwhiten next block (15 symbols -> 10 bits) */
-		if (syms + 15 > size)
+		if (syms + 15 > size) {
+			/* the capture ran out partway through a block, so only
+			 * whole bytes before it are a payload to report */
+			pkt->payload_length = bits / 8;
 			return 1; //FIXME should throw exception
+		}
 		corrected = unfec23(stream + syms, 10);
 		if (!corrected) {
-			if (syms < minlength)
+			/* this block is lost, so the payload ends before it */
+			pkt->payload_length = bits / 8;
+			if (syms < minsymbols)
 				return 0;
 			else
 				return 1;
@@ -1144,12 +1157,11 @@ int EV4(int clock, btbb_packet* pkt)
 		bits += 10;
 
 		/*
-		 * The length is agreed when the link is set up and is not
-		 * carried in the packet, so try the CRC at every length the
-		 * bits decoded so far can hold, this block's included.
+		 * Same search as esco_payload(), a block at a time: try the
+		 * CRC at every length the bits decoded so far can hold, this
+		 * block's included.
 		 */
-		while (pkt->payload_length * 8 <= bits &&
-		       pkt->payload_length <= maxbytes) {
+		while (pkt->payload_length * 8 <= bits) {
 			if (payload_crc(pkt))
 				return 10;
 			pkt->payload_length++;
@@ -1162,50 +1174,9 @@ int EV4(int clock, btbb_packet* pkt)
 
 int EV5(int clock, btbb_packet* pkt)
 {
-	/* skip the access code and packet header */
-	char *stream = pkt->symbols + 122;
-
-	/* number of symbols remaining after access code and packet header */
-	int size = pkt->length - 122;
-
-	/* maximum payload length is 180 bytes + 2 bytes CRC */
-	int maxlength = 182;
-
-	/* the shortest eSCO payload is one information byte and the two byte
-	 * CRC (Vol 2, Part B, Section 6.5.3.3) */
-	int minlength = 3;
-
-	/* number of bits we have decoded */
-	int bits;
-
-	/*
-	 * The length is agreed when the link is set up and is not carried in
-	 * the packet, so the only way to find it is to unwhiten one byte at a
-	 * time and see which length the CRC agrees with. A length is worth
-	 * trying as soon as that many bytes have been decoded, so the byte
-	 * decoded in each pass is the last one the length needs.
-	 */
-	for (pkt->payload_length = 1;
-			pkt->payload_length <= maxlength; pkt->payload_length++) {
-
-		bits = (pkt->payload_length - 1) * 8;
-
-		/* unwhiten next byte */
-		if ((bits + 8) > size) {
-			/* the capture ran out, so the bytes decoded so far are
-			 * all the payload there is to report */
-			pkt->payload_length--;
-			return 1; //FIXME should throw exception
-		}
-		unwhiten(stream + bits, pkt->payload + bits, clock, 8,
-			 HEADER_WHITENING_BITS + bits, pkt);
-
-		if ((pkt->payload_length >= minlength) && (payload_crc(pkt)))
-				return 10;
-	}
-	/* no length matched, so the one left over is not a decoded length */
-	pkt->payload_length = maxlength;
-	return 2;
+	/* maximum payload length is 180 bytes + 2 bytes CRC
+	 * (Vol 2, Part B, Section 6.5.3.3) */
+	return esco_payload(clock, pkt, 182);
 }
 
 /* HV packet type payload parser */

@@ -1040,6 +1040,101 @@ static void test_esco_payload_lengths(void)
 }
 
 /*
+ * A capture that stops partway through an eSCO payload has no length the CRC
+ * agrees with, so the decoder reports what it managed to decode. It must not
+ * report a byte the capture did not hold: btbb_decode_payload() marks the
+ * packet as having a payload whatever the result, so a length past the
+ * decoded bytes reaches the dump and the capture files.
+ */
+static void test_esco_truncated_capture(void)
+{
+	static const struct {
+		const char *name;
+		uint8_t type;
+		int fec23;
+	} CASES[] = {
+		{ "EV3", PACKET_TYPE_HV3, 0 },
+		{ "EV4", PACKET_TYPE_EV4, 1 },
+		{ "EV5", PACKET_TYPE_EV5, 0 }
+	};
+	size_t row;
+
+	for (row = 0; row < sizeof(CASES) / sizeof(CASES[0]); row++) {
+		const int body = 24;
+		char bits[(24 + 2) * 8 + 10];
+		char payload[MAX_SYMBOLS];
+		char stream[MAX_SYMBOLS];
+		uint16_t header_data;
+		int data_bits = (body + 2) * 8;
+		int payload_symbols, full_length, cut, i, bit;
+		uint16_t crc;
+		const int clock = 0x2d;
+
+		memset(bits, 0, sizeof(bits));
+		for (i = 0; i < body; i++)
+			for (bit = 0; bit < 8; bit++)
+				bits[i * 8 + bit] =
+					(char) (((0x10 + i) >> bit) & 1);
+		crc = crcgen(bits, body * 8, 0x47);
+		for (bit = 0; bit < 16; bit++)
+			bits[body * 8 + bit] = (char) ((crc >> bit) & 1);
+		spec_whiten(bits, data_bits, clock, 18);
+
+		if (CASES[row].fec23) {
+			int blocks = (data_bits + 9) / 10;
+
+			spec_fec23(bits, payload, blocks * 10);
+			payload_symbols = blocks * 15;
+		} else {
+			memcpy(payload, bits, (size_t) data_bits);
+			payload_symbols = data_bits;
+		}
+
+		header_data = (uint16_t) (1 | (CASES[row].type << 3));
+		full_length = build_packet(stream, 0x9e8b33, header_data,
+					   spec_hec(header_data, 0x47),
+					   payload, payload_symbols, clock, 1);
+
+		/* every length from no payload at all to one symbol short */
+		for (cut = 122; cut < full_length; cut++) {
+			btbb_packet *pkt = packet_for(stream, cut, 0x47,
+						      clock, 1);
+			int available = cut - 122;
+			int rv;
+
+			CHECK(pkt != NULL);
+			if (pkt == NULL)
+				return;
+			CHECK(btbb_decode_header(pkt) == 1);
+
+			if (CASES[row].type == PACKET_TYPE_EV4) {
+				rv = EV4(clock, pkt);
+				/* whole FEC blocks, 15 symbols for 10 bits */
+				available = (available / 15) * 10;
+			} else if (CASES[row].type == PACKET_TYPE_EV5) {
+				rv = EV5(clock, pkt);
+			} else {
+				rv = EV3(clock, pkt);
+			}
+
+			/* no length can match, so nothing may claim one */
+			CHECK(rv != 10);
+			if (btbb_packet_get_payload_length(pkt) * 8 >
+			    available) {
+				printf("FAIL %s:%d: %s cut to %d symbols "
+				       "reports %d bytes, %d bits decoded\n",
+				       __FILE__, __LINE__, CASES[row].name,
+				       cut,
+				       btbb_packet_get_payload_length(pkt),
+				       available);
+				++failures;
+			}
+			btbb_packet_unref(pkt);
+		}
+	}
+}
+
+/*
  * The DV packet's payload is an 80 bit voice field followed by a data field of
  * 1 to 10 bytes plus a CRC (Vol 2, Part B, Section 6.5.2). Section 7.2 whitens
  * the whole payload in one run without reinitializing the register, so the
@@ -1331,6 +1426,7 @@ int main(void)
 	test_acl_payload_length_clamped();
 	test_sco_payload_lengths();
 	test_esco_payload_lengths();
+	test_esco_truncated_capture();
 	test_dv_payload();
 	test_payload_crc_needs_a_payload();
 	test_fhs_payload();
