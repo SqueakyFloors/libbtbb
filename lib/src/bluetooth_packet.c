@@ -141,6 +141,10 @@ static void add_syndrome(uint64_t syndrome, uint64_t error)
 {
 	syndrome_struct *s;
 	s = malloc(sizeof(syndrome_struct));
+	/* One missing entry costs the error correction the one error pattern
+	 * it describes, which the sync word search then does not put right. */
+	if (s == NULL)
+		return;
 	s->syndrome = syndrome;
 	s->error = error;
 
@@ -730,6 +734,10 @@ static char *unfec23(char *input, int length, int *corrected)
 		length += (10 - diff);
 
 	output = (char *) malloc(length);
+	/* Every caller already treats a null return as a block it could not
+	 * put right, and reports no payload for it. */
+	if (output == NULL)
+		return NULL;
 
 	for (iptr = 0, optr = 0; optr<length; iptr += 15, optr += 10) {
 		// copy data to output
@@ -1962,6 +1970,9 @@ char *tun_format(btbb_packet* pkt)
 	int length = 9 + pkt->payload_length;
 	char *tun_format = (char *) malloc(length);
 	int i;
+
+	if (tun_format == NULL)
+		return NULL;
 
 	/* meta data */
 	tun_format[0] = pkt->clkn & 0xff;

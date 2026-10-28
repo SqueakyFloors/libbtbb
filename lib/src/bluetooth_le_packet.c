@@ -540,7 +540,6 @@ static void _dump_scan_rsp_data(const uint8_t *buf, int len) {
 	int sublen, i;
 	uint8_t type;
 	uint16_t val;
-	char *cval;
 
 	while (pos < len) {
 		sublen = buf[pos];
@@ -625,8 +624,13 @@ print128:
 			case 0x0a:
 				printf(" (Tx Power Level)\n");
 				if (sublen-1 == 1) {
-					cval = (char *)&buf[pos+1];
-					printf("           %d dBm\n", *cval);
+					/* A signed value, -127 to 20 dBm
+					 * (Core Specification Supplement,
+					 * Part A, Section 1.5). Plain char is
+					 * unsigned on ARM, where -12 dBm
+					 * printed as 244 dBm. */
+					int8_t level = (int8_t) buf[pos+1];
+					printf("           %d dBm\n", level);
 				} else {
 					_warn("Wrong length (%d, should be 1)\n", sublen-1);
 				}

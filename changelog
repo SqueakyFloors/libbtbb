@@ -106,6 +106,21 @@ libbtbb (2020-12-R1+fork5) unstable; urgency=low
     at the link of the first test program with "library 'btbb-static' not
     found". The refusal now names both options, and the test programs link
     whichever library the configuration built.
+  * A Tx Power Level in advertising data is printed as the signed value the
+    specification defines, so lell_print() reports -12 dBm rather than
+    244 dBm. It was read through a plain char, which is unsigned on every ARM
+    host - a Raspberry Pi among them - and signed on the x86 and Apple ones,
+    so the same capture printed differently depending on where it was read.
+  * A capture file's interface description is no longer read past the end of
+    the option list that carries it. The description was handed to the pcapng
+    writer as a list of options with no terminating option, so a description
+    of 252 characters or more left both the writer and the timestamp
+    resolution check reading an option header from the bytes after the list,
+    and writing whatever they found there into the file. Ubertooth's tools
+    pass a nine-character description, so their captures were never affected.
+  * An allocation that fails is reported rather than written through:
+    btbb_piconet_new() and get_piconet() return NULL, as btbb_packet_new()
+    already did, and the FEC 2/3 decoder and tun_format() do the same.
   * An advertising PDU's length is read from the whole header octet, as the
     Bluetooth Core specification has defined it since 5.0. Six bits were read,
     which was the 4.x header, so an extended advertising PDU on a primary

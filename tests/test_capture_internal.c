@@ -160,11 +160,73 @@ static void test_longest_block_fits(void)
 	CHECK(all_zero(&bredr, 28 + 22 + 343, 400));
 }
 
+/*
+ * The option list a caller's interface description is handed to the pcapng
+ * layer in ends inside the object that holds it.
+ *
+ * pcapng_create() and check_and_fix_tsresol() both walk that list: from one
+ * option to the next by the length in its header, stopping at an option whose
+ * code is zero. So the list has to hold such an option itself, whatever the
+ * description's length. Here the object is filled with a pattern first, so a
+ * walk that ran past the end would be stepping over the pattern rather than
+ * over a convenient zero, and the walk is counted rather than taken.
+ */
+static void test_interface_desc_list_ends_inside_itself(void)
+{
+	char desc[300];
+	size_t length;
+
+	memset(desc, 'd', sizeof(desc));
+
+	/* every description length, up to longer than the list can hold */
+	for (length = 0; length < sizeof(desc); length++) {
+		interface_desc_option opt;
+		const uint8_t *bytes = (const uint8_t *) &opt;
+		size_t off = 0;
+		int steps = 0;
+
+		memset(&opt, SCRIBBLE, sizeof(opt));
+		desc[length] = '\0';
+		CHECK(interface_desc_options(&opt, desc) ==
+		      (const option_header *) &opt);
+
+		/* the walk both readers make */
+		while (off + sizeof(option_header) <= sizeof(opt)) {
+			uint16_t code = (uint16_t) (bytes[off] |
+						    (bytes[off + 1] << 8));
+			uint16_t len = (uint16_t) (bytes[off + 2] |
+						   (bytes[off + 3] << 8));
+
+			if (code == 0 || len == 0) {
+				break;	/* the end of the list */
+			}
+			off += 4 + 4 * ((size_t) (len + 3) / 4);
+			++steps;
+		}
+
+		/* It stopped on an option inside the object, having stepped
+		   over the description and nothing else. An empty
+		   description is an option of no length, which ends the list
+		   where it starts, so there is nothing to step over. */
+		CHECK(off + sizeof(option_header) <= sizeof(opt));
+		CHECK(steps == (length > 0 ? 1 : 0));
+		desc[length] = 'd';
+	}
+
+	/* no description at all is no list */
+	{
+		interface_desc_option opt;
+
+		CHECK(interface_desc_options(&opt, NULL) == NULL);
+	}
+}
+
 int main(void)
 {
 	test_bredr_padding_is_zero();
 	test_le_padding_is_zero();
 	test_longest_block_fits();
+	test_interface_desc_list_ends_inside_itself();
 
 	if (failures) {
 		printf("%d failure%s\n", failures, failures == 1 ? "" : "s");

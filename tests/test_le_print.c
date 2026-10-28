@@ -30,6 +30,17 @@
 #include "btbb.h"
 #include "bluetooth_le_packet.h"
 
+/*
+ * Compiling the printer into the test, which the CMake target that defines
+ * this does with -funsigned-char. Plain char is unsigned on every ARM host,
+ * the Raspberry Pi included, and signed on the x86 and Apple ones, so a
+ * signed field read through a plain char comes out differently on each. The
+ * test is built both ways so neither goes unchecked.
+ */
+#ifdef LE_PRINT_COMPILE_PRINTER
+#include "bluetooth_le_packet.c"
+#endif
+
 static int failures = 0;
 
 #define CHECK_CONTAINS(haystack, needle)                                   \
@@ -218,6 +229,37 @@ static void test_connect_req(void)
 	CHECK_CONTAINS(out, "CRCInit: 030201");
 	CHECK_CONTAINS(out, "Interval: 0018 (24)");
 	CHECK_CONTAINS(out, "Hop: 7");
+	if (err[0] != '\0') {
+		printf("FAIL: unexpected stderr output: %s", err);
+		++failures;
+	}
+}
+
+/*
+ * A Tx Power Level element, whose value is signed: -127 to 20 dBm (Core
+ * Specification Supplement, Part A, Section 1.5). Read through a plain char
+ * it came out as 244 dBm wherever char is unsigned.
+ */
+static void test_tx_power_level_is_signed(void)
+{
+	static const uint8_t ADV_IND_TX_POWER[MAX_LE_SYMBOLS] = {
+		0xd6, 0xbe, 0x89, 0x8e,			/* access address */
+		0x00,					/* ADV_IND */
+		12,					/* 6 + 6 bytes */
+		0x66, 0x55, 0x44, 0x33, 0x22, 0x11,	/* AdvA */
+		0x02, 0x0a, 0xf4,			/* Tx Power -12 dBm */
+		0x02, 0x0a, 0x14,			/* Tx Power 20 dBm */
+		0xde, 0xad, 0xbe,			/* CRC, unchecked */
+	};
+	char out[8192], err[1024];
+
+	if (decode_and_capture(ADV_IND_TX_POWER, out, sizeof(out),
+			       err, sizeof(err)) != 0)
+		return;
+
+	CHECK_CONTAINS(out, "-12 dBm");
+	CHECK_CONTAINS(out, "20 dBm");
+	CHECK_LACKS(out, "244 dBm");
 	if (err[0] != '\0') {
 		printf("FAIL: unexpected stderr output: %s", err);
 		++failures;
@@ -570,6 +612,7 @@ static void test_an_empty_flags_element(void)
 int main(void)
 {
 	test_connect_req();
+	test_tx_power_level_is_signed();
 	test_uuid16_advertising_data();
 	test_diagnostics_go_to_stderr();
 	test_well_formed_values_keep_their_indent();

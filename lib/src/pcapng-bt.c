@@ -55,6 +55,43 @@ static const struct {
 	}
 };
 
+/*
+ * The option list a caller's interface description is passed to the writer
+ * in.
+ *
+ * A reader of an option list steps from one option to the next by the length
+ * in each option's header, and stops at an option whose code is zero. So the
+ * list has to carry that terminator itself. Without one, a description long
+ * enough to fill desc puts the step past it on the four bytes after this
+ * object, and pcapng_create() and check_and_fix_tsresol() both read an option
+ * header from there.
+ *
+ * desc is zeroed, so a shorter description already stops the walk inside it;
+ * the terminator is what the longest one stops on. The description is cut to
+ * 255 characters, the longest the option's 16-bit length needs to describe
+ * and what the writer has always copied.
+ */
+typedef struct {
+	option_header header;
+	char desc[256];
+	option_header terminator;
+} interface_desc_option;
+
+static const option_header *
+interface_desc_options( interface_desc_option * opt, const char * desc )
+{
+	if (desc == NULL) {
+		return NULL;
+	}
+
+	memset( opt, 0, sizeof( *opt ) );
+	opt->header.option_code = IF_DESCRIPTION;
+	(void) strncpy( &opt->desc[0], desc, sizeof( opt->desc ) - 1 );
+	opt->header.option_length = (uint16_t) strlen( &opt->desc[0] );
+
+	return (const option_header *) opt;
+}
+
 static PCAPNG_RESULT
 check_and_fix_tsresol( PCAPNG_HANDLE * handle,
 		       const option_header * interface_options )
@@ -133,21 +170,9 @@ int btbb_pcapng_create_file( const char *filename,
 	int retval = PCAPNG_OK;
 	PCAPNG_HANDLE * handle = malloc( sizeof(PCAPNG_HANDLE) );
 	if (handle) {
-		const option_header * popt = NULL;
-		struct {
-			option_header header;
-			char desc[256];
-		} ifopt = {
-			.header = {
-				.option_code = IF_DESCRIPTION,
-			}
-		};
-		if (interface_desc) {
-			(void) strncpy( &ifopt.desc[0], interface_desc, 256 );
-			ifopt.desc[255] = '\0';
-			ifopt.header.option_length = strlen( ifopt.desc );
-			popt = (const option_header *) &ifopt;
-		}
+		interface_desc_option ifopt;
+		const option_header * popt =
+			interface_desc_options( &ifopt, interface_desc );
 
 		retval = -create_bredr_capture_file_single_interface( handle,
 								      filename,
@@ -416,21 +441,9 @@ lell_pcapng_create_file(const char *filename, const char *interface_desc,
 	int retval = PCAPNG_OK;
 	PCAPNG_HANDLE * handle = malloc( sizeof(PCAPNG_HANDLE) );
 	if (handle) {
-		const option_header * popt = NULL;
-		struct {
-			option_header header;
-			char desc[256];
-		} ifopt = {
-			.header = {
-				.option_code = IF_DESCRIPTION,
-			}
-		};
-		if (interface_desc) {
-			(void) strncpy( &ifopt.desc[0], interface_desc, 256 );
-			ifopt.desc[255] = '\0';
-			ifopt.header.option_length = strlen( ifopt.desc );
-			popt = (const option_header *) &ifopt;
-		}
+		interface_desc_option ifopt;
+		const option_header * popt =
+			interface_desc_options( &ifopt, interface_desc );
 
 		retval = -create_le_capture_file_single_interface( handle,
 								   filename,
