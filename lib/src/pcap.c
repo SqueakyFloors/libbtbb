@@ -70,7 +70,8 @@ FILE *btbb_pcap_open(const char *filename, uint32_t dlt, uint32_t snaplen) {
 	   there is no way to discard a buffer without flushing it - which
 	   would put those bytes in the middle of the file after the
 	   truncation. Each record is flushed as it is written in any case, so
-	   writing straight through costs one more write per record.
+	   the cost is a second write per record, the header and the body no
+	   longer being coalesced.
 
 	   A stream that cannot be given up its buffer is no good for writing
 	   records that have to be whole, so give up on it here rather than
@@ -139,10 +140,9 @@ typedef struct {
 
 /* Take a record that could not be written whole back out of the file, so the
    capture ends on the last complete record and a reader does not run into a
-   record header whose length reaches past the end of the file. The stream is
-   in its error state, which has to be cleared before it will accept the seek
-   that follows the truncation. btbb_pcap_open() left the stream unbuffered,
-   so what reached the file is all there was of the record.
+   record header whose length reaches past the end of the file.
+   btbb_pcap_open() left the stream unbuffered, so what reached the file is
+   all there was of the record.
 
    This is the best that can be done rather than a guarantee: a capture going
    to something whose position cannot be found, or that cannot be truncated
