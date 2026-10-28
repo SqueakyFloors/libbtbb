@@ -30,9 +30,51 @@
 #include <sys/types.h>
 #include <unistd.h>
 
-static option_header padopt = {
-	.option_code = 0xffff,
-};
+/* The option code used for padding. The format defines no padding option, so
+   this is a code of this library's own choosing; a reader steps over an
+   option it does not know by the length that follows the code. */
+#define PCAPNG_OPTION_PADDING 0xffff
+
+/* An option's length field is 16 bits wide, so one option can cover at most
+   65532 bytes of value, the largest multiple of 4 that fits. A block with
+   more spare room than that needs a second padding option; a 64 kB page
+   gives one that big. */
+#define MAX_OPTION_VALUE_LENGTH 0xfffc
+
+/* Fill the spare room at the end of a block with padding options, so that a
+   reader walks over it as options rather than reading it as data.
+
+   block is the start of the block, block_size its total length, and used the
+   offset one past the last option written so far. The last 8 bytes are left
+   as they are: 4 for the end-of-options marker, which is an all-zero word,
+   and 4 for the block's trailing length. */
+static void write_padding_options( void * block,
+				   const size_t block_size,
+				   const size_t used )
+{
+	uint8_t * dest = &((uint8_t *) block)[used];
+	size_t remaining;
+
+	if (block_size < used + 8) {
+		return;
+	}
+	remaining = block_size - used - 8;
+
+	while (remaining >= sizeof( option_header )) {
+		size_t value_length = remaining - sizeof( option_header );
+		option_header padopt;
+
+		if (value_length > MAX_OPTION_VALUE_LENGTH) {
+			value_length = MAX_OPTION_VALUE_LENGTH;
+		}
+		padopt.option_code = PCAPNG_OPTION_PADDING;
+		padopt.option_length = (uint16_t) value_length;
+		(void) memcpy( dest, &padopt, sizeof( padopt ) );
+
+		dest += sizeof( option_header ) + value_length;
+		remaining -= sizeof( option_header ) + value_length;
+	}
+}
 
 PCAPNG_RESULT pcapng_create( PCAPNG_HANDLE * handle,
 			     const char * filename,
@@ -193,21 +235,18 @@ PCAPNG_RESULT pcapng_create( PCAPNG_HANDLE * handle,
 			retval = PCAPNG_MMAP_FAILED;
 		}
 		else {
-			uint8_t * dest = &((uint8_t *)handle->section_header)[handle->next_section_option_offset];
-			padopt.option_length = handle->section_header_size -
-				handle->next_section_option_offset - 12;
-
 			/* Add padding options, update the header sizes. */
-			(void) memcpy( dest, &padopt, sizeof( padopt ) );
+			write_padding_options( handle->section_header,
+					       handle->section_header_size,
+					       handle->next_section_option_offset );
 			handle->section_header->block_total_length =
 				(uint32_t) handle->section_header_size;
 			((uint32_t*)handle->section_header)[handle->section_header_size/4-1] =
 				(uint32_t) handle->section_header_size;
 
-			padopt.option_length = handle->interface_description_size -
-				handle->next_interface_option_offset - 12;
-			dest = &((uint8_t *)handle->interface_description)[handle->next_interface_option_offset];
-			(void) memcpy( dest, &padopt, sizeof( padopt ) );
+			write_padding_options( handle->interface_description,
+					       handle->interface_description_size,
+					       handle->next_interface_option_offset );
 			handle->interface_description->block_total_length =
 				(uint32_t) handle->interface_description_size;
 			((uint32_t*)handle->interface_description)[handle->interface_description_size/4-1] =
@@ -234,15 +273,25 @@ PCAPNG_RESULT pcapng_append_section_option( PCAPNG_HANDLE * handle,
 		    handle->next_section_option_offset &&
 		    section_option) {
 			size_t copysz = 4+section_option->option_length;
+			size_t paddedsz = 4*((copysz+3)/4);
 			uint8_t * dest = &((uint8_t *)handle->section_header)[handle->next_section_option_offset];
-			(void) memcpy( dest, section_option, copysz );
-			handle->next_section_option_offset += 4*((copysz+3)/4);
 
-			/* update padding option */
-			dest = &((uint8_t *)handle->section_header)[handle->next_section_option_offset];
-			padopt.option_length = handle->section_header_size -
-				handle->next_section_option_offset - 12;
-			(void) memcpy( dest, &padopt, sizeof( padopt ) );
+			/* The option, the end-of-options marker and the
+			   trailing block length must all still fit in the
+			   space set aside when the file was created. */
+			if (handle->next_section_option_offset + paddedsz + 8 >
+			    handle->section_header_size) {
+				retval = PCAPNG_NO_MEMORY;
+			}
+			else {
+				(void) memcpy( dest, section_option, copysz );
+				handle->next_section_option_offset += paddedsz;
+
+				/* update padding option */
+				write_padding_options( handle->section_header,
+						       handle->section_header_size,
+						       handle->next_section_option_offset );
+			}
 		}
 		else {
 			retval = PCAPNG_NO_MEMORY;
@@ -264,15 +313,25 @@ PCAPNG_RESULT pcapng_append_interface_option( PCAPNG_HANDLE * handle,
 		    handle->next_interface_option_offset &&
 		    interface_option) {
 			size_t copysz = 4+interface_option->option_length;
+			size_t paddedsz = 4*((copysz+3)/4);
 			uint8_t * dest = &((uint8_t *)handle->interface_description)[handle->next_interface_option_offset];
-			(void) memcpy( dest, interface_option, copysz );
-			handle->next_interface_option_offset += 4*((copysz+3)/4);
 
-			/* update padding option */
-			dest = &((uint8_t *)handle->interface_description)[handle->next_interface_option_offset];
-			padopt.option_length = handle->interface_description_size -
-				handle->next_interface_option_offset - 12;
-			(void) memcpy( dest, &padopt, sizeof( padopt ) );
+			/* The option, the end-of-options marker and the
+			   trailing block length must all still fit in the
+			   space set aside when the file was created. */
+			if (handle->next_interface_option_offset + paddedsz + 8 >
+			    handle->interface_description_size) {
+				retval = PCAPNG_NO_MEMORY;
+			}
+			else {
+				(void) memcpy( dest, interface_option, copysz );
+				handle->next_interface_option_offset += paddedsz;
+
+				/* update padding option */
+				write_padding_options( handle->interface_description,
+						       handle->interface_description_size,
+						       handle->next_interface_option_offset );
+			}
 		}
 		else {
 			retval = PCAPNG_NO_MEMORY;
@@ -288,14 +347,26 @@ PCAPNG_RESULT pcapng_append_packet( PCAPNG_HANDLE * handle,
 				    const enhanced_packet_block * packet )
 {
 	PCAPNG_RESULT retval = PCAPNG_OK;
-	if (handle && (handle->fd != -1)) {
+	if (handle && (handle->fd != -1) &&
+	    handle->section_header && (handle->section_header != MAP_FAILED)) {
 		size_t writesz = packet->block_total_length;
+		off_t before = lseek( handle->fd, 0, SEEK_CUR );
 		ssize_t result = write( handle->fd, packet, writesz );
-		if (result == -1) {
-			result = PCAPNG_FILE_WRITE_ERROR;
+
+		if ((result != -1) && ((size_t) result == writesz)) {
+			handle->section_header->section_length += writesz;
 		}
 		else {
-			handle->section_header->section_length += writesz;
+			/* A short write leaves part of a block in the file,
+			   which no reader can make sense of, so take it back
+			   out and leave the capture ending on the last whole
+			   block. The caller is told either way, so it can
+			   stop capturing rather than keep trying. */
+			if ((result > 0) && (before != (off_t) -1) &&
+			    (ftruncate( handle->fd, before ) == 0)) {
+				(void) lseek( handle->fd, before, SEEK_SET );
+			}
+			retval = PCAPNG_FILE_WRITE_ERROR;
 		}
 	}
 	else {
@@ -306,6 +377,11 @@ PCAPNG_RESULT pcapng_append_packet( PCAPNG_HANDLE * handle,
 
 PCAPNG_RESULT pcapng_close( PCAPNG_HANDLE * handle )
 {
+	PCAPNG_RESULT retval = PCAPNG_OK;
+
+	if (handle == NULL) {
+		return PCAPNG_INVALID_HANDLE;
+	}
 	if (handle->interface_description &&
 	    (handle->interface_description != MAP_FAILED)) {
 		(void) munmap( handle->interface_description,
@@ -316,8 +392,10 @@ PCAPNG_RESULT pcapng_close( PCAPNG_HANDLE * handle )
 		(void) munmap( handle->section_header,
 			       handle->section_header_size );
 	}
-	if (handle->fd != -1) {
-		(void) close( handle->fd );
+	/* Closing is the last chance to notice that part of the capture never
+	   reached the file. */
+	if ((handle->fd != -1) && (close( handle->fd ) != 0)) {
+		retval = PCAPNG_FILE_WRITE_ERROR;
 	}
-	return PCAPNG_OK;
+	return retval;
 }

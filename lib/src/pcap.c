@@ -34,6 +34,7 @@ typedef enum {
 	PCAP_INVALID_HANDLE,
 	PCAP_FILE_NOT_ALLOWED,
 	PCAP_NO_MEMORY,
+	PCAP_FILE_WRITE_ERROR,
 } PCAP_RESULT;
 
 typedef struct __attribute__((packed)) pcap_hdr_s {
@@ -60,7 +61,12 @@ FILE *btbb_pcap_open(const char *filename, uint32_t dlt, uint32_t snaplen) {
 	FILE *pcap_file = fopen(filename, "w");
 	if (pcap_file == NULL) return NULL;
 
-	fwrite(&pcap_header, sizeof(pcap_header), 1, pcap_file);
+	/* A file whose header did not reach it is no capture file, so say so
+	   now rather than leaving the caller with a handle to it. */
+	if (fwrite(&pcap_header, sizeof(pcap_header), 1, pcap_file) != 1) {
+		(void) fclose(pcap_file);
+		return NULL;
+	}
 
 	return pcap_file;
 }
@@ -78,8 +84,9 @@ btbb_pcap_create_file(const char *filename, btbb_pcap_handle ** ph)
 	btbb_pcap_handle * handle = malloc( sizeof(btbb_pcap_handle) );
 	if (handle) {
 		memset(handle, 0, sizeof(*handle));
+		/* the longest record: the pseudoheader and a full payload */
 		handle->pcap_file = btbb_pcap_open(filename, DLT_BLUETOOTH_BREDR_BB,
-											BREDR_MAX_PAYLOAD);
+						   sizeof(pcap_bluetooth_bredr_bb_header));
 		if (handle->pcap_file) {
 			*ph = handle;
 		}
@@ -111,10 +118,23 @@ typedef struct {
 	pcap_bluetooth_bredr_bb_header bredr_bb_header;
 } pcap_bredr_packet;
 
-void btbb_pcap_dump(FILE *file, pcaprec_hdr_t *pcap_header, u_char *data) {
-	fwrite(pcap_header, sizeof(*pcap_header), 1, file);
-	fwrite(data, pcap_header->incl_len, 1, file);
-	fflush(file);
+/* Write one record. Returns 0, or -PCAP_FILE_WRITE_ERROR if any of it did not
+   reach the file, so a capture that runs out of disk space is reported to the
+   caller instead of looking like a capture that simply ended. The file may
+   end part way through the record that failed; unlike the pcapng writer this
+   one does not take it back out, because stdio has already decided how much
+   of it to put there. */
+static int btbb_pcap_dump(FILE *file, pcaprec_hdr_t *pcap_header, u_char *data) {
+	if (fwrite(pcap_header, sizeof(*pcap_header), 1, file) != 1) {
+		return -PCAP_FILE_WRITE_ERROR;
+	}
+	if (fwrite(data, pcap_header->incl_len, 1, file) != 1) {
+		return -PCAP_FILE_WRITE_ERROR;
+	}
+	if (fflush(file) != 0) {
+		return -PCAP_FILE_WRITE_ERROR;
+	}
+	return 0;
 }
 
 static void
@@ -140,7 +160,9 @@ assemble_pcapng_bredr_packet( pcap_bredr_packet * pkt,
 	uint32_t pcap_caplen = sizeof(pcap_bluetooth_bredr_bb_header) -
 				sizeof(pkt->bredr_bb_header.bredr_payload) 
 				+ caplen;
-	uint32_t reflapuap = (ref_lap&0xffffff) | (ref_uap<<24);
+	/* The cast keeps the shift out of a signed int, where a reference UAP
+	   of 0x80 or above would overflow into the sign bit. */
+	uint32_t reflapuap = (ref_lap&0xffffff) | ((uint32_t) ref_uap << 24);
 
 	pkt->pcap_header.ts_sec  = ns / 1000000000ull;
 	pkt->pcap_header.ts_usec = ns % 1000000000ull;
@@ -176,15 +198,28 @@ btbb_pcap_append_packet(btbb_pcap_handle * h, const uint64_t ns,
 			const btbb_packet *pkt)
 {
 	if (h && h->pcap_file) {
-		uint16_t flags = BREDR_DEWHITENED | BREDR_SIGPOWER_VALID |
-			((noisedbm < sigdbm) ? BREDR_NOISEPOWER_VALID : 0) |
-			((reflap != LAP_ANY) ? BREDR_REFLAP_VALID : 0) |
-			((refuap != UAP_ANY) ? BREDR_REFUAP_VALID : 0);
-		uint32_t caplen = (uint32_t) btbb_packet_get_payload_length(pkt);
-		uint8_t payload_bytes[caplen];
-		btbb_get_payload_packed( pkt, (char *) &payload_bytes[0] );
-		caplen = MIN(BREDR_MAX_PAYLOAD, caplen);
+		uint16_t flags = bredr_record_flags( sigdbm, noisedbm, reflap, refuap, pkt );
+		/* A NULL or POLL packet has no payload, so the length is 0 and
+		   a buffer sized from it would be a zero-length array, which
+		   C does not define. The record holds BREDR_MAX_PAYLOAD
+		   bytes, and the decoder never produces more than a DH5's
+		   343, so size the buffer for the record and leave a longer
+		   payload unrecorded rather than overrun it. */
+		uint8_t payload_bytes[BREDR_MAX_PAYLOAD];
+		int payload_length = btbb_packet_get_payload_length(pkt);
+		uint32_t caplen = 0;
 		pcap_bredr_packet pcap_pkt;
+
+		/* Only a payload the decoder produced for this packet goes in
+		   the record. A rejected candidate clock from the search for
+		   a piconet's address part leaves a payload behind without
+		   that flag. */
+		if (btbb_packet_get_flag(pkt, BTBB_HAS_PAYLOAD) &&
+		    (payload_length > 0) &&
+		    (payload_length <= MAX_PAYLOAD_LENGTH / 8)) {
+			caplen = (uint32_t) btbb_get_payload_packed( pkt, (char *) &payload_bytes[0] );
+		}
+
 		assemble_pcapng_bredr_packet( &pcap_pkt,
 					      0,
 					      ns,
@@ -203,8 +238,8 @@ btbb_pcap_append_packet(btbb_pcap_handle * h, const uint64_t ns,
 					      btbb_packet_get_header_packed(pkt),
 					      flags,
 					      payload_bytes );
-		btbb_pcap_dump(h->pcap_file, &pcap_pkt.pcap_header, (u_char *)&pcap_pkt.bredr_bb_header);
-		return 0;
+		return btbb_pcap_dump(h->pcap_file, &pcap_pkt.pcap_header,
+				      (u_char *)&pcap_pkt.bredr_bb_header);
 	}
 	return -PCAP_INVALID_HANDLE;
 }
@@ -212,12 +247,16 @@ btbb_pcap_append_packet(btbb_pcap_handle * h, const uint64_t ns,
 int 
 btbb_pcap_close(btbb_pcap_handle * h)
 {
-	if (h && h->pcap_file) {
-		fclose(h->pcap_file);
+	int retval = 0;
+
+	/* Closing flushes, so this is the last chance to notice that part of
+	   the capture never reached the file. */
+	if (h && h->pcap_file && (fclose(h->pcap_file) != 0)) {
+		retval = -PCAP_FILE_WRITE_ERROR;
 	}
 	if (h) {
 		free(h);
-		return 0;
+		return retval;
 	}
 	return -PCAP_INVALID_HANDLE;
 }
@@ -230,14 +269,49 @@ struct lell_pcap_handle {
 	uint8_t btle_ppi_version;
 };
 
+#define PPI_BTLE 30006
+
+typedef struct __attribute__((packed)) {
+	uint8_t pph_version;
+	uint8_t pph_flags;
+	uint16_t pph_len;
+	uint32_t pph_dlt;
+} ppi_packet_header_t;
+
+typedef struct __attribute__((packed)) {
+	uint16_t pfh_type;
+	uint16_t pfh_datalen;
+} ppi_fieldheader_t;
+
+typedef struct __attribute__((packed)) {
+	uint8_t btle_version;
+	uint16_t btle_channel;
+	uint8_t btle_clkn_high;
+	uint32_t btle_clk100ns;
+	int8_t rssi_max;
+	int8_t rssi_min;
+	int8_t rssi_avg;
+	uint8_t rssi_count;
+} ppi_btle_t;
+
 static int
 lell_pcap_create_file_dlt(const char *filename, int dlt, lell_pcap_handle ** ph)
 {
 	int retval = 0;
 	lell_pcap_handle * handle = malloc( sizeof(lell_pcap_handle) );
 	if (handle) {
+		/* The snapshot length is the longest record this link type
+		   writes, so a reader sizing a buffer from it has room for
+		   every record in the file. */
+		uint32_t snaplen = (dlt == DLT_PPI)
+			? (uint32_t) (sizeof(ppi_packet_header_t) +
+				      sizeof(ppi_fieldheader_t) +
+				      sizeof(ppi_btle_t) + LE_MAX_PAYLOAD)
+			: (uint32_t) (sizeof(pcap_bluetooth_le_ll_header) +
+				      LE_MAX_PAYLOAD);
+
 		memset(handle, 0, sizeof(*handle));
-		handle->pcap_file = btbb_pcap_open(filename, dlt, BREDR_MAX_PAYLOAD);
+		handle->pcap_file = btbb_pcap_open(filename, dlt, snaplen);
 		if (handle->pcap_file) {
 			handle->dlt = dlt;
 			*ph = handle;
@@ -332,36 +406,11 @@ lell_pcap_append_packet(lell_pcap_handle * h, const uint64_t ns,
 					   refAA,
 					   flags,
 					   &pkt->symbols[0] );
-		btbb_pcap_dump(h->pcap_file, &pcap_pkt.pcap_header, (u_char *)&pcap_pkt.le_ll_header);
-		return 0;
+		return btbb_pcap_dump(h->pcap_file, &pcap_pkt.pcap_header,
+				      (u_char *)&pcap_pkt.le_ll_header);
 	}
 	return -PCAP_INVALID_HANDLE;
 }
-
-#define PPI_BTLE 30006
-
-typedef struct __attribute__((packed)) {
-	uint8_t pph_version;
-	uint8_t pph_flags;
-	uint16_t pph_len;
-	uint32_t pph_dlt;
-} ppi_packet_header_t;
-
-typedef struct __attribute__((packed)) {
-	uint16_t pfh_type;
-	uint16_t pfh_datalen;
-} ppi_fieldheader_t;
-
-typedef struct __attribute__((packed)) {
-	uint8_t btle_version;
-	uint16_t btle_channel;
-	uint8_t btle_clkn_high;
-	uint32_t btle_clk100ns;
-	int8_t rssi_max;
-	int8_t rssi_min;
-	int8_t rssi_avg;
-	uint8_t rssi_count;
-} ppi_btle_t;
 
 typedef struct __attribute__((packed)) {
 	pcaprec_hdr_t pcap_header;
@@ -411,8 +460,8 @@ lell_pcap_append_ppi_packet(lell_pcap_handle * h, const uint64_t ns,
 		pcap_pkt.le_ll_ppi_header.rssi_avg = rssi_avg;
 		pcap_pkt.le_ll_ppi_header.rssi_count = rssi_count;
 		(void) memcpy( &pcap_pkt.le_packet[0], &pkt->symbols[0], incl_len);
-		btbb_pcap_dump(h->pcap_file, &pcap_pkt.pcap_header, (u_char *)&pcap_pkt.ppi_packet_header);
-		return 0;
+		return btbb_pcap_dump(h->pcap_file, &pcap_pkt.pcap_header,
+				      (u_char *)&pcap_pkt.ppi_packet_header);
 	}
 	return -PCAP_INVALID_HANDLE;
 }
@@ -420,12 +469,16 @@ lell_pcap_append_ppi_packet(lell_pcap_handle * h, const uint64_t ns,
 int 
 lell_pcap_close(lell_pcap_handle *h)
 {
-	if (h && h->pcap_file) {
-		fclose(h->pcap_file);
+	int retval = 0;
+
+	/* Closing flushes, so this is the last chance to notice that part of
+	   the capture never reached the file. */
+	if (h && h->pcap_file && (fclose(h->pcap_file) != 0)) {
+		retval = -PCAP_FILE_WRITE_ERROR;
 	}
 	if (h) {
 		free(h);
-		return 0;
+		return retval;
 	}
 	return -PCAP_INVALID_HANDLE;
 }

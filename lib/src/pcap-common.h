@@ -22,6 +22,9 @@
 #ifndef PCAP_COMMON_DOT_H
 #define PCAP_COMMON_DOT_H
 
+#include "bluetooth_packet.h"
+#include "btbb.h"
+
 // since we no longer rely on or assume the existence of libpcap,
 // hardcode these DLTs
 #define DLT_PPI 192
@@ -83,6 +86,42 @@ inline uint64_t le64toh(uint64_t little_endian_64bits) { return little_endian_64
 #define DLT_BLUETOOTH_BREDR_BB 255
 #endif
 
+/* The flag word both BR/EDR writers put in a record. The two writers build
+   the same LINKTYPE_BLUETOOTH_BREDR_BB record, so they agree on it here. */
+static inline uint16_t bredr_record_flags( const int8_t sigdbm,
+					   const int8_t noisedbm,
+					   const uint32_t reflap,
+					   const uint8_t refuap,
+					   const btbb_packet *pkt )
+{
+	/* The format defines the reference UAP as the one a HEC or CRC result
+	   was reached with, and gives a reader no other field to learn which
+	   UAP that was. The library checks against the packet's own UAP, so
+	   only say what was checked when the reference UAP in the record is
+	   that same one. A capture tool that follows a piconet passes its UAP
+	   for both, so this costs it nothing. */
+	int refuap_is_the_one_checked = (refuap != UAP_ANY) &&
+		(refuap == btbb_packet_get_uap(pkt));
+
+	return (uint16_t) (BREDR_DEWHITENED | BREDR_SIGPOWER_VALID |
+		((noisedbm < sigdbm) ? BREDR_NOISEPOWER_VALID : 0) |
+		((reflap != LAP_ANY) ? BREDR_REFLAP_VALID : 0) |
+		((refuap != UAP_ANY) ? BREDR_REFUAP_VALID : 0) |
+		/* What the library actually verified. It checks the header's
+		   HEC whenever it decodes a header, and checks a payload's
+		   CRC whenever the packet type carries one, and records both
+		   answers on the packet. A reader needs these to tell a
+		   verified payload from a guess. */
+		((refuap_is_the_one_checked &&
+		  btbb_packet_get_flag(pkt, BTBB_HEC_CHECKED)) ? BREDR_HEC_CHECKED : 0) |
+		((refuap_is_the_one_checked &&
+		  btbb_packet_get_flag(pkt, BTBB_HEC_VALID))   ? BREDR_HEC_VALID   : 0) |
+		((refuap_is_the_one_checked &&
+		  btbb_packet_get_flag(pkt, BTBB_CRC_CHECKED)) ? BREDR_CRC_CHECKED : 0) |
+		((refuap_is_the_one_checked &&
+		  btbb_packet_get_flag(pkt, BTBB_CRC_CORRECT)) ? BREDR_CRC_VALID   : 0));
+}
+
 typedef struct __attribute__((packed)) _pcap_bluetooth_bredr_bb_header {
         uint8_t rf_channel;
         int8_t signal_power;
@@ -97,6 +136,13 @@ typedef struct __attribute__((packed)) _pcap_bluetooth_bredr_bb_header {
         uint16_t flags;
 	uint8_t bredr_payload[BREDR_MAX_PAYLOAD];
 } pcap_bluetooth_bredr_bb_header;
+
+/* Both BR/EDR writers pack a packet's payload into a buffer of
+   BREDR_MAX_PAYLOAD bytes, and btbb_get_payload_packed() writes one byte for
+   each byte the packet's payload field holds, so the record has to be at
+   least as long as that field. */
+typedef char bredr_record_holds_a_whole_payload[
+	(BREDR_MAX_PAYLOAD >= MAX_PAYLOAD_LENGTH / 8) ? 1 : -1];
 
 /* --------------------------------- Low Energy ---------------------------- */
 

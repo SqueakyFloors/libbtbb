@@ -42,6 +42,13 @@
 #define BTBB_IS_ALIASED        13
 #define BTBB_FOLLOWING         14
 
+/* Whether the header's HEC and the payload's CRC were checked, and what the
+   HEC check said. The CRC's answer is BTBB_CRC_CORRECT above. A capture file
+   records all four, so a reader can tell a verified payload from a guess. */
+#define BTBB_HEC_CHECKED 15
+#define BTBB_HEC_VALID   16
+#define BTBB_CRC_CHECKED 17
+
 /* Payload modulation */
 #define BTBB_MOD_GFSK              0x00
 #define BTBB_MOD_PI_OVER_2_DQPSK   0x01
@@ -278,7 +285,10 @@ int lell_pcapng_create_file(const char *filename, const char *interface_desc, le
 int lell_pcapng_append_packet(lell_pcapng_handle * h, const uint64_t ns,
                               const int8_t sigdbm, const int8_t noisedbm,
                               const uint32_t refAA, const lell_packet *pkt);
-/* record LE CONNECT_REQ parameters to PCAPNG capture file */
+/* Record the parameters of an LE CONNECT_IND in a PCAPNG capture file.
+   'pdu' points at the 34 bytes of the PDU's payload, InitA through HopSCA,
+   which in a captured frame start 6 bytes in, after the access address and
+   the PDU header. */
 int lell_pcapng_record_connect_req(lell_pcapng_handle * h, const uint64_t ns, const uint8_t * pdu);
 int lell_pcapng_close(lell_pcapng_handle *h);
 

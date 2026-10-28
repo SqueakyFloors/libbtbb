@@ -82,6 +82,29 @@ if(BUILD_TESTING)
              -P ${CMAKE_CURRENT_SOURCE_DIR}/test_release_version.cmake)
     set_tests_properties(release_version PROPERTIES TIMEOUT 30)
 
+    # Capture file writers, checked by reading the bytes back out of a file.
+    add_executable(test_capture test_capture.c)
+    target_include_directories(test_capture PRIVATE ${PROJECT_SOURCE_DIR}/lib/src)
+    if(BUILD_SHARED_LIB)
+        target_link_libraries(test_capture btbb)
+    else()
+        target_link_libraries(test_capture btbb-static)
+    endif()
+    add_test(NAME capture COMMAND test_capture)
+    set_tests_properties(capture PROPERTIES TIMEOUT 30)
+
+    # The record assemblers are internal, so this one compiles the two
+    # translation units they live in and links the library for the rest.
+    add_executable(test_capture_internal test_capture_internal.c)
+    target_include_directories(test_capture_internal PRIVATE ${PROJECT_SOURCE_DIR}/lib/src)
+    if(BUILD_SHARED_LIB)
+        target_link_libraries(test_capture_internal btbb)
+    else()
+        target_link_libraries(test_capture_internal btbb-static)
+    endif()
+    add_test(NAME capture_internal COMMAND test_capture_internal)
+    set_tests_properties(capture_internal PROPERTIES TIMEOUT 30)
+
     add_executable(test_le_long test_le_long.c)
     target_include_directories(test_le_long PRIVATE ${PROJECT_SOURCE_DIR}/lib/src)
     if(BUILD_SHARED_LIB)

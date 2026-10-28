@@ -793,11 +793,30 @@ int crc_check(int clock, btbb_packet* pkt)
 	 */
 	if (retval == 0 && (pkt->packet_type != 2 && pkt->packet_type != 3 &&
 			pkt->packet_type != 5))
-		return 1;
+		retval = 1;
 
 	/* EV3 and EV5 have a relatively high false positive rate */
 	if (retval > 1 && (pkt->packet_type == 7 || pkt->packet_type == 13))
-		return 1;
+		retval = 1;
+
+	/* This is how the library guesses a piconet's upper address part: it
+	 * decodes the same packet at up to 64 candidate clocks and keeps the
+	 * one whose CRC comes out.
+	 *
+	 * More than 2 is a CRC that came out, which is the answer the caller
+	 * takes as this piconet's address part and clock. It is about this
+	 * packet, so leave it on it. Anything else is a trial the caller goes
+	 * on from, and the trial has overwritten the payload, its length and
+	 * the packet type with a candidate's, so nothing that was known about
+	 * the packet before still describes what it now holds: say nothing was
+	 * checked. A capture file would otherwise report a CRC failure for a
+	 * payload nothing ever decoded. */
+	if (retval <= 2) {
+		btbb_packet_set_flag(pkt, BTBB_HEC_CHECKED, 0);
+		btbb_packet_set_flag(pkt, BTBB_HEC_VALID, 0);
+		btbb_packet_set_flag(pkt, BTBB_CRC_CHECKED, 0);
+		btbb_packet_set_flag(pkt, BTBB_CRC_CORRECT, 0);
+	}
 
 	return retval;
 }
@@ -816,6 +835,14 @@ static int payload_crc(btbb_packet* pkt)
 
 	crc = crcgen(pkt->payload, (pkt->payload_length - 2) * 8, pkt->UAP);
 	check = air_to_host16(&pkt->payload[(pkt->payload_length - 2) * 8], 16);
+
+	/* Record the answer on the packet, so a capture file can say whether
+	   the CRC was checked and whether it passed. A type whose payload has
+	   no CRC only reaches here when the decoder is trying that type out,
+	   and clears both flags again if it settles on the type without
+	   one. */
+	btbb_packet_set_flag(pkt, BTBB_CRC_CHECKED, 1);
+	btbb_packet_set_flag(pkt, BTBB_CRC_CORRECT, crc == check);
 
 	return (crc == check);
 }
@@ -862,7 +889,10 @@ int fhs(int clock, btbb_packet* pkt)
 		}
 	}
 
-	/* failed to unwhiten */
+	/* No whitening input made the CRC come out, so what is left in the
+	 * payload is the last one tried and known to be wrong: report none,
+	 * as the two give-up paths above do. */
+	pkt->payload_length = 0;
 	free(corrected);
 	return 0;
 }
@@ -1334,6 +1364,18 @@ int btbb_decode_header(btbb_packet* pkt)
 	char header[18];
 	uint8_t UAP;
 
+	/* Nothing is known about this packet until it decodes, and a packet
+	 * can be handed new symbols without its decoded state being reset, so
+	 * drop every answer and the payload before the first return below.
+	 * Without this a short capture after a decoded one is recorded with
+	 * the earlier packet's payload and the checks that passed on it. */
+	btbb_packet_set_flag(pkt, BTBB_HEC_CHECKED, 0);
+	btbb_packet_set_flag(pkt, BTBB_HEC_VALID, 0);
+	btbb_packet_set_flag(pkt, BTBB_CRC_CHECKED, 0);
+	btbb_packet_set_flag(pkt, BTBB_CRC_CORRECT, 0);
+	pkt->payload_length = 0;
+	pkt->payload_header_length = 0;
+
 	/* check that we have enough symbols */
 	if (pkt->length < 122)
 		return 0;
@@ -1343,6 +1385,12 @@ int btbb_decode_header(btbb_packet* pkt)
 		uint16_t hdr_data = air_to_host16(pkt->packet_header, 10);
 		uint8_t hec = air_to_host8(&pkt->packet_header[10], 8);
 		UAP = uap_from_hec(hdr_data, hec);
+
+		/* Record the answer on the packet, so a capture file can say
+		   whether the HEC was checked and whether it passed. */
+		btbb_packet_set_flag(pkt, BTBB_HEC_CHECKED, 1);
+		btbb_packet_set_flag(pkt, BTBB_HEC_VALID, UAP == pkt->UAP);
+
 		if (UAP == pkt->UAP) {
 			pkt->packet_lt_addr = air_to_host8(&pkt->packet_header[0], 3);
 			pkt->packet_type = air_to_host8(&pkt->packet_header[3], 4);
@@ -1359,6 +1407,14 @@ int btbb_decode_payload(btbb_packet* pkt)
 {
 	int rv = 0;
 	pkt->payload_header_length = 0;
+
+	/* Nothing is known about this payload's CRC until one of the type
+	 * decoders below checks it, and the types whose payload has no CRC
+	 * never will. btbb_decode_header() has already cleared these in
+	 * every flow the library itself takes; this is for a caller that
+	 * changes the packet type between two calls here. */
+	btbb_packet_set_flag(pkt, BTBB_CRC_CHECKED, 0);
+	btbb_packet_set_flag(pkt, BTBB_CRC_CORRECT, 0);
 
 	switch(pkt->packet_type)
 	{
@@ -1427,6 +1483,21 @@ int btbb_decode_payload(btbb_packet* pkt)
 			rv = DH(pkt->clkn, pkt);
 			break;
 	}
+
+	/* These types search for their payload: the eSCO ones try every
+	 * candidate length and an FHS tries all 32 whitening inputs, checking
+	 * the CRC at each. Only a CRC that came out describes what the decoder
+	 * settled on; any other answer is about an attempt it abandoned, or
+	 * about a voice payload with no CRC at all. Drop it, or a capture file
+	 * reports a CRC failure the packet never had. */
+	if ((rv < 10) && ((pkt->packet_type == PACKET_TYPE_FHS) ||
+			  (pkt->packet_type == PACKET_TYPE_HV3) ||
+			  (pkt->packet_type == PACKET_TYPE_EV4) ||
+			  (pkt->packet_type == PACKET_TYPE_EV5))) {
+		btbb_packet_set_flag(pkt, BTBB_CRC_CHECKED, 0);
+		btbb_packet_set_flag(pkt, BTBB_CRC_CORRECT, 0);
+	}
+
 	btbb_packet_set_flag(pkt, BTBB_HAS_PAYLOAD, 1);
 	return rv;
 }
