@@ -107,8 +107,11 @@ typedef struct __attribute__((packed, aligned(4))) {
 
   /* The block header, the pseudoheader and LE_MAX_PAYLOAD together come to
      2 more than a multiple of 4, so these two bytes round the record up to a
-     4-byte boundary. A longer LE_MAX_PAYLOAD would need this adjusted, or
-     the longest block would run past the end of this struct. */
+     4-byte boundary. What matters is that residue, not the size itself: a
+     change to LE_MAX_PAYLOAD that leaves it 2 more than a multiple of 4
+     needs no adjustment here, and any other change does, or the longest
+     block would run past the end of this struct. The assertion at the end of
+     this file is what catches it. */
   uint8_t pad[2];
 
   /* Room for the options word and the trailing block length. They are

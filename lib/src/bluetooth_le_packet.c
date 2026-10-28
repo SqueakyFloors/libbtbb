@@ -31,13 +31,13 @@
 #include <stdarg.h>
 #include <string.h>
 
-/* The symbol buffer has to hold the longest PDU the Length field can claim,
- * plus the 9 bytes of access address, PDU header and CRC around it, or the
- * last octets of such a PDU would be lost and the bytes after them read as
- * its CRC. A buffer too small for that is caught here rather than in a
- * capture. */
-typedef char le_symbol_buffer_holds_the_longest_pdu[
-	(MAX_LE_SYMBOLS - 9 >= LE_MAX_PDU_LENGTH) ? 1 : -1];
+/* The symbol buffer is exactly the longest frame on air: the longest PDU the
+ * Length field can claim and the bytes around it. Too small and the last
+ * octets of such a PDU are lost, with the bytes after them read as its CRC,
+ * which is what a 260-byte buffer did; too large and it is no longer what the
+ * capture writers' record length is derived from. */
+typedef char le_symbol_buffer_is_the_longest_frame[
+	(MAX_LE_SYMBOLS == LE_MAX_PDU_LENGTH + LE_FRAMING_BYTES) ? 1 : -1];
 
 /* company identifier lookup */
 const char *bt_compidtostr(uint16_t compid);
@@ -361,11 +361,11 @@ void lell_allocate_and_decode_n(const uint8_t *stream, size_t stream_len,
 		(*pkt)->access_address |= (uint32_t) (*pkt)->symbols[3] << 24;
 	}
 
-	/* The access address (4 bytes), the PDU header (2) and the CRC (3) are
-	 * not part of the payload length, so 9 bytes of the capture are not
+	/* The access address, the PDU header and the CRC are not part of the
+	 * payload length, so LE_FRAMING_BYTES of the capture are not
 	 * payload. */
-	if (copy_len >= 9)
-		captured_len = (unsigned)(copy_len - 9);
+	if (copy_len >= LE_FRAMING_BYTES)
+		captured_len = (unsigned)(copy_len - LE_FRAMING_BYTES);
 
 	/* The second header octet is the whole Length field, in both kinds of
 	 * PDU: 1 to 255 octets for an advertising channel PDU, and 0 to 255

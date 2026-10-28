@@ -281,7 +281,11 @@ static int check_capture_writers(unsigned payload_len, uint8_t header0,
 
 int main(void)
 {
-	static const unsigned lengths[] = {0, 1, 27, 31, 32, 55, 56, 100, 251};
+	/* 252 to 255 are the four lengths a 260-byte symbol buffer could not
+	   hold. A data PDU reaches them on an encrypted link, where the
+	   Length counts the 4-octet MIC on top of the payload. */
+	static const unsigned lengths[] = {0, 1, 27, 31, 32, 55, 56, 100, 251,
+					   252, 253, 254, 255};
 	unsigned i;
 
 	for (i = 0; i < sizeof(lengths) / sizeof(lengths[0]); ++i)
@@ -303,7 +307,7 @@ int main(void)
 	if (check_capture_writers(255, 0x07, 2404))
 		return 1;
 
-	puts("PASS: LE lengths 0..251 preserved; the longest data and"
+	puts("PASS: LE lengths 0..255 preserved; the longest data and"
 	     " advertising packets are recorded whole in PCAP and PCAPNG");
 	return 0;
 }

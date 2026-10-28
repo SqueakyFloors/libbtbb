@@ -458,7 +458,7 @@ lell_pcap_append_packet(lell_pcap_handle * h, const uint64_t ns,
 		assemble_pcapng_le_packet( &pcap_pkt,
 					   0,
 					   ns,
-					   pkt->length + 4 + 2 + 3, // AA + header + CRC
+					   pkt->length + LE_FRAMING_BYTES,
 					   pkt->channel_k,
 					   sigdbm,
 					   noisedbm,
@@ -495,7 +495,7 @@ lell_pcap_append_ppi_packet(lell_pcap_handle * h, const uint64_t ns,
 			sizeof(ppi_fieldheader_t) +
 			sizeof(ppi_btle_t);
 		uint16_t MHz = 2402 + 2*lell_get_channel_k(pkt);
-		unsigned packet_len = pkt->length + 4 + 2 + 3; // AA + header + CRC
+		unsigned packet_len = pkt->length + LE_FRAMING_BYTES;
 		unsigned incl_len   = MIN(LE_MAX_PAYLOAD, packet_len);
 
 		pcap_pkt.pcap_header.ts_sec  = ns / 1000000000ull;

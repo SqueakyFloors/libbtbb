@@ -37,6 +37,13 @@
 
 static int failures = 0;
 
+/* The longest LE frame on air: the access address, the two header octets, the
+ * 255 payload octets a one-octet Length field can claim, and the CRC. Written
+ * out rather than taken from MAX_LE_SYMBOLS, so that a library whose buffer is
+ * shorter fails the checks below instead of overflowing the test's own
+ * frame. */
+#define LONGEST_LE_FRAME 264
+
 #define CHECK(cond)                                                        \
 	do {                                                               \
 		if (!(cond)) {                                             \
@@ -75,7 +82,7 @@ static void test_channel_indices(void)
 	size_t row;
 
 	for (row = 0; row < sizeof(CHANNELS) / sizeof(CHANNELS[0]); row++) {
-		uint8_t stream[MAX_LE_SYMBOLS];
+		uint8_t stream[LONGEST_LE_FRAME];
 		lell_packet *pkt = NULL;
 
 		memset(stream, 0, sizeof(stream));
@@ -96,13 +103,6 @@ static void test_channel_indices(void)
 /* ------------------------------------------------------------------ *
  * Section 2.3: advertising physical channel PDUs
  * ------------------------------------------------------------------ */
-
-/* The longest LE frame on air: the access address, the two header octets, the
- * 255 payload octets a one-octet Length field can claim, and the CRC. Written
- * out rather than taken from MAX_LE_SYMBOLS, so that a library whose buffer is
- * shorter fails the checks below instead of overflowing the test's own
- * frame. */
-#define LONGEST_LE_FRAME 264
 
 /* Lay out a packet the way the decoder receives it, already dewhitened:
  * access address, two header octets, payload, CRC. `stream_size` is how many
@@ -151,7 +151,7 @@ static void test_advertising_pdu_header(void)
 	size_t row;
 
 	for (row = 0; row < sizeof(CASES) / sizeof(CASES[0]); row++) {
-		uint8_t stream[MAX_LE_SYMBOLS];
+		uint8_t stream[LONGEST_LE_FRAME];
 		uint8_t payload[37];
 		lell_packet *pkt = NULL;
 		uint8_t header0 = (uint8_t) (CASES[row].type |
@@ -183,7 +183,7 @@ static void test_advertising_pdu_header(void)
 
 	/* any other access address on an advertising channel is wrong */
 	{
-		uint8_t stream[MAX_LE_SYMBOLS];
+		uint8_t stream[LONGEST_LE_FRAME];
 		lell_packet *pkt = NULL;
 		int length = build_le_packet(stream, sizeof(stream),
 					     0x8e89bed7, ADV_IND, 6, NULL);
@@ -210,11 +210,14 @@ static void test_advertising_pdu_header(void)
  */
 static void test_advertising_pdu_length_is_eight_bits(void)
 {
-	static const uint8_t LENGTHS[] = { 1, 37, 63, 64, 100, 200, 251 };
+	/* 252 to 255 are the four that a 260-byte symbol buffer could not
+	 * hold, so each of them is here and not only the longest. */
+	static const uint8_t LENGTHS[] = { 1, 37, 63, 64, 100, 200, 251, 252,
+					   253, 254, 255 };
 	size_t row;
 
 	for (row = 0; row < sizeof(LENGTHS) / sizeof(LENGTHS[0]); row++) {
-		uint8_t stream[MAX_LE_SYMBOLS];
+		uint8_t stream[LONGEST_LE_FRAME];
 		uint8_t payload[MAX_BUILT_PAYLOAD];
 		lell_packet *pkt = NULL;
 		int length, i;
@@ -321,13 +324,14 @@ static void test_longest_pdu_on_every_channel(void)
  */
 static void test_data_pdu_header_and_length(void)
 {
-	static const uint8_t LENGTHS[] = { 0, 1, 27, 28, 63, 64, 128, 251 };
+	static const uint8_t LENGTHS[] = { 0, 1, 27, 28, 63, 64, 128, 251, 252,
+					   253, 254, 255 };
 	size_t row;
 	int llid, nesn, sn, md;
 
 	for (row = 0; row < sizeof(LENGTHS) / sizeof(LENGTHS[0]); row++) {
-		uint8_t stream[MAX_LE_SYMBOLS];
-		uint8_t payload[251];
+		uint8_t stream[LONGEST_LE_FRAME];
+		uint8_t payload[MAX_BUILT_PAYLOAD];
 		lell_packet *pkt = NULL;
 		int length, i;
 
@@ -354,7 +358,7 @@ static void test_data_pdu_header_and_length(void)
 		for (nesn = 0; nesn < 2; nesn++)
 			for (sn = 0; sn < 2; sn++)
 				for (md = 0; md < 2; md++) {
-					uint8_t stream[MAX_LE_SYMBOLS];
+					uint8_t stream[LONGEST_LE_FRAME];
 					lell_packet *pkt = NULL;
 					uint8_t header0 = (uint8_t)
 						(llid | (nesn << 2) |
@@ -462,7 +466,7 @@ static void test_data_access_address_rules(void)
 	size_t row;
 
 	for (row = 0; row < sizeof(OFFENDERS) / sizeof(OFFENDERS[0]); row++) {
-		uint8_t stream[MAX_LE_SYMBOLS];
+		uint8_t stream[LONGEST_LE_FRAME];
 		lell_packet *pkt = NULL;
 		int length = build_le_packet(stream, sizeof(stream),
 					     OFFENDERS[row].aa, 0x01, 4,
@@ -484,7 +488,7 @@ static void test_data_access_address_rules(void)
 	}
 
 	for (row = 0; row < sizeof(COMPLIANT) / sizeof(COMPLIANT[0]); row++) {
-		uint8_t stream[MAX_LE_SYMBOLS];
+		uint8_t stream[LONGEST_LE_FRAME];
 		lell_packet *pkt = NULL;
 		int length = build_le_packet(stream, sizeof(stream),
 					     COMPLIANT[row], 0x01, 4,

@@ -35,9 +35,13 @@
  * Length also counts the 4-octet MIC an encrypted link adds. */
 #define LE_MAX_PDU_LENGTH 255
 
-/* Access address (4) + PDU header (2) + the longest a PDU may claim (255) +
- * CRC (3). Spelled out so that the check in bluetooth_le_packet.c has
- * something to check. */
+/* The bytes of a frame that the Length field does not count: the access
+ * address (4), the PDU header (2) and the CRC (3). */
+#define LE_FRAMING_BYTES 9
+
+/* The longest frame on air: 255 octets of PDU and the 9 bytes around them.
+ * Spelled out rather than computed, so that the check in
+ * bluetooth_le_packet.c has two numbers to compare. */
 #define MAX_LE_SYMBOLS 264
 
 /* How many bytes lell_allocate_and_decode() reads. It takes no length, and
