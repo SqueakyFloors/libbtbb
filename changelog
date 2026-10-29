@@ -66,9 +66,12 @@ libbtbb (2020-12-R1+fork5) unstable; urgency=low
     trial that settles the address part now records its header on the packet
     the way it already records its payload: the bits as they went on air, the
     fields they give, and BTBB_HEC_CHECKED with BTBB_HEC_VALID, which hold
-    under the same address part the record carries. A search that settles
-    nothing still records no header, since every clock it tried was ruled
-    out.
+    under the same address part the record carries. The same goes for the
+    other way a search settles, candidate clocks ruled out until one is left:
+    an idle link carries NULL and POLL packets, which have no payload and so
+    no CRC to settle anything, and the clock that is left reads the packet's
+    header. A search that settles nothing still records no header, since every
+    clock it tried was ruled out.
   * A survey piconet can be read while the survey is still running. The only
     way into a survey's results was btbb_next_survey_result(), which takes
     each piconet out of the survey, so a tool could not read the UAP the

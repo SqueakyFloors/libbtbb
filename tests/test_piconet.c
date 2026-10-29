@@ -1264,6 +1264,72 @@ static btbb_piconet *following_a_recovered_clock(void)
 }
 
 /*
+ * The other way a search settles: packet after packet rules candidate clocks
+ * out until one is left, with no CRC to settle it - an idle link carries NULL
+ * and POLL packets, which have no payload and so no CRC at all.  The clock is
+ * known from that moment, so the header the surviving candidate reads is the
+ * packet's own and the packet carries it, as it does on a CRC.
+ */
+static void test_a_clock_settled_by_elimination_records_the_header(void)
+{
+	/* Clocks far enough apart that each one picks a different whitening
+	 * sequence, as packets of a real piconet do. */
+	static const uint32_t clocks[8] = {
+		3, 11, 20, 29, 38, 47, 55, 62
+	};
+	const uint8_t uap = 0x5b;
+	btbb_piconet *pn = btbb_piconet_new();
+	int settled = 0, i;
+
+	CHECK(pn != NULL);
+	if (pn == NULL)
+		return;
+	btbb_init_piconet(pn, TEST_LAP);
+
+	for (i = 0; i < 8 && !settled; i++) {
+		/* NULL and POLL packets of several members of the piconet.
+		 * Two candidate clocks can agree on a UAP for as long as
+		 * every packet is identical, so the header varies: a wrong
+		 * clock reads a different type out of the same symbols, and a
+		 * type the decoder goes looking for a payload for is what
+		 * rules that clock out. */
+		uint16_t header = (uint16_t) ((i % 7 + 1) |
+					      (((i & 1) ? PACKET_TYPE_POLL :
+						PACKET_TYPE_NULL) << 3));
+		btbb_packet *pkt = packet_of_at_clock(
+			TEST_LAP, (uint8_t) (10 + i), header,
+			hec_for(header, uap), 122, (int) clocks[i]);
+
+		CHECK(pkt != NULL);
+		if (pkt == NULL)
+			break;
+		settled = btbb_uap_from_header(pkt, pn);
+		if (settled) {
+			CHECK_EQ(uap, btbb_piconet_get_uap(pn));
+			/* the header of this packet, read at the clock that
+			 * was left, checking out against that address part */
+			CHECK(btbb_packet_get_flag(pkt, BTBB_HEC_CHECKED));
+			CHECK(btbb_packet_get_flag(pkt, BTBB_HEC_VALID));
+			CHECK_EQ(header,
+				 air_to_host16(pkt->packet_header, 10));
+			CHECK_EQ(header & 0x7, pkt->packet_lt_addr);
+			CHECK_EQ((header >> 3) & 0xf, pkt->packet_type);
+			CHECK_EQ(0, pkt->corrected_header_bits);
+			/* and no payload: these types carry none, and no
+			 * trial's CRC came out to make one the packet's */
+			CHECK(!btbb_packet_get_flag(pkt, BTBB_HAS_PAYLOAD));
+		}
+		btbb_packet_unref(pkt);
+	}
+
+	/* the candidates do run out: a search that never settled would leave
+	 * every check above unrun */
+	CHECK(settled);
+
+	btbb_piconet_unref(pn);
+}
+
+/*
  * Header after header of the piconet failing its HEC means the clock or the
  * UAP being followed is not the piconet's. Nothing winnows while following, so
  * the library used to carry on reporting failures for as long as the capture
@@ -2627,6 +2693,7 @@ int main(void)
 	test_every_candidate_agrees_on_clk1_6();
 	test_the_settled_offset_reads_the_packets_own_header();
 	test_the_settling_packet_carries_its_own_header();
+	test_a_clock_settled_by_elimination_records_the_header();
 	test_a_run_of_header_failures_gives_up_the_clock();
 	test_a_lost_lock_leaves_the_piconet_ready_to_search();
 	test_a_header_that_checks_out_ends_the_run();
