@@ -8,6 +8,8 @@
  *   byte 1      the channel
  *   byte 2      the UAP the decoder checks the header against
  *   bytes 3-6   the clock, least significant byte first
+ *   byte 7      the eSCO payload length the link agreed, which the decoder
+ *               searches for when it is not told one
  *   rest        the symbol stream, 8 symbols to a byte
  *
  * This file is part of libbtbb
@@ -52,7 +54,7 @@ int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size)
 	const uint8_t *rest;
 	size_t rest_len;
 	btbb_packet *pkt;
-	uint8_t options, channel, uap;
+	uint8_t options, channel, uap, esco_length;
 	uint32_t clkn;
 	int symbol_count, payload_length;
 
@@ -61,6 +63,7 @@ int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size)
 	channel = fz_u8(&in);
 	uap = fz_u8(&in);
 	clkn = fz_u32(&in);
+	esco_length = fz_u8(&in);
 
 	rest = fz_rest(&in, &rest_len);
 	symbol_count = fz_symbols(rest, rest_len, symbols, sizeof(symbols));
@@ -73,6 +76,9 @@ int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size)
 	btbb_packet_set_flag(pkt, BTBB_CLK27_VALID, (options >> 1) & 1);
 	btbb_packet_set_modulation(pkt, (uint8_t) ((options >> 2) & 3));
 	btbb_packet_set_transport(pkt, (uint8_t) ((options >> 4) & 7));
+	/* 0 leaves the decoder to search for the length, as a tool that was
+	 * not told the link's does */
+	btbb_packet_set_esco_length(pkt, esco_length);
 
 	(void) btbb_header_present(pkt);
 	if (btbb_decode_header(pkt)) {
