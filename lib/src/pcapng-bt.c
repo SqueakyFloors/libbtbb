@@ -86,6 +86,7 @@ interface_desc_options( interface_desc_option * opt, const char * desc )
 	}
 
 	memset( opt, 0, sizeof( *opt ) );
+	opt->terminator.option_code = OPT_ENDOFOPT;
 	opt->header.option_code = IF_DESCRIPTION;
 	(void) strncpy( &opt->desc[0], desc, sizeof( opt->desc ) - 1 );
 	opt->header.option_length = (uint16_t) strlen( &opt->desc[0] );

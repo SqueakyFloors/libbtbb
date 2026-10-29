@@ -23,7 +23,8 @@ if(BUILD_TESTING)
     # The same checks with the printer compiled into the test and plain char
     # unsigned, which is what it is on every ARM host. A signed field read
     # through a plain char reads differently there than on the x86 and Apple
-    # hosts, so neither signedness goes unchecked.
+    # hosts, and CI runs on the latter, so this is how the ARM reading is
+    # checked at all.
     add_executable(test_le_print_unsigned_char test_le_print.c)
     target_include_directories(test_le_print_unsigned_char
                                PRIVATE ${PROJECT_SOURCE_DIR}/lib/src)
