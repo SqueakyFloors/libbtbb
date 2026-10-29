@@ -10,6 +10,20 @@ libbtbb (2020-12-R1+fork5) unstable; urgency=low
     bad, and a rejection is only held against a search using the same UAP,
     because a failed header says the clock or the UAP was wrong without
     saying which.
+  * A caller can hand a clock back. The library gives a clock up on headers
+    that fail their HEC, which is evidence about CLK1-6 and the UAP. A wrong
+    CLK1-27 fails differently: it carries the CLK1-6 discovery confirmed, so
+    it dewhitens and checks out every header it receives and gets only the
+    channel wrong, and its symptom is silence rather than failure. The
+    library, called per packet with no timer of its own, cannot judge that,
+    so btbb_piconet_drop_clock() lets a capture tool that knows how long it
+    has been following say so. The clock is ruled out and discovery starts
+    again, exactly as after a clock the library gave up, so the next attempt
+    does not return to it. Over a sweep of 400 clock values, the 22 wrong
+    clocks the library accepted and kept heard 65 of the next 1000 slot pairs
+    on average and 142 at most, where every clock that was right heard all
+    1000, and all 22 are handed back and ruled out. Additive: existing
+    callers are unaffected.
   * A clock whose headers all fail is given up on half as many of them once
     the failures have been going for two seconds. Twenty failed headers
     arrive in 24 ms on a link carrying traffic, but at four packets a second
