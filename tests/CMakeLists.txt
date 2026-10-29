@@ -158,6 +158,10 @@ if(BUILD_TESTING)
     add_test(NAME le_long_packets COMMAND test_le_long)
     set_tests_properties(le_long_packets PROPERTIES TIMEOUT 30)
 
+    # Fuzz targets for the decoders and the capture writers, where the
+    # compiler builds them.
+    add_subdirectory(fuzz)
+
     # This one configures and builds the tree itself, in library
     # configurations the build running it is not in.
     # The generator, compiler and toolchain file are handed on, so that the

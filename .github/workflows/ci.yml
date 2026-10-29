@@ -143,3 +143,65 @@ jobs:
           else
             echo "no UBSan findings"
           fi
+
+  fuzz:
+    name: ubuntu-24.04 clang fuzz
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Install CMake 4
+        run: |
+          python3 -m venv "$RUNNER_TEMP/cmake"
+          "$RUNNER_TEMP/cmake/bin/pip" install --quiet "cmake==4.4.4"
+          echo "$RUNNER_TEMP/cmake/bin" >> "$GITHUB_PATH"
+
+      - name: Versions
+        run: |
+          cmake --version
+          clang --version
+
+      - name: Configure
+        run: >
+          cmake -S . -B build
+          -DCMAKE_BUILD_TYPE=Debug
+          -DENABLE_PYTHON=OFF
+          -DCMAKE_C_FLAGS="-Wall -Wextra -Werror -Wno-error=implicit-fallthrough -g -fno-omit-frame-pointer -fsanitize=address,undefined -fno-sanitize-recover=all"
+        env:
+          CC: clang
+
+      - name: Build
+        run: >
+          cmake --build build -j
+          --target fuzz_find_ac fuzz_bredr fuzz_le fuzz_pcap fuzz_pcapng
+
+      # A minute each, from the seed corpus in the tree, which is long enough
+      # to tell that a target still reaches into the library and short enough
+      # for every pull request. The corpus is copied, so that what a run finds
+      # is not kept.
+      - name: Fuzz
+        env:
+          UBSAN_OPTIONS: print_stacktrace=1
+        shell: bash
+        run: |
+          for target in find_ac bredr le pcap pcapng; do
+            corpus="$RUNNER_TEMP/corpus/$target"
+            mkdir -p "$corpus"
+            cp tests/fuzz/corpus/"$target"/* "$corpus/"
+            echo "::group::fuzz_$target"
+            ./build/tests/fuzz/"fuzz_$target" \
+              -max_total_time=60 -max_len=512 -close_fd_mask=1 \
+              -print_final_stats=1 \
+              -artifact_prefix="$RUNNER_TEMP/artifacts-$target-" \
+              "$corpus"
+            echo "::endgroup::"
+          done
+
+      - name: The input a failing target stopped on
+        if: failure()
+        run: |
+          for artifact in "$RUNNER_TEMP"/artifacts-*; do
+            test -e "$artifact" || continue
+            echo "== $artifact"
+            xxd "$artifact"
+          done

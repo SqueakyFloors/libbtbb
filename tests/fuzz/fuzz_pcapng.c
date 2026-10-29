@@ -1,0 +1,156 @@
+/*
+ * Fuzz target: the PCAPNG writers, fed packets the fuzzer's bytes decoded
+ * into. Each run writes a BR/EDR capture and an LE capture, including the
+ * records that are not frames - an address, a clock, and the parameters of a
+ * connection request - over one file in the temporary directory.
+ *
+ * Input layout:
+ *   byte 0      options: bit 0 whitens the BR/EDR symbols, bits 2-3 how
+ *               many records to write
+ *   byte 1      the channel
+ *   byte 2      the UAP the BR/EDR decoder checks the header against
+ *   byte 3      the signal level in dBm
+ *   byte 4      the noise level in dBm
+ *   bytes 5-8   the address the capture tool was listening for
+ *   byte 9      the reference UAP
+ *   bytes 10-17 the timestamp in nanoseconds
+ *   byte 18     the length of the interface description that follows
+ *   then        that many bytes of interface description
+ *   rest        the frame: the bytes of an LE frame, and the same bytes
+ *               unpacked into BR/EDR symbols
+ *
+ * This file is part of libbtbb
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation; either version 2, or (at your option)
+ * any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with libbtbb; see the file COPYING.  If not, write to
+ * the Free Software Foundation, Inc., 51 Franklin Street,
+ * Boston, MA 02110-1301, USA.
+ */
+
+#include "fuzz_input.h"
+
+/* The 34 bytes of a connection request's payload, InitA through HopSCA,
+ * which lell_pcapng_record_connect_req() reads. */
+#define CONNECT_REQ_PDU_BYTES 34
+
+/* Longer than any interface description a capture tool writes, and long
+ * enough to reach the room the file sets aside for its options. */
+#define LONGEST_DESCRIPTION 255
+
+int LLVMFuzzerInitialize(int *argc, char ***argv)
+{
+	(void) argc;
+	(void) argv;
+	if (btbb_init(FZ_MAX_AC_ERRORS) < 0)
+		abort();
+	fz_capture_file_init();
+	return 0;
+}
+
+int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size)
+{
+	struct fuzz_input in;
+	char symbols[MAX_SYMBOLS];
+	char description[LONGEST_DESCRIPTION + 1];
+	uint8_t connect_pdu[CONNECT_REQ_PDU_BYTES];
+	const uint8_t *rest;
+	size_t rest_len, i;
+	btbb_packet *pkt;
+	lell_packet *le_pkt;
+	btbb_pcapng_handle *bredr_capture = NULL;
+	lell_pcapng_handle *le_capture = NULL;
+	uint8_t options, channel, uap, refuap, description_length;
+	int8_t sigdbm, noisedbm;
+	uint32_t refaddress;
+	uint64_t ns;
+	int symbol_count, records, record;
+
+	fz_start(&in, data, size);
+	options = fz_u8(&in);
+	channel = fz_u8(&in);
+	uap = fz_u8(&in);
+	sigdbm = (int8_t) fz_u8(&in);
+	noisedbm = (int8_t) fz_u8(&in);
+	refaddress = fz_u32(&in);
+	refuap = fz_u8(&in);
+	ns = fz_u64(&in);
+
+	/* A description the fuzzer chose, which the file carries as an option
+	 * of its interface description block. */
+	description_length = fz_u8(&in);
+	for (i = 0; i < description_length; i++) {
+		uint8_t byte = fz_u8(&in);
+
+		/* a zero would end the string early, which only makes the
+		 * description shorter than the length chosen above */
+		description[i] = (char) (byte == 0 ? ' ' : byte);
+	}
+	description[description_length] = '\0';
+
+	rest = fz_rest(&in, &rest_len);
+
+	/* one to four records, so that a second record after a first is
+	 * covered without the file growing over a long run */
+	records = 1 + ((options >> 2) & 3);
+
+	symbol_count = fz_symbols(rest, rest_len, symbols, sizeof(symbols));
+	pkt = fz_packet(symbols, symbol_count, 0x9e8b33, uap, channel,
+			(uint32_t) ns, options & 1);
+	if (pkt == NULL)
+		return 0;
+	if (btbb_decode_header(pkt))
+		(void) btbb_decode_payload(pkt);
+
+	le_pkt = fz_le_packet(rest, rest_len, 2402, (uint32_t) ns);
+
+	if (btbb_pcapng_create_file(fz_capture_file_path(), description,
+				    &bredr_capture) == 0 &&
+	    bredr_capture != NULL) {
+		for (record = 0; record < records; record++) {
+			(void) btbb_pcapng_append_packet(bredr_capture, ns,
+							 sigdbm, noisedbm,
+							 refaddress, refuap,
+							 pkt);
+			(void) btbb_pcapng_record_bdaddr(bredr_capture, ns,
+							 refuap,
+							 (uint8_t) record);
+			(void) btbb_pcapng_record_btclock(bredr_capture, ns,
+							  ns, refaddress,
+							  refaddress);
+		}
+		(void) btbb_pcapng_close(bredr_capture);
+	}
+
+	if (le_pkt != NULL &&
+	    lell_pcapng_create_file(fz_capture_file_path(), description,
+				    &le_capture) == 0 &&
+	    le_capture != NULL) {
+		memset(connect_pdu, 0, sizeof(connect_pdu));
+		memcpy(connect_pdu, rest,
+		       rest_len < sizeof(connect_pdu) ? rest_len
+						      : sizeof(connect_pdu));
+		for (record = 0; record < records; record++) {
+			(void) lell_pcapng_append_packet(le_capture, ns,
+							 sigdbm, noisedbm,
+							 refaddress, le_pkt);
+			(void) lell_pcapng_record_connect_req(le_capture, ns,
+							      connect_pdu);
+		}
+		(void) lell_pcapng_close(le_capture);
+	}
+
+	if (le_pkt != NULL)
+		lell_packet_unref(le_pkt);
+	btbb_packet_unref(pkt);
+	return 0;
+}
