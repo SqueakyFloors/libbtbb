@@ -14,9 +14,9 @@ libbtbb (2020-12-R1+fork5) unstable; urgency=low
     had been read looked that LAP up again for every further packet of that
     piconet and wrote through a piconet that had been released; the table
     and its buckets were also never freed, so each survey that was read to
-    the end left them behind. Both allocations a survey makes for a LAP it
-    has just heard - its own entry for that LAP, and the piconet - are
-    checked, and the packet is dropped where either fails; whichever had
+    the end left them behind. Both allocations the survey's own code makes
+    for a LAP it has just heard - its entry for that LAP, and the piconet -
+    are checked, and the packet is dropped where either fails; whichever had
     failed used to be written through and the tool died with it.
     btbb_piconet_new() returns NULL where it cannot allocate a piconet, and
     says so on standard error as btbb_packet_new() does, for the same

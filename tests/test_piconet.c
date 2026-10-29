@@ -870,8 +870,9 @@ static uint8_t hec_for(uint16_t header_data, uint8_t uap)
  * Nothing is whitened, so the header reads back as it was built whatever
  * clock the decoder is given.
  */
-static btbb_packet *packet_of(uint32_t lap, uint8_t channel,
-			      uint16_t header_data, uint8_t hec, int length)
+static btbb_packet *packet_of_at_clock(uint32_t lap, uint8_t channel,
+				       uint16_t header_data, uint8_t hec,
+				       int length, int whiten_clock)
 {
 	char stream[400];
 	uint64_t syncword = btbb_gen_syncword(lap);
@@ -887,6 +888,15 @@ static btbb_packet *packet_of(uint32_t lap, uint8_t channel,
 	for (i = 0; i < 18; i++) {
 		char bit = (char) ((header >> i) & 1);
 
+		/* On air the header is whitened before it is encoded, with
+		 * the sequence the receive clock picks out, and the decoder
+		 * undoes it the other way round. Whitening here is what lets
+		 * UAP discovery tell one candidate clock from another: each
+		 * wrong clock reads a different header, and so a different
+		 * UAP, from the same symbols. */
+		if (whiten_clock >= 0)
+			bit ^= (char) WHITENING_DATA[
+				(INDICES[whiten_clock & 0x3f] + i) % 127];
 		stream[68 + i * 3] = bit;
 		stream[69 + i * 3] = bit;
 		stream[70 + i * 3] = bit;
@@ -900,9 +910,22 @@ static btbb_packet *packet_of(uint32_t lap, uint8_t channel,
 		return NULL;
 	if (pkt == NULL)
 		return NULL;
-	btbb_packet_set_data(pkt, stream, length, channel, 0);
-	btbb_packet_set_flag(pkt, BTBB_WHITENED, 0);
+	/* btbb_packet_set_data() is given the 312.5 us clock and keeps the
+	 * 625 us slot count, so the clock the header was whitened for is
+	 * handed over doubled */
+	btbb_packet_set_data(pkt, stream, length, channel,
+			     (whiten_clock >= 0) ?
+			     (uint32_t) (whiten_clock << 1) : 0);
+	btbb_packet_set_flag(pkt, BTBB_WHITENED, whiten_clock >= 0);
 	return pkt;
+}
+
+/* A packet whose header is not whitened, so it reads back as it was built
+ * whatever clock the decoder tries. */
+static btbb_packet *packet_of(uint32_t lap, uint8_t channel,
+			      uint16_t header_data, uint8_t hec, int length)
+{
+	return packet_of_at_clock(lap, channel, header_data, hec, length, -1);
 }
 
 /* The same packet, of the one piconet the tests above follow. */
@@ -2155,6 +2178,75 @@ static void test_a_piconet_taken_out_of_the_survey_is_gone_from_it(void)
 }
 
 /*
+ * The case the accessor exists for: a UAP the survey worked out for itself,
+ * read back while the survey is still running. The survey is given packets of
+ * one LAP at clocks of its own choosing, each header whitened for the clock it
+ * arrives at, which is how discovery narrows its 64 candidate values for the
+ * clock of the first packet down to the one that agrees on a UAP.
+ */
+static void test_the_uap_the_survey_recovered_is_readable(void)
+{
+	/* Clocks far enough apart that each one picks a different whitening
+	 * sequence, as packets of a real piconet do. */
+	static const uint32_t clocks[8] = {
+		3, 11, 20, 29, 38, 47, 55, 62
+	};
+	const uint8_t uap = 0x5b;
+	btbb_piconet *pn;
+	char out[4096], err[4096];
+	int i;
+
+	survey_end();
+	btbb_init_survey();
+	if (capture_or_fail() != 0)
+		return;
+	for (i = 0; i < 8; i++) {
+		/* NULL and POLL packets of several devices of the piconet, as
+		 * an idle link carries. Two candidate clocks can agree on a
+		 * UAP for as long as every packet is identical, so the header
+		 * varies: a wrong clock reads a different type out of the
+		 * same symbols, and a type the decoder goes looking for a
+		 * payload for is what rules that clock out. */
+		uint16_t header = (uint16_t) ((i % 7 + 1) |
+					      (((i & 1) ? PACKET_TYPE_POLL :
+						PACKET_TYPE_NULL) << 3));
+		btbb_packet *pkt = packet_of_at_clock(
+			SURVEY_LAP_A, (uint8_t) (10 + i), header,
+			hec_for(header, uap), 122, (int) clocks[i]);
+
+		if (pkt == NULL) {
+			CHECK(pkt != NULL);
+			break;
+		}
+		CHECK_EQ(0, btbb_process_packet(pkt, NULL));
+		btbb_packet_unref(pkt);
+		pn = btbb_survey_piconet(SURVEY_LAP_A);
+		if ((pn != NULL) && btbb_piconet_get_flag(pn, BTBB_UAP_VALID))
+			break;
+	}
+	capture_stop(out, sizeof(out), err, sizeof(err));
+
+	pn = btbb_survey_piconet(SURVEY_LAP_A);
+	CHECK(pn != NULL);
+	if (pn == NULL) {
+		survey_end();
+		return;
+	}
+	/* the survey found it, and said so on stderr */
+	CHECK(btbb_piconet_get_flag(pn, BTBB_UAP_VALID));
+	CHECK_EQ(uap, btbb_piconet_get_uap(pn));
+	CHECK(strstr(err, "UAP = 0x5b found after") != NULL);
+	CHECK_EQ(0, strlen(out));
+	if (failures != 0)
+		printf("stdout was: %s\nstderr was: %s\n", out, err);
+
+	/* and it is still the survey's: reading it took nothing out */
+	CHECK_EQ(1, HASH_COUNT(piconet_survey));
+	CHECK(btbb_survey_piconet(SURVEY_LAP_A) == pn);
+	survey_end();
+}
+
+/*
  * The survey gives back everything it took. Reading the last piconet out of it
  * frees that LAP's entry and, with it, the hash table and the bucket array the
  * entry was the last one in. The walk this replaces freed the entry on its
@@ -2282,6 +2374,7 @@ int main(void)
 	test_a_survey_piconet_is_read_without_being_removed();
 	test_a_lap_the_survey_has_not_heard_has_no_piconet();
 	test_a_piconet_taken_out_of_the_survey_is_gone_from_it();
+	test_the_uap_the_survey_recovered_is_readable();
 	test_the_last_result_takes_the_survey_table_with_it();
 	test_a_survey_that_cannot_allocate_drops_the_packet();
 
