@@ -2316,11 +2316,11 @@ static void test_a_survey_that_cannot_allocate_drops_the_packet(void)
 		CHECK_EQ(round, frees);
 		CHECK(btbb_survey_piconet(SURVEY_LAP_A) == NULL);
 		CHECK_EQ(0, HASH_COUNT(piconet_survey));
-		/* a failed piconet says so, and on stderr */
+		/* either failure says so, and on stderr */
 		CHECK_EQ(0, strlen(out));
-		if (round == 1)
-			CHECK(strstr(err, "could not allocate a piconet") !=
-			      NULL);
+		CHECK(strstr(err, (round == 0) ?
+			     "could not allocate a survey entry" :
+			     "could not allocate a piconet") != NULL);
 	}
 	btbb_packet_unref(pkt);
 

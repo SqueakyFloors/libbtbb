@@ -59,8 +59,9 @@ btbb_piconet_new(void)
 	btbb_piconet *pn = (btbb_piconet *)calloc(1, sizeof(btbb_piconet));
 
 	if (pn == NULL) {
-		/* said once per failure, as btbb_packet_new() does, so that a
-		 * survey going quiet under memory pressure has a reason */
+		/* reported here, as btbb_packet_new() reports a packet it
+		 * could not allocate, so that a caller whose piconet never
+		 * arrives has a reason for it */
 		piconet_note("error: could not allocate a piconet\n");
 		return NULL;
 	}
@@ -1065,8 +1066,11 @@ btbb_piconet *get_piconet(uint32_t lap)
 
 	if (s == NULL) {
 		s = malloc(sizeof(survey_hash));
-		if (s == NULL)
+		if (s == NULL) {
+			piconet_note("error: could not allocate a survey "
+				     "entry\n");
 			return NULL;
+		}
 		pn = btbb_piconet_new();
 		if (pn == NULL) {
 			/* nothing goes into the survey without a piconet: an

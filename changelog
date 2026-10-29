@@ -17,10 +17,11 @@ libbtbb (2020-12-R1+fork5) unstable; urgency=low
     the end left them behind. Both allocations the survey's own code makes
     for a LAP it has just heard - its entry for that LAP, and the piconet -
     are checked, and the packet is dropped where either fails; whichever had
-    failed used to be written through and the tool died with it.
-    btbb_piconet_new() returns NULL where it cannot allocate a piconet, and
-    says so on standard error as btbb_packet_new() does, for the same
-    reason. Library version 1.2, for the new function.
+    failed used to be written through and the tool died with it. Either
+    failure is reported on standard error, as btbb_packet_new() reports a
+    packet it could not allocate, and btbb_piconet_new() returns NULL where
+    it used to write through its own failed allocation. Library version 1.2,
+    for the new function.
   * A clock the library gave up is not chosen again. Discovery starting over
     had no memory of the clock that had just failed, so a piconet could lock
     the same wrong clock, decode nothing, give it up, and go round that loop
