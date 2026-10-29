@@ -610,6 +610,11 @@ int btbb_init_hop_reversal(int aliased, btbb_piconet *pn)
 	channel_map(pn, pn->candidates_afh_map);
 	btbb_piconet_set_flag(pn, BTBB_HOP_REVERSAL_INIT, 1);
 	btbb_piconet_set_flag(pn, BTBB_CLK27_VALID, 0);
+	/* The whole clock is being searched for again, so an offset left from
+	 * one already found describes nothing: the caller is told what is
+	 * known, which is CLK1-6 where the search has it. */
+	pn->clk_offset = btbb_piconet_get_flag(pn, BTBB_CLK6_VALID) ?
+			 pn->clk6_offset : 0;
 	/* the hops being reversed are the piconet's own, not an aliased
 	 * receiver's view of them */
 	btbb_piconet_set_flag(pn, BTBB_IS_ALIASED, 0);
@@ -714,12 +719,19 @@ static void reset(btbb_piconet *pn)
 	pn->packets_observed = 0;
 	/* The candidate list has just been freed, so nothing may still read a
 	 * count of it, and the offset it produced is no longer a clock the
-	 * caller can hop on: btbb_piconet_get_clk_offset() reads 0 until
-	 * BTBB_CLK27_VALID is set again. */
+	 * caller can hop on: btbb_piconet_get_clk_offset() reads 0 until the
+	 * search settles CLK1-6 again, and the whole clock's offset only once
+	 * hop reversal has that too. */
 	pn->num_candidates = 0;
 	pn->winnowed = 0;
 	pn->clk27_confirmations = 0;
 	pn->clk_offset = 0;
+	/* Both clocks are being searched for again, so neither offset
+	 * describes this piconet.  The slot offset is what the reported one is
+	 * taken from while only CLK1-6 is known, and what every candidate's
+	 * low 6 bits come from, so a dead search's value left here would seed
+	 * the next one. */
+	pn->clk6_offset = 0;
 	/* The clocks given up for this LAP are the one thing a reset keeps,
 	 * because keeping them is what stops the new search from ending where
 	 * the last one did.  Only a new LAP clears them. */
@@ -875,6 +887,28 @@ int btbb_winnow(btbb_piconet *pn)
 	return new_count;
 }
 
+/*
+ * Keep the CLK1-6 the search has settled on, as the offset between the
+ * observer's clock and the piconet's in 625 us slots, and report it to the
+ * caller.
+ *
+ * Reading a packet's header needs the piconet's clock rather than the
+ * observer's: the header is whitened at the sender's CLK1-6, so the same
+ * symbols dewhiten to a different header, failing their check bits, at the
+ * clock the receiving board read.  A capture tool that records the header of
+ * the packet which settled the address part - the first evidence a reader has
+ * for that address part - therefore asks for this offset and applies it
+ * before calling btbb_decode_header().  It is the only clock the search has
+ * at this point; channel_winnow() replaces it with the whole CLK1-27 offset,
+ * in CLKN ticks, once hop reversal has one.
+ */
+static void settle_clk6_offset(btbb_piconet *pn, int first_packet_clock)
+{
+	pn->clk6_offset = (first_packet_clock -
+			   (int) (pn->first_pkt_time & 0x3f)) & 0x3f;
+	pn->clk_offset = pn->clk6_offset;
+}
+
 /* use packet headers to determine UAP */
 int btbb_uap_from_header(btbb_packet *pkt, btbb_piconet *pn)
 {
@@ -949,7 +983,7 @@ int btbb_uap_from_header(btbb_packet *pkt, btbb_piconet *pn)
 				break;
 
 			default: /* CRC success */
-				pn->clk6_offset = (count - (pn->first_pkt_time & 0x3f)) & 0x3f;
+				settle_clk6_offset(pn, count);
 				if (!btbb_piconet_get_flag(pn, BTBB_UAP_VALID))
 					piconet_note("Correct CRC! UAP = 0x%x found after %d total packets.\n",
 						     UAP, pn->total_packets_observed);
@@ -968,7 +1002,7 @@ int btbb_uap_from_header(btbb_packet *pkt, btbb_piconet *pn)
 	btbb_piconet_set_flag(pn, BTBB_GOT_FIRST_PACKET, 1);
 
 	if (remaining == 1) {
-		pn->clk6_offset = (first_clock - (pn->first_pkt_time & 0x3f)) & 0x3f;
+		settle_clk6_offset(pn, first_clock);
 		if (!btbb_piconet_get_flag(pn, BTBB_UAP_VALID))
 			piconet_note("UAP = 0x%x found after %d total packets.\n",
 				     pn->clock6_candidates[first_clock],

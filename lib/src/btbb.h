@@ -285,10 +285,27 @@ BTBB_API uint32_t btbb_piconet_get_lap(const btbb_piconet *pn);
 BTBB_API uint16_t btbb_piconet_get_nap(const btbb_piconet *pn);
 BTBB_API uint64_t btbb_piconet_get_bdaddr(const btbb_piconet *pn);
 
-/* The offset between the local clock and the piconet's, in 312.5 us CLKN
-   ticks, which is what a receiver is told to hop on. It means something only
-   while BTBB_CLK27_VALID is set: before a clock is recovered, and again after
-   one is given up, it reads 0. */
+/* The offset between the local clock and the piconet's, as far as it has been
+   recovered. The flags say which clock that is, and so which unit the offset
+   is in:
+
+   - BTBB_CLK27_VALID set: the whole clock, in 312.5 us CLKN ticks, which is
+     what a receiver is told to hop on.
+   - BTBB_CLK6_VALID set and BTBB_CLK27_VALID not: CLK1-6 only, in 625 us
+     slots. Dewhitening a header takes CLK1-6 and nothing more, so a caller
+     that wants the header of a packet it has just had decoded hands the
+     symbols back to btbb_packet_set_data() with this offset, doubled because
+     CLKN counts half-slots, added to the clock it read them at, and calls
+     btbb_decode_header(). It tells a receiver nothing about which channel
+     the piconet is on, so it is not an offset to hop on: that needs the
+     whole clock above.
+   - neither set: 0, before a clock is recovered and again after one is given
+     up.
+
+   btbb_piconet_set_clk_offset() writes the value this reads back, in
+   whichever of those two units goes with the clock the caller is claiming:
+   CLKN ticks for a whole clock it has from elsewhere - an adapter, say -
+   which it marks with BTBB_CLK27_VALID, and 625 us slots for CLK1-6 alone. */
 BTBB_API int btbb_piconet_get_clk_offset(const btbb_piconet *pn);
 BTBB_API void btbb_piconet_set_clk_offset(btbb_piconet *pn, int clk_offset);
 
