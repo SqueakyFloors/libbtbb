@@ -291,7 +291,9 @@ uint8_t *btbb_piconet_get_afh_map(btbb_piconet *pn);
    set itself, which the library leaves alone because it has nothing better to
    fall back on. A null piconet reads as 0. The caller is expected to take its
    receiver off the old offset and warn once, as for BTBB_PROCESS_LOCK_LOST
-   below; this prints nothing of its own. */
+   below; nothing is printed about the drop itself. A drop does count toward
+   the clocks given up for this piconet, so once several have been it writes
+   the one note that says the piconet may have ended or left range. */
 int btbb_piconet_drop_clock(btbb_piconet *pn);
 
 /* btbb_process_packet() returns this when the clock and UAP it recovered turn
