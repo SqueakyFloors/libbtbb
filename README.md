@@ -16,25 +16,24 @@ platforms but this has yet to be tested.
 Tested against the Bluetooth specification
 ==========================================
 
-Before this fork the library had three test programs from 2012 and 2015 that
-only an old `tests/Makefile` built, one of which had not compiled in years, and
-a Travis configuration that no longer ran. Nothing checked a change.
+libbtbb was written and maintained by a small group of volunteers, and it has
+served Ubertooth and other projects well for more than a decade. Like many
+volunteer projects of its scope, it carried only a few tests, from 2012 and
+2015. This fork builds on that work by adding a test suite to the normal build.
 
-It now has 17 tests in the build: 870 assertions in their source, 176,054
-assertion executions per run, driven in large part by the Bluetooth Core
-Specification v5.4's own sample data — all 7680 hop frequencies of Vol 2,
-Part G, Section 2, the access code, HEC, CRC, FEC and whitening vectors and the
-complete DH1 and DM1 packets of Sections 3 to 9, and the Low Energy link layer
-rules of Vol 6, Part B. CI builds and runs them on Linux with gcc and macOS
-with clang under `-Wall -Wextra -Werror`, and again under AddressSanitizer and
+There are now 17 tests: 870 assertions in their source, 176,054 assertion
+executions per run, driven in large part by the Bluetooth Core Specification
+v5.4's own sample data: all 7680 hop frequencies of Vol 2, Part G, Section 2,
+the access code, HEC, CRC, FEC and whitening vectors and the complete DH1 and
+DM1 packets of Sections 3 to 9, and the Low Energy link layer rules of Vol 6,
+Part B. CI builds and runs them on Linux with gcc and macOS with clang under
+`-Wall -Wextra -Werror`, and again under AddressSanitizer and
 UndefinedBehaviorSanitizer.
 
-They found 63 defects: AUX1, EV3, EV4, EV5 and DV packets never produced a
-payload at all, every connection parameter a PCAPNG file recorded for a
-CONNECT_IND belonged to another part of the packet, and buffers were written
-and read past their ends. [TESTING.md](TESTING.md) has what each test covers
-and where its vectors come from, a row per defect with what a user saw, and the
-numbers the fixes moved, measured before and after.
+The tests have helped find and fix 63 issues, many in packet types and capture
+paths that are rarely seen on the air. [TESTING.md](TESTING.md) describes what
+each test covers and where its vectors come from, lists each fix with what a
+user would notice, and gives before and after measurements.
 
 
 Concepts
