@@ -49,12 +49,16 @@
  * the macro, so that the declaration of write() is not rewritten into one of
  * test_write().
  *
- * The write to cut short is picked out by the option code it begins with,
- * rather than by its place in the order, so a change to the order of the
- * writer's calls cannot leave the case passing without cutting the option.
+ * The write to cut short is picked out by the whole option header it begins
+ * with - its code and its length, and the length of the write - rather than
+ * by its place in the order, so a change to the order of the writer's calls
+ * cannot leave the case passing without cutting the option. Two bytes are
+ * not enough to tell it by: a block type of 1, which is what an interface
+ * description block carries, begins with the same two as option code 1.
  * With short_write_option negative nothing is injected, so every other case
  * in this file writes as it always did. */
 static int short_write_option = -1;	/* option code to cut, -1 for none */
+static size_t short_write_length;	/* and its value length */
 static size_t short_write_bytes;	/* how much of it to let through */
 static int short_write_fired;		/* whether the cut really happened */
 static int stop_writing_after_cut;	/* later writes write nothing at all */
@@ -69,9 +73,11 @@ static ssize_t test_write(int fd, const void *buf, size_t count)
 	const unsigned char *bytes = buf;
 
 	if (short_write_option >= 0 && count > short_write_bytes &&
-	    count >= 2 &&
+	    count == 4 + short_write_length &&
 	    bytes[0] == (short_write_option & 0xff) &&
-	    bytes[1] == ((short_write_option >> 8) & 0xff)) {
+	    bytes[1] == ((short_write_option >> 8) & 0xff) &&
+	    bytes[2] == (short_write_length & 0xff) &&
+	    bytes[3] == ((short_write_length >> 8) & 0xff)) {
 		short_write_option = -1;
 		short_write_fired = 1;
 		return real_write(fd, buf, short_write_bytes);
@@ -2705,6 +2711,7 @@ static void test_section_option_short_write(void)
 	/* Let 6 of the option's 16 bytes through, which leaves it cut in the
 	   middle of its value. */
 	short_write_option = OPT_COMMENT;
+	short_write_length = sizeof(comment.text);
 	short_write_bytes = 6;
 	short_write_fired = 0;
 	stop_writing_after_cut = 0;
@@ -2754,6 +2761,7 @@ static void test_section_option_short_write(void)
 	   be written, the caller is told, and the writer gives up rather than
 	   asking for the rest of the option forever. */
 	short_write_option = OPT_COMMENT;
+	short_write_length = sizeof(comment.text);
 	short_write_bytes = 6;
 	short_write_fired = 0;
 	stop_writing_after_cut = 1;

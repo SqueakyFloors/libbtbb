@@ -666,7 +666,9 @@ print16:
 			case 0x07:
 				printf(" (128-bit Service UUIDs)\n");
 print128:
-				/* The whole UUIDs this list holds, as above */
+				/* The whole UUIDs this list holds, as above.
+				 * The loop stops at the last whole one, so
+				 * bytes left over past it are not read. */
 				{
 					uint8_t uuid[16];
 					int whole = ((sublen - 1) / 16) * 16;
