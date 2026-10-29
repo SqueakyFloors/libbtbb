@@ -626,26 +626,32 @@ static void test_a_failed_allocation_is_reported(void)
 	btbb_packet *pkt = btbb_packet_new();
 	char block[15];
 	char out[4096], err[4096];
+	int init_result;
 
 	CHECK(pkt != NULL);
 	if (pkt == NULL)
 		return;
 	memset(block, 0, sizeof(block));
 
+	/* no table yet, so btbb_init() below builds one rather than finding
+	 * one already there */
+	CHECK(syndrome_map == NULL);
+
 	/* The streams are captured around btbb_init() alone, which is the
-	 * only one of these that says anything. A capture held across the
-	 * rest would swallow the report of whichever check failed. */
+	 * only one of these that says anything, and nothing is checked while
+	 * they are: a capture held across a check swallows its report, and
+	 * across a crash loses the lot. */
 	if (capture_or_fail() != 0) {
 		btbb_packet_unref(pkt);
 		return;
 	}
 	refuse_allocations = 1;
-	CHECK(syndrome_map == NULL);
-	CHECK_EQ(-1, btbb_init(2));
+	init_result = btbb_init(2);
 	refuse_allocations = 0;
 	capture_stop(out, sizeof(out), err, sizeof(err));
 
 	/* the error correction table, with nothing of it left behind */
+	CHECK_EQ(-1, init_result);
 	CHECK(syndrome_map == NULL);
 	CHECK(strstr(err, "no memory for the access code") != NULL);
 	CHECK_EQ(0, strlen(out));
