@@ -90,5 +90,6 @@ earlier releases; they are gone, so nothing here describes a library the
 build does not produce.
 
 To package this library, follow [Build Instructions](#build-instructions)
-above. An install writes the shared library, the `btbb.h` header,
-`libbtbb.pc` and the `btaptap` script.
+above, and [Where it installs](#where-it-installs) for the directories an
+install uses and how to choose them. An install writes the shared library,
+the `btbb.h` header, `libbtbb.pc` and the `btaptap` script.
