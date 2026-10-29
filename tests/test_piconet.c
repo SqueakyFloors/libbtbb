@@ -45,9 +45,9 @@ static void *counted_malloc(size_t size);
 
 /*
  * calloc() is rewritten separately, with a refusal flag of its own and no
- * counting, so that a test can fail the one calloc() in this code -
- * btbb_piconet_new()'s - without disturbing the malloc() counts the tests
- * below assert on.
+ * counting, so that a test can fail an allocation made with calloc() -
+ * btbb_piconet_new()'s, and btbb_packet_new()'s in the other translation unit
+ * below - without disturbing the malloc() counts the tests below assert on.
  */
 static void *refusable_calloc(size_t count, size_t size);
 #define calloc refusable_calloc
@@ -2156,6 +2156,10 @@ static void test_a_survey_that_cannot_allocate_drops_the_packet(void)
 		return;
 	btbb_init_survey();
 	for (round = 0; round < 2; round++) {
+		char out[4096], err[4096];
+
+		if (capture_or_fail() != 0)
+			break;
 		if (round == 0)
 			refuse_allocations = 1;	/* the survey's entry */
 		else
@@ -2163,8 +2167,15 @@ static void test_a_survey_that_cannot_allocate_drops_the_packet(void)
 		CHECK_EQ(0, btbb_process_packet(pkt, NULL));
 		refuse_allocations = 0;
 		refuse_callocs = 0;
+		capture_stop(out, sizeof(out), err, sizeof(err));
+
 		CHECK(btbb_survey_piconet(SURVEY_LAP_A) == NULL);
 		CHECK_EQ(0, HASH_COUNT(piconet_survey));
+		/* a failed piconet says so, and on stderr */
+		CHECK_EQ(0, strlen(out));
+		if (round == 1)
+			CHECK(strstr(err, "could not allocate a piconet") !=
+			      NULL);
 	}
 	btbb_packet_unref(pkt);
 

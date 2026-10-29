@@ -58,8 +58,12 @@ btbb_piconet_new(void)
 {
 	btbb_piconet *pn = (btbb_piconet *)calloc(1, sizeof(btbb_piconet));
 
-	if (pn == NULL)
+	if (pn == NULL) {
+		/* said once per failure, as btbb_packet_new() does, so that a
+		 * survey going quiet under memory pressure has a reason */
+		piconet_note("error: could not allocate a piconet\n");
 		return NULL;
+	}
 	pn->refcount = 1;
 	return pn;
 }
@@ -1050,7 +1054,9 @@ typedef struct {
 
 static survey_hash *piconet_survey = NULL;
 
-/* Check for existing piconets in survey results */
+/* The survey's piconet for a LAP, started if the survey has not heard that LAP
+ * before. NULL where there is no room for one. Not declared in btbb.h:
+ * btbb_survey_piconet() is the public way in. */
 btbb_piconet *get_piconet(uint32_t lap)
 {
 	survey_hash *s;
