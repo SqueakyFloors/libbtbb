@@ -459,8 +459,10 @@ libbtbb (2020-12-R1+fork5) unstable; urgency=low
     default visibility again; on Windows the same macro is the dllexport or
     dllimport declaration a shared library needs. A shared libbtbb exports 96
     names where it exported 128, and those 96 are exactly what btbb.h
-    declares. The soname stays libbtbb.so.1: nothing the header declares has
-    gone, so a program built against an earlier fork build goes on working.
+    declares. The soname stays libbtbb.so.1: nothing btbb.h declares has
+    gone, so a program built against the header goes on working. A program
+    that had linked one of the 32 by reading it out of the symbol table has
+    to be rebuilt against the header.
     The abi_surface test now holds the exported set to the declared one, on
     Linux and on macOS, and the tests that reach internal helpers compile the
     sources they need rather than linking the library.

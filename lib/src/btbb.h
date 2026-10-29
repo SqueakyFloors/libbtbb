@@ -77,13 +77,15 @@
  * A program that links the static library defines BTBB_STATIC, which asks
  * for neither. */
 #ifndef BTBB_API
-#  if defined(_WIN32) && !defined(BTBB_STATIC)
-#    ifdef btbb_EXPORTS
+#  if defined(_WIN32)
+#    if defined(BTBB_STATIC)
+#      define BTBB_API
+#    elif defined(btbb_EXPORTS)
 #      define BTBB_API __declspec(dllexport)
 #    else
 #      define BTBB_API __declspec(dllimport)
 #    endif
-#  elif defined(__GNUC__) || defined(__clang__)
+#  elif defined(__GNUC__)
 #    define BTBB_API __attribute__((visibility("default")))
 #  else
 #    define BTBB_API

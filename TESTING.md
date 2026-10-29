@@ -58,8 +58,10 @@ UndefinedBehaviorSanitizer with `-fno-sanitize-recover=all`.
 
 Several tests reach functions that are internal to the library, so they
 `#include` the translation unit under test rather than linking the library.
-That is the only way to pin a `static` function without widening the library's
-linkage, and `tests/CMakeLists.txt` says which tests do it.
+The library exports only what `btbb.h` declares, and a `static` function is
+not even a name the linker sees, so compiling the source is the way to reach
+either without widening what the library offers. `tests/CMakeLists.txt` says
+which tests do it.
 
 | Test | Covers | Where the vectors come from |
 |---|---|---|
