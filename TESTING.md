@@ -1,20 +1,18 @@
 # Testing libbtbb
 
-This fork put the library under test. Upstream had three test programs, two
-from 2012 and one from 2015, built only by a `tests/Makefile` from 2011 that
-the normal build never ran; one of the three had not compiled in years. There
-was a Travis configuration that no longer ran. So nothing checked a change.
+libbtbb was built by volunteers and has decoded Bluetooth traffic for Ubertooth
+and other projects for many years. It came with a few test programs, from 2012
+and 2015; that is typical for a volunteer project of this size and scope. This
+fork adds to that foundation with a test suite in the normal build.
 
-There are now 17 tests in the build, driven in large part by the Bluetooth Core
+There are now 17 tests, driven in large part by the Bluetooth Core
 Specification's own published sample data, and they run on every push and pull
 request on Linux and macOS, plain and under AddressSanitizer and
-UndefinedBehaviorSanitizer.
+UndefinedBehaviorSanitizer. The vectors of the original test programs were
+kept and ported (see #9).
 
-They found 63 defects — what you would expect of decoders nothing had
-exercised: packet types that never produced a payload at all, a capture file
-whose connection parameters all belonged to other parts of the packet, buffers
-written and read past their ends, and hop predictions for channels the piconet
-was not on.
+The tests have helped find and fix 63 issues, many of them in packet types and
+capture paths that are rarely seen on the air.
 
 - [How to run them](#how-to-run-them)
 - [What each test covers](#what-each-test-covers)
@@ -226,7 +224,7 @@ by one capped to a description three short of the format's own definition.
 | `PcapReader` never looked at which libpcap magic number a capture holds: it took any file whose first four bytes were not the byte-swapped one as a little-endian microsecond capture, so its "not a libpcap capture" could not be reached and a nanosecond capture, which is what this library's own writer produces, was not told apart | a file that is not a capture was read as one and failed later with a traceback out of the reader, and scaling the fraction field at all needed the unit the magic number carries | `btaptap`, a text file, a file shorter than a capture header, and a nanosecond capture read back | #64 | #55 |
 | `lib/src/CMakeLists.txt` guarded "no library at all" with an option name nothing sets | `cmake -DBUILD_SHARED_LIB=OFF`, the obvious way to ask for a static build, configured a tree with no library in it and failed halfway through the build with `ld: library 'btbb-static' not found` | `library_config`, and a static-only job in CI | #64 | #62 |
 
-The vectors ported from upstream's own test programs in #9 — the FEC 2/3
+The vectors ported from the original test programs in #9 — the FEC 2/3
 blocks, the syndrome values and the 20-row header table — all passed. They
 found nothing, which is the result: that part of the library was right and is
 now held down.
