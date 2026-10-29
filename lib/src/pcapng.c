@@ -82,7 +82,10 @@ static void write_padding_options( void * block,
    is 4096 times fewer system calls for the same file.
 
    Returns the number of bytes written, or -1 for a write that failed or
-   stopped short, which is what the caller treats as an error. */
+   stopped short, which is what the caller treats as an error. A write that
+   stops short now fails the file's creation rather than being passed over,
+   which is the right way round: the file would otherwise be short of the room
+   its blocks are mapped over. */
 #define ZERO_CHUNK 4096
 
 static ssize_t write_zeroes( int fd, size_t count )
