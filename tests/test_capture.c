@@ -1825,6 +1825,89 @@ static void test_bredr_interface_options(void)
 	CHECK(off + 4 >= end);
 }
 
+/*
+ * The longest interface description a caller can give.
+ *
+ * The writers hand the description to the pcapng layer as an option list, and
+ * both that layer and the timestamp-resolution check walk the list: from one
+ * option to the next by the length in its header, stopping at an option whose
+ * code is zero. A description of 253 characters or more fills the room the
+ * list set aside for it, so the step past it used to land on whatever was on
+ * the stack after the list, and that was read as the next option's header.
+ *
+ * dirty_stack() leaves a pattern there, so a walk that runs off the end finds
+ * an option code of 0xaaaa and a length of 0xaaaa rather than a convenient
+ * zero.
+ */
+static void test_long_interface_description(void)
+{
+	const char *bredr_name = "test_capture_longdesc.pcapng";
+	const char *le_name = "test_capture_longdesc_le.pcapng";
+	char desc[256];
+	btbb_pcapng_handle *h = NULL;
+	lell_pcapng_handle *lh = NULL;
+	size_t idb, value;
+	uint16_t value_length = 0;
+	int i;
+
+	memset(desc, 'd', sizeof(desc));
+	desc[sizeof(desc) - 1] = '\0';		/* 255 characters */
+
+	for (i = 0; i < 2; i++) {
+		const char *filename = i ? le_name : bredr_name;
+		uint16_t expect_dlt = i ? DLT_BLUETOOTH_LE_LL_WITH_PHDR
+					: DLT_BLUETOOTH_BREDR_BB;
+
+		unlink_quietly(filename);
+		dirty_stack();
+		if (i) {
+			CHECK(lell_pcapng_create_file(filename, desc, &lh) == 0);
+			if (lh == NULL)
+				continue;
+			(void) lell_pcapng_close(lh);
+			lh = NULL;
+		}
+		else {
+			CHECK(btbb_pcapng_create_file(filename, desc, &h) == 0);
+			if (h == NULL)
+				continue;
+			(void) btbb_pcapng_close(h);
+			h = NULL;
+		}
+
+		CHECK(read_capture(filename));
+		unlink_quietly(filename);
+		if (capture_len == 0)
+			continue;
+
+		idb = find_block(BLOCK_TYPE_INTERFACE, 0);
+		CHECK(idb < capture_len);
+		if (idb >= capture_len)
+			continue;
+		CHECK(rd16(idb + 8) == expect_dlt);
+
+		/* the whole description, and nothing past it */
+		value = find_option(idb, 16, IF_DESCRIPTION, &value_length);
+		CHECK(value != 0);
+		if (value != 0) {
+			CHECK(value_length == 255);
+			CHECK(memcmp(&capture[value], desc, 255) == 0);
+		}
+
+		/*
+		 * The timestamp resolution the writer adds when the caller
+		 * gave none: it walks the caller's list to look for one, so
+		 * this is also what says that walk ended where it should.
+		 */
+		value = find_option(idb, 16, IF_TSRESOL, &value_length);
+		CHECK(value != 0);
+		if (value != 0) {
+			CHECK(value_length == 1);
+			CHECK(capture[value] == 9);
+		}
+	}
+}
+
 /* The same record in a plain pcap file. */
 static void test_bredr_pcap_record(void)
 {
@@ -2688,6 +2771,7 @@ int main(void)
 	test_bredr_vetoed_trial_records_nothing();
 	test_bredr_corrected_bits();
 	test_bredr_interface_options();
+	test_long_interface_description();
 	test_bredr_pcap_record();
 	test_le_pcap_records();
 	test_le_connect_ind_option();

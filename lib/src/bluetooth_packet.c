@@ -137,14 +137,31 @@ typedef struct {
 
 static syndrome_struct *syndrome_map = NULL;
 
-static void add_syndrome(uint64_t syndrome, uint64_t error)
+/* Returns 0 if the entry could not be made. A map with a hole in it is of no
+ * use: the sync word search would quietly stop putting right the error
+ * patterns the missing entries describe, so the caller throws the map away
+ * and says so rather than correcting fewer errors than it was asked for. */
+static int add_syndrome(uint64_t syndrome, uint64_t error)
 {
 	syndrome_struct *s;
 	s = malloc(sizeof(syndrome_struct));
+	if (s == NULL)
+		return 0;
 	s->syndrome = syndrome;
 	s->error = error;
 
     HASH_ADD(hh, syndrome_map, syndrome, 8, s);
+	return 1;
+}
+
+static void free_syndrome_map(void)
+{
+	syndrome_struct *s, *next;
+
+	HASH_ITER(hh, syndrome_map, s, next) {
+		HASH_DEL(syndrome_map, s);
+		free(s);
+	}
 }
 
 static syndrome_struct *find_syndrome(uint64_t syndrome)
@@ -169,7 +186,8 @@ static uint64_t gen_syndrome(uint64_t codeword)
 	return syndrome;
 }
 
-static void cycle(uint64_t error, int start, int depth, uint64_t codeword)
+/* Returns 0 if any entry could not be made; see add_syndrome(). */
+static int cycle(uint64_t error, int start, int depth, uint64_t codeword)
 {
 	uint64_t new_error, syndrome, base;
 	int i;
@@ -179,20 +197,32 @@ static void cycle(uint64_t error, int start, int depth, uint64_t codeword)
 	{
 		new_error = (base << i);
 		new_error |= error;
-		if (depth)
-			cycle(new_error, i + 1, depth, codeword);
+		if (depth) {
+			if (!cycle(new_error, i + 1, depth, codeword))
+				return 0;
+		}
 		else {
 			syndrome = gen_syndrome(codeword ^ new_error);
-			add_syndrome(syndrome, new_error);
+			if (!add_syndrome(syndrome, new_error))
+				return 0;
 		}
 	}
+	return 1;
 }
 
-static void gen_syndrome_map(int bit_errors)
+/* Returns 0 if the whole map could not be built, having thrown away what it
+ * had got: half a map corrects fewer errors than the caller asked for and
+ * nothing would say so. */
+static int gen_syndrome_map(int bit_errors)
 {
 	int i;
-	for(i = 1; i <= bit_errors; i++)
-		cycle(0, 0, i, DEFAULT_AC);
+	for(i = 1; i <= bit_errors; i++) {
+		if (!cycle(0, 0, i, DEFAULT_AC)) {
+			free_syndrome_map();
+			return 0;
+		}
+	}
+	return 1;
 }
 
 /* Generate Sync Word from an LAP */
@@ -296,8 +326,13 @@ int btbb_init(int max_ac_errors)
 		return -1;
 	}
 
-	if ((syndrome_map == NULL) && (max_ac_errors))
-		gen_syndrome_map(max_ac_errors);
+	if ((syndrome_map == NULL) && (max_ac_errors)) {
+		if (!gen_syndrome_map(max_ac_errors)) {
+			fprintf(stderr, "%s: no memory for the access code "
+				"error correction table\n", __FUNCTION__);
+			return -1;
+		}
+	}
 
 	return 0;
 }
@@ -730,6 +765,10 @@ static char *unfec23(char *input, int length, int *corrected)
 		length += (10 - diff);
 
 	output = (char *) malloc(length);
+	/* Every caller already treats a null return as a block it could not
+	 * put right, and reports no payload for it. */
+	if (output == NULL)
+		return NULL;
 
 	for (iptr = 0, optr = 0; optr<length; iptr += 15, optr += 10) {
 		// copy data to output
@@ -1962,6 +2001,9 @@ char *tun_format(btbb_packet* pkt)
 	int length = 9 + pkt->payload_length;
 	char *tun_format = (char *) malloc(length);
 	int i;
+
+	if (tun_format == NULL)
+		return NULL;
 
 	/* meta data */
 	tun_format[0] = pkt->clkn & 0xff;

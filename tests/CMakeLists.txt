@@ -20,6 +20,25 @@ if(BUILD_TESTING)
     add_test(NAME le_print COMMAND test_le_print)
     set_tests_properties(le_print PROPERTIES TIMEOUT 30)
 
+    # The same checks with the printer compiled into the test and plain char
+    # unsigned, which is what it is on every ARM host. A signed field read
+    # through a plain char reads differently there than on the x86 and Apple
+    # hosts, and CI runs on the latter, so this is how the ARM reading is
+    # checked at all.
+    # The company identifier table comes with it: the printer calls into it,
+    # and the library does not export that function.
+    add_executable(test_le_print_unsigned_char test_le_print.c
+                   ${PROJECT_SOURCE_DIR}/lib/src/companies.c)
+    target_include_directories(test_le_print_unsigned_char
+                               PRIVATE ${PROJECT_SOURCE_DIR}/lib/src)
+    target_compile_options(test_le_print_unsigned_char
+                           PRIVATE -funsigned-char)
+    target_compile_definitions(test_le_print_unsigned_char
+                               PRIVATE LE_PRINT_COMPILE_PRINTER)
+    target_link_libraries(test_le_print_unsigned_char ${btbb_library})
+    add_test(NAME le_print_unsigned_char COMMAND test_le_print_unsigned_char)
+    set_tests_properties(le_print_unsigned_char PROPERTIES TIMEOUT 30)
+
     # The functions this one covers are internal, so it compiles the library
     # source itself rather than linking the library.
     add_executable(test_internal test_internal.c)
