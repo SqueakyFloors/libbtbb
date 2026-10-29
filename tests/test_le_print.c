@@ -390,8 +390,8 @@ static const struct {
 	  "note: wrong length (2, must be divisible by 16)\n",
 	  "Type 07 (128-bit Service UUIDs)", LELL_MALFORMED_AD_FIELD_LENGTH },
 	{ PAST_END_PACKET,
-	  "note: advertising data element at byte 1 claims 5 bytes,"
-	  " the payload holds 4\n",
+	  "note: advertising data element claims bytes 1 to 5 of a"
+	  " 4-byte payload\n",
 	  "Type:  ADV_IND", LELL_MALFORMED_AD_PAST_END },
 	{ ZERO_LENGTH_PACKET,
 	  "note: advertising data element claims a length of 0\n",
@@ -522,9 +522,20 @@ static void test_counts_add_up_and_reset(void)
 	check_count(LELL_MALFORMED_PDU_TOO_SHORT, 0, "a short PDU");
 	check_count(LELL_MALFORMED_ANY, 4, "every kind together");
 
-	/* a kind this library does not know, and the count of the kinds */
+	/* A kind this library does not know, and the count of the kinds,
+	 * which is not a kind either. Reading one with a reset must leave
+	 * every real count, and the setting that follows the array in
+	 * memory, exactly where they were. */
 	check_count((lell_malformed_kind) 99, 0, "an unknown kind");
 	check_count(LELL_MALFORMED_KINDS, 0, "the count of the kinds");
+	lell_set_malformed_verbose(1);
+	lell_malformed_count((lell_malformed_kind) 99, 1);
+	lell_malformed_count(LELL_MALFORMED_KINDS, 1);
+	check_count(LELL_MALFORMED_ANY, 4, "every kind after an unknown reset");
+	if (lell_set_malformed_verbose(0) != 1) {
+		printf("FAIL: an unknown kind's reset moved the setting\n");
+		++failures;
+	}
 
 	/* one kind read with a reset leaves the others where they were */
 	if (lell_malformed_count(LELL_MALFORMED_AD_FIELD_LENGTH, 1) != 2) {

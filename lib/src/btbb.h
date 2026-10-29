@@ -523,8 +523,9 @@ typedef enum {
 	LELL_MALFORMED_AD_FIELD_LENGTH,
 	/* How many kinds there are; not a kind itself. A later version of
 	   this header adds a kind in front of it, which moves this value, so
-	   a caller that has to walk the kinds reads this one at run time
-	   rather than compiling it in. */
+	   a program that walks the kinds covers the ones added since only
+	   once it is built again. LELL_MALFORMED_ANY totals them all
+	   whenever the program was built. */
 	LELL_MALFORMED_KINDS,
 	/* Every kind above, summed. Fixed, so that adding a kind leaves it
 	   where a program compiled against an earlier header expects it;

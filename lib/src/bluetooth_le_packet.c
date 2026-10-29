@@ -27,6 +27,7 @@
 
 #include "btbb.h"
 #include "bluetooth_le_packet.h"
+#include <assert.h>
 #include <ctype.h>
 #include <stdarg.h>
 #include <string.h>
@@ -93,6 +94,9 @@ static void _malformed(lell_malformed_kind kind, const char *fmt, ...)
 {
 	va_list ap;
 
+	/* every caller is in this file and names a kind; the array is sized
+	 * from the same enumeration */
+	assert((unsigned) kind < (unsigned) LELL_MALFORMED_KINDS);
 	malformed_counts[kind]++;
 
 	if (!malformed_detail_wanted)
@@ -593,10 +597,9 @@ static void _dump_scan_rsp_data(const uint8_t *buf, int len) {
 		++pos;
 		if (pos + sublen > len) {
 			_malformed(LELL_MALFORMED_AD_PAST_END,
-				   "note: advertising data element at byte"
-				   " %d claims %d bytes, the payload holds"
-				   " %d\n",
-				   pos, sublen, len);
+				   "note: advertising data element claims"
+				   " bytes %d to %d of a %d-byte payload\n",
+				   pos, pos + sublen - 1, len);
 			return;
 		}
 		if (sublen == 0) {
