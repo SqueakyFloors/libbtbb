@@ -273,8 +273,7 @@ libbtbb (2020-12-R1+fork5) unstable; urgency=low
     128 MB allocation and a wait of seconds, paid every time ubertooth-follow
     read an adapter's map, for a sequence nothing reads any more. Hops are
     answered one at a time from the map instead, so the allocation is gone -
-    and with it a failure of the largest allocation the library made, which
-    nothing checked and which was written through.
+    and with it the failure path of the largest allocation the library made.
   * Clock recovery no longer takes the first candidate clock left standing as
     the piconet's. While the AFH map is still incomplete the predicted hops
     are wrong for the channels not yet seen, so a clock that is not the
