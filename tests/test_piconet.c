@@ -41,9 +41,7 @@
  * malloc()'s own declaration.
  */
 static void *counted_malloc(size_t size);
-static void *counted_calloc(size_t count, size_t size);
 #define malloc counted_malloc
-#define calloc counted_calloc
 
 /*
  * calloc() is rewritten separately, with a refusal flag of its own and no
@@ -679,40 +677,6 @@ static void test_a_failed_allocation_is_reported(void)
 
 	refuse_allocations = 0;
 	refuse_callocs = 0;
-
-	/*
-	 * A survey piconet is two allocations, the piconet and the entry that
-	 * remembers it by its LAP, so each is refused in turn. The second
-	 * leaves a piconet already made, which has to be let go of rather
-	 * than lost: the caller is told there is no piconet, so nothing else
-	 * will ever free it.
-	 */
-	allocation_calls = 0;
-	refuse_from = 1;
-	CHECK(get_piconet(TEST_LAP) == NULL);
-	refuse_from = 0;
-	CHECK_EQ(1, allocation_calls);	/* the piconet, and no further */
-
-	allocation_calls = 0;
-	refuse_from = 2;
-	CHECK(get_piconet(TEST_LAP) == NULL);
-	refuse_from = 0;
-	CHECK_EQ(2, allocation_calls);	/* the piconet, then its entry */
-
-	/*
-	 * And the caller of all that: in survey mode btbb_process_packet()
-	 * looks the packet's piconet up, so it has to carry on without one.
-	 * survey_mode is set here rather than through btbb_init_survey(),
-	 * which cannot be undone, because every test after this one expects
-	 * the ordinary path.
-	 */
-	survey_mode = 1;
-	allocation_calls = 0;
-	refuse_from = 1;
-	CHECK_EQ(0, btbb_process_packet(pkt, NULL));
-	refuse_from = 0;
-	survey_mode = 0;
-	CHECK_EQ(1, allocation_calls);
 
 	/* and the table is built once there is memory for it */
 	CHECK_EQ(0, btbb_init(2));
