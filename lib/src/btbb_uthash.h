@@ -59,6 +59,10 @@
 		exit(1);                                                  \
 	} while (0)
 
+/* The settings above are in place, which is what uthash.h asks for before it
+ * will be included. */
+#define BTBB_UTHASH_SETTINGS 1
+
 #include "uthash.h"
 
 #endif /* INCLUDED_BTBB_UTHASH_H */

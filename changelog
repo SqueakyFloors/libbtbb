@@ -14,8 +14,11 @@ libbtbb (2020-12-R1+fork5) unstable; urgency=low
     run;
     lell_set_malformed_verbose() asks for the detail as it goes. A list of
     16-bit service UUIDs whose length is not a whole number of them is
-    counted with the rest, where it used to be passed over in silence.
-    Nothing the dump writes to standard output changes.
+    counted with the rest, where it used to be passed over in silence, and
+    the dump prints the whole UUIDs such a list does hold rather than
+    dropping all of them, as it now does for a list of 128-bit UUIDs whose
+    length is not a whole number of them either. Nothing else the dump writes
+    to standard output changes.
   * A capture file in pcapng format is created in a few milliseconds rather
     than a few hundred. The file reserves a page for its section header block
     and another for its interface description, and it filled both by writing
@@ -387,13 +390,17 @@ libbtbb (2020-12-R1+fork5) unstable; urgency=low
     recorded as having had none checked, and so is a packet recorded while the
     library is still guessing the piconet's upper address part, where a CRC
     failure says the guess was wrong rather than anything about the packet.
-    A record only reports a result when the reference address part it carries
-    is the one the result was reached with, which is what the format's reader
-    has to go on.
+    The flag that says the record carries a reference address part describes
+    that field alone: these four say what was checked, so a record reports a
+    result whether or not a reference part was given.
   * A failed or incomplete write to a PCAPNG file is reported to the caller
     instead of returning success, and the part of a record that did reach the
     file is taken back out, so a capture that runs out of disk space is
-    noticed and still ends on a whole record a reader can parse.
+    noticed and still ends on a whole record a reader can parse. A write of a
+    new file's section header or of one of its options that stops short now
+    carries on from where it got to, and a write that cannot be finished is
+    reported, where a short one used to be taken for a whole one and leave an
+    option cut in half.
   * A BR/EDR PCAPNG record no longer carries up to three bytes of whatever the
     caller's memory held in the padding that rounds the record to a 4-byte
     boundary.

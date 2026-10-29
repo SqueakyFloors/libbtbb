@@ -21,7 +21,7 @@ served Ubertooth and other projects well for more than a decade. Like many
 volunteer projects of its scope, it carried only a few tests, from 2012 and
 2015. This fork builds on that work by adding a test suite to the normal build.
 
-There are now 21 tests: 870 assertions in their source, 176,054 assertion
+There are now 23 tests: 870 assertions in their source, 176,054 assertion
 executions per run, driven in large part by the Bluetooth Core Specification
 v5.4's own sample data: all 7680 hop frequencies of Vol 2, Part G, Section 2,
 the access code, HEC, CRC, FEC and whitening vectors and the complete DH1 and

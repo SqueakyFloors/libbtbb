@@ -637,20 +637,23 @@ static void _dump_scan_rsp_data(const uint8_t *buf, int len) {
 			case 0x03:
 				printf(" (16-bit Service UUIDs) \n");
 print16:
-				if ((sublen - 1) % 2 == 0) {
-					for (i = 0; i < sublen - 1; i += 2) {
-						/* assembled a byte at a time: the
-						 * buffer is not aligned for a
-						 * uint16_t, and the UUID is
-						 * little endian whatever the
-						 * host is */
-						uint16_t uuid = (uint16_t)
-							(buf[pos+2+i] << 8 |
-							 buf[pos+1+i]);
-						printf("           %04x\n", uuid);
-					}
+				/* Print the whole UUIDs the list holds. A
+				 * length that is not a whole number of them
+				 * still carries the ones before the bytes
+				 * left over, which are counted below and
+				 * reported for a caller that asked. */
+				for (i = 0; i + 2 <= sublen - 1; i += 2) {
+					/* assembled a byte at a time: the
+					 * buffer is not aligned for a
+					 * uint16_t, and the UUID is
+					 * little endian whatever the
+					 * host is */
+					uint16_t uuid = (uint16_t)
+						(buf[pos+2+i] << 8 |
+						 buf[pos+1+i]);
+					printf("           %04x\n", uuid);
 				}
-				else {
+				if ((sublen - 1) % 2 != 0) {
 					_malformed(LELL_MALFORMED_AD_FIELD_LENGTH,
 						   "note: wrong length (%d,"
 						   " must be divisible by"
@@ -663,9 +666,14 @@ print16:
 			case 0x07:
 				printf(" (128-bit Service UUIDs)\n");
 print128:
-				if ((sublen - 1) % 16 == 0) {
+				/* The whole UUIDs this list holds, as above.
+				 * The loop stops at the last whole one, so
+				 * bytes left over past it are not read. */
+				{
 					uint8_t uuid[16];
-					for (i = 0; i < sublen - 1; ++i) {
+					int whole = ((sublen - 1) / 16) * 16;
+
+					for (i = 0; i < whole; ++i) {
 						uuid[15 - (i % 16)] = buf[pos+1+i];
 						if ((i & 15) == 15) {
 							printf("           ");
@@ -674,7 +682,7 @@ print128:
 						}
 					}
 				}
-				else {
+				if ((sublen - 1) % 16 != 0) {
 					_malformed(LELL_MALFORMED_AD_FIELD_LENGTH,
 						   "note: wrong length (%d,"
 						   " must be divisible by"
