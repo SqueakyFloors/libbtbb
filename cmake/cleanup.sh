@@ -46,8 +46,12 @@ for dir in $INSTALL_DIRS; do
 	done
 	# Two directories deep for the header as well: an install can be given
 	# a directory of its own for it, as include/libbtbb.
-	for header in $HEADERS; do
-		$FIND ${dir}/include -maxdepth 2 -name "$header" $EXEC
-	done
-	$FIND ${dir}/bin -maxdepth 1 -name "ubertooth-*" $EXEC
+	if [ -d "${dir}/include" ]; then
+		for header in $HEADERS; do
+			$FIND ${dir}/include -maxdepth 2 -name "$header" $EXEC
+		done
+	fi
+	if [ -d "${dir}/bin" ]; then
+		$FIND ${dir}/bin -maxdepth 1 -name "ubertooth-*" $EXEC
+	fi
 done

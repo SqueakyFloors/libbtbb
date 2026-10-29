@@ -82,9 +82,10 @@ endif()
 
 # Find the one libbtbb.pc an install left under a prefix, and check it.
 function(check_installed_pc where what)
-	# The libdir can carry a path, so the file is one or two directories
-	# under the prefix.
+	# The libdir can be the prefix itself or carry a path, so the file is in
+	# the prefix or one or two directories under it.
 	file(GLOB pc_files
+		${where}/pkgconfig/libbtbb.pc
 		${where}/*/pkgconfig/libbtbb.pc
 		${where}/*/*/pkgconfig/libbtbb.pc)
 	if(NOT pc_files)
@@ -327,6 +328,98 @@ if(installed)
 		"installed with an empty LIB_SUFFIX and CMAKE_INSTALL_LIBDIR set")
 	check_installed_pc(${empty_install}
 		"installed with an empty LIB_SUFFIX and CMAKE_INSTALL_LIBDIR set")
+endif()
+
+# Directories given as empty, which asks for the prefix itself: the files go
+# straight into it, and libbtbb.pc is in a pkgconfig directory there. The
+# install has to stay inside the prefix for that - a directory joined on to
+# an empty one would be read as the root of the filesystem - and the walk
+# back out of the pkgconfig directory is one directory shorter than usual.
+set(root_build ${BINARY_DIR}/root-build)
+set(root_install ${BINARY_DIR}/root-install)
+build_and_install("the prefix itself as both directories"
+	${root_build} ${root_install}
+	-DCMAKE_INSTALL_LIBDIR=
+	-DCMAKE_INSTALL_INCLUDEDIR=)
+if(installed)
+	check_layout(${root_install} . .
+		"installed with both directories left empty")
+	check_installed_pc(${root_install}
+		"installed with both directories left empty")
+endif()
+
+# A directory written with a "." in it, and an absolute includedir beside it.
+# CMake drops the "." when it installs, so libbtbb.pc has to count the same
+# directories the install wrote, and the header's own setting is honored
+# wherever the library goes.
+set(dot_build ${BINARY_DIR}/dot-build)
+set(dot_install ${BINARY_DIR}/dot-install)
+set(dot_includedir ${BINARY_DIR}/dot-includedir)
+file(REMOVE_RECURSE ${dot_includedir})
+build_and_install("a libdir with a dot segment and an absolute includedir"
+	${dot_build} ${dot_install}
+	-DCMAKE_INSTALL_LIBDIR=./libdir-chosen/
+	-DCMAKE_INSTALL_INCLUDEDIR=${dot_includedir})
+if(installed)
+	foreach(file ${dot_install}/libdir-chosen/libbtbb${SHARED_SUFFIX}
+	             ${dot_install}/libdir-chosen/pkgconfig/libbtbb.pc
+	             ${dot_includedir}/btbb.h)
+		if(NOT EXISTS ${file})
+			fail("installed with a dot segment and an absolute includedir: "
+			     "${file} was not installed")
+		endif()
+	endforeach()
+	check_installed_pc(${dot_install}
+		"installed with a dot segment and an absolute includedir")
+endif()
+
+# Two cases that are settled while configuring, so they need no build or
+# install: what libbtbb.pc is written with, and a directory that is refused.
+function(check_configured_pc_libdir what expected)
+	set(build ${BINARY_DIR}/configured)
+	file(REMOVE_RECURSE ${build})
+	execute_process(
+		COMMAND ${CMAKE_COMMAND} -S ${SOURCE_DIR} -B ${build}
+		        ${like_this_build}
+		        -DCMAKE_INSTALL_PREFIX=${BINARY_DIR}/configured-prefix
+		        ${ARGN}
+		        -DENABLE_PYTHON=OFF -DBUILD_TESTING=OFF
+		RESULT_VARIABLE result
+		OUTPUT_VARIABLE output
+		ERROR_VARIABLE error)
+	if(NOT result EQUAL 0)
+		fail("${what}: the configure was refused:\n${output}${error}")
+	else()
+		file(STRINGS ${build}/lib/libbtbb.pc libdir_line REGEX "^libdir=")
+		if(NOT "${libdir_line}" STREQUAL "libdir=${expected}")
+			fail("${what}: libbtbb.pc has ${libdir_line}, "
+			     "where it should have libdir=${expected}")
+		endif()
+	endif()
+	set(failures ${failures} PARENT_SCOPE)
+endfunction()
+
+# A suffix CMake reads as a false constant is still a suffix.
+check_configured_pc_libdir("LIB_SUFFIX=0" "\${prefix}/lib0"
+	-DLIB_SUFFIX=0 -DCMAKE_INSTALL_LIBDIR=libdir-overridden)
+
+# A directory leading out of the prefix is refused while configuring: the
+# install would write outside it, and libbtbb.pc could not say where.
+set(out_build ${BINARY_DIR}/out-of-prefix)
+file(REMOVE_RECURSE ${out_build})
+execute_process(
+	COMMAND ${CMAKE_COMMAND} -S ${SOURCE_DIR} -B ${out_build}
+	        ${like_this_build}
+	        -DCMAKE_INSTALL_LIBDIR=../outside
+	        -DENABLE_PYTHON=OFF -DBUILD_TESTING=OFF
+	RESULT_VARIABLE result
+	OUTPUT_VARIABLE output
+	ERROR_VARIABLE error)
+if(result EQUAL 0)
+	fail("a libdir leading out of the prefix was accepted")
+elseif(NOT "${output}${error}" MATCHES "leads out of the directory")
+	fail("the refusal of a libdir leading out of the prefix does not say "
+	     "what is wrong:\n${output}${error}")
 endif()
 
 # A libdir given as an absolute path, which GNUInstallDirs allows and a

@@ -12,8 +12,10 @@ libbtbb (2020-12-R1+fork5) unstable; urgency=low
     passes it installs where it always did, and the configure step says which
     of the two it followed. libbtbb.pc names the directories used. The
     cleanup script looks in lib64 and in a multiarch directory as well as in
-    lib, takes the pkg-config file away with the library it names, and knows
-    about btbb.h, the header this library installs, which it did not name.
+    lib, and takes the pkg-config file away with the library it names; it
+    also finds a static archive and a macOS .dylib, where it used to look for
+    a .so and nothing else, and knows about btbb.h, the header this library
+    installs, which it did not name.
   * The packaging files are gone. The RPM spec, the MacPorts Portfile and the
     Homebrew formula in packaging/ described earlier releases: the spec listed
     libbtbb.so.0 and two headers where the build produces libbtbb.so.1 and

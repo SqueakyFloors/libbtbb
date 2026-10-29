@@ -74,13 +74,13 @@ works out:
 | Debian, Ubuntu and the like, prefix `/usr` | `lib/x86_64-linux-gnu`, or the triplet of the architecture being built |
 | Debian, Ubuntu and the like, any other prefix | `lib` |
 | Other 64-bit Linux: Fedora, RHEL, SUSE, Gentoo and the rest | `lib64`, whatever the prefix |
-| Arch, Alpine, a conda prefix, macOS, 32-bit Linux | `lib` |
+| Arch, Alpine, a conda prefix, macOS, 32-bit Linux, a cross build | `lib` |
 
 The rule is CMake's own and has changed a little between CMake versions, so
 the configure step prints the two directories it settled on:
 
 ```
--- Installing the library to lib64 and the header to include, under /usr/local
+-- Installing the library to /usr/local/lib64 and the header to /usr/local/include
 ```
 
 To choose the directory yourself, set it:

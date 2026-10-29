@@ -67,7 +67,13 @@ if( BUILD_SHARED_LIB )
     # and the changelog records what was compared with 2020-12-R1.
     set_target_properties(btbb PROPERTIES VERSION ${MAJOR_VERSION}.${MINOR_VERSION} SOVERSION 1)
     set_target_properties(btbb PROPERTIES CLEAN_DIRECT_OUTPUT 1)
+    # ARCHIVE as well as LIBRARY, so that the import library a Windows build
+    # produces goes where libbtbb.pc says the library is, rather than to
+    # CMake's own default. A Windows DLL is a RUNTIME artifact and belongs
+    # with the programs, as it has to be for them to load it.
     install(TARGETS btbb
+            RUNTIME DESTINATION ${INSTALL_DEFAULT_BINDIR}
+            ARCHIVE DESTINATION ${BTBB_INSTALL_LIBDIR}
             LIBRARY DESTINATION ${BTBB_INSTALL_LIBDIR}
             COMPONENT sharedlibs)
 endif()
