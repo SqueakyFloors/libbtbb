@@ -645,12 +645,20 @@ static void test_a_failed_allocation_is_reported(void)
 		btbb_packet_unref(pkt);
 		return;
 	}
-	refuse_allocations = 1;
+	/* Part of the table is built before the refusal, so the entries it
+	 * did make are the ones thrown away. Refusing the first allocation
+	 * would leave nothing to throw away and the discard untested. */
+	allocation_calls = 0;
+	refuse_from = 100;
 	init_result = btbb_init(2);
-	refuse_allocations = 0;
+	refuse_from = 0;
 	capture_stop(out, sizeof(out), err, sizeof(err));
 
-	/* the error correction table, with nothing of it left behind */
+	/* It got that far, so there was a part-built table to throw away.
+	 * That the entries themselves are freed is held down by the leak
+	 * check of the sanitizer build rather than from here: a test cannot
+	 * see a block go. */
+	CHECK(allocation_calls >= 100);
 	CHECK_EQ(-1, init_result);
 	CHECK(syndrome_map == NULL);
 	CHECK(strstr(err, "no memory for the access code") != NULL);
@@ -659,9 +667,8 @@ static void test_a_failed_allocation_is_reported(void)
 	refuse_allocations = 1;
 	refuse_callocs = 1;
 
-	/* a piconet, and a survey piconet made on demand */
+	/* a piconet */
 	CHECK(btbb_piconet_new() == NULL);
-	CHECK(get_piconet(TEST_LAP) == NULL);
 
 	/* the rate 2/3 FEC decoder, whose callers already report no payload
 	 * for a block they could not put right */
@@ -672,6 +679,40 @@ static void test_a_failed_allocation_is_reported(void)
 
 	refuse_allocations = 0;
 	refuse_callocs = 0;
+
+	/*
+	 * A survey piconet is two allocations, the piconet and the entry that
+	 * remembers it by its LAP, so each is refused in turn. The second
+	 * leaves a piconet already made, which has to be let go of rather
+	 * than lost: the caller is told there is no piconet, so nothing else
+	 * will ever free it.
+	 */
+	allocation_calls = 0;
+	refuse_from = 1;
+	CHECK(get_piconet(TEST_LAP) == NULL);
+	refuse_from = 0;
+	CHECK_EQ(1, allocation_calls);	/* the piconet, and no further */
+
+	allocation_calls = 0;
+	refuse_from = 2;
+	CHECK(get_piconet(TEST_LAP) == NULL);
+	refuse_from = 0;
+	CHECK_EQ(2, allocation_calls);	/* the piconet, then its entry */
+
+	/*
+	 * And the caller of all that: in survey mode btbb_process_packet()
+	 * looks the packet's piconet up, so it has to carry on without one.
+	 * survey_mode is set here rather than through btbb_init_survey(),
+	 * which cannot be undone, because every test after this one expects
+	 * the ordinary path.
+	 */
+	survey_mode = 1;
+	allocation_calls = 0;
+	refuse_from = 1;
+	CHECK_EQ(0, btbb_process_packet(pkt, NULL));
+	refuse_from = 0;
+	survey_mode = 0;
+	CHECK_EQ(1, allocation_calls);
 
 	/* and the table is built once there is memory for it */
 	CHECK_EQ(0, btbb_init(2));
