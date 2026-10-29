@@ -5,7 +5,7 @@ and other projects for many years. It came with a few test programs, from 2012
 and 2015; that is typical for a volunteer project of this size and scope. This
 fork adds to that foundation with a test suite in the normal build.
 
-There are now 21 tests, and five more where the compiler can build a fuzz
+There are now 20 tests, and five more where the compiler can build a fuzz
 target, driven in large part by the Bluetooth Core
 Specification's own published sample data, and they run on every push and pull
 request on Linux and macOS, plain and under AddressSanitizer and
@@ -102,9 +102,10 @@ writers and 2.6 million through the PCAPNG writers. Nothing crashed, and
 neither sanitizer reported anything.
 
 Before that run, `fuzz_pcapng` stopped within seconds on the unterminated
-interface-description option list of #23, which PR #71 fixes. That is why the
-target caps the description it fuzzes; the cap, and the seed for it, go once
-the fix is in.
+interface-description option list of #23, independently of the audit that
+found it, and PR #71 fixed it while this was being written. The input it
+stopped on is a seed now - `corpus/pcapng/long_description`, a 255-character
+description - so that it stays fixed.
 
 The seed corpus in `tests/fuzz/corpus/` is the sample data the rest of the
 suite uses - the specification's DH1 packet, the frames of the LE print test,

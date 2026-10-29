@@ -50,16 +50,11 @@
 #define CONNECT_REQ_PDU_BYTES LE_CONNECT_IND_PDU_LENGTH
 
 /*
- * Longer than any interface description a capture tool writes - Ubertooth's
- * pass nine characters - and long enough to reach the room the file sets
- * aside for its options.
- *
- * It stops short of 255 because a long description is handed to the writer as
- * an option list with no terminating option, which the writer then reads past
- * the end of (#23). PR #71 is the fix; raise this to 255 once that is in, and
- * the longest descriptions are fuzzed too.
+ * The longest interface description the writer takes, which is far longer
+ * than any a capture tool writes - Ubertooth's pass nine characters - and
+ * long enough to reach the room the file sets aside for its options.
  */
-#define LONGEST_DESCRIPTION 251
+#define LONGEST_DESCRIPTION 255
 
 int LLVMFuzzerInitialize(int *argc, char ***argv)
 {
