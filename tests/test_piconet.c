@@ -939,38 +939,61 @@ static const char SPEC_DH1_PAYLOAD[] =
 	"1110110000110110";
 
 /*
- * That packet as it reaches a receiver that is listening at a given clock:
- * the access code, the 18 header bits each sent three times, and the payload,
- * with the header and the payload whitened as one run of the sequence the
- * clock picks out (Vol 2, Part B, Section 7.2), so the payload starts 18 bits
- * along.  Whitening is an exclusive or, so the same table builds the packet
- * here and takes it apart in the library.  Returns the number of symbols.
+ * Lay down the start of a BR/EDR packet as it goes on air: the 64-bit sync
+ * word of the LAP, the access code trailer, and the 18 header bits each sent
+ * three times, which is the rate 1/3 code of Vol 2, Part B, Section 7.4.
+ *
+ * On air the header is whitened before it is encoded, with the sequence the
+ * receive clock picks out, and the decoder undoes it the other way round.
+ * Whitening here is what lets UAP discovery tell one candidate clock from
+ * another: each wrong clock reads a different header, and so a different UAP,
+ * from the same symbols.  A whiten_clock below zero leaves the header
+ * unwhitened, so it reads back as it was built whatever clock the decoder
+ * tries.  Returns the symbols used, which is where a payload starts.
  */
-static int spec_dh1_symbols(char *stream, int clock)
+static int lay_out_header(char *stream, uint32_t lap, uint16_t header_data,
+			  uint8_t hec, int whiten_clock)
 {
-	uint64_t syncword = btbb_gen_syncword(SPEC_DH1_LAP);
-	uint32_t header = SPEC_DH1_HEADER_DATA |
-			  ((uint32_t) SPEC_DH1_HEC << 10);
-	int index = INDICES[clock & 0x3f];
+	uint64_t syncword = btbb_gen_syncword(lap);
+	uint32_t header = (uint32_t) header_data | ((uint32_t) hec << 10);
 	int i;
 
-	memset(stream, 0, MAX_SYMBOLS);
 	for (i = 0; i < 64; i++)
 		stream[i] = (char) ((syncword >> i) & 1);
 	for (i = 0; i < 4; i++)
 		stream[64 + i] = (char) (((syncword >> 63) ^ (i + 1)) & 1);
 	for (i = 0; i < 18; i++) {
-		char bit = (char) (((header >> i) & 1) ^
-				   WHITENING_DATA[(index + i) % 127]);
+		char bit = (char) ((header >> i) & 1);
 
+		if (whiten_clock >= 0)
+			bit ^= (char) WHITENING_DATA[
+				(INDICES[whiten_clock & 0x3f] + i) % 127];
 		stream[68 + i * 3] = bit;
 		stream[69 + i * 3] = bit;
 		stream[70 + i * 3] = bit;
 	}
+	return 122;
+}
+
+/*
+ * That packet as it reaches a receiver that is listening at a given clock.
+ * One run of the whitening sequence covers the header and the payload with no
+ * reinitializing in between (Vol 2, Part B, Section 7.2), so the payload
+ * starts 18 bits along it.  Returns the number of symbols.
+ */
+static int spec_dh1_symbols(char *stream, int clock)
+{
+	int length, i;
+
+	memset(stream, 0, MAX_SYMBOLS);
+	length = lay_out_header(stream, SPEC_DH1_LAP, SPEC_DH1_HEADER_DATA,
+				SPEC_DH1_HEC, clock);
+
 	for (i = 0; SPEC_DH1_PAYLOAD[i] != '\0'; i++)
-		stream[122 + i] = (char) ((SPEC_DH1_PAYLOAD[i] - '0') ^
-					  WHITENING_DATA[(index + 18 + i) % 127]);
-	return 122 + i;
+		stream[length + i] = (char)
+			((SPEC_DH1_PAYLOAD[i] - '0') ^
+			 WHITENING_DATA[(INDICES[clock & 0x3f] + 18 + i) % 127]);
+	return length + i;
 }
 
 /* That packet handed to the decoder at the clock a board read it at. */
@@ -999,9 +1022,11 @@ static btbb_packet *spec_dh1_packet(char *stream, int length, uint32_t clkn)
  */
 static void test_the_settled_offset_reads_the_packets_own_header(void)
 {
-	/* The piconet's CLK1-6, and a board whose own clock reads 5: four
-	 * slots is the ordinary gap between a board and a piconet it has not
-	 * been told to close up with yet. */
+	/* The piconet's CLK1-6 is 37 and the board's own clock reads 5, so the
+	 * two are 32 slots apart.  A board hears a piconet on its own clock,
+	 * and the two run some fixed number of slots apart until the follow
+	 * starts, so a fixture whose clocks agreed would not notice the offset
+	 * being dropped. */
 	const int piconet_clk6 = 0x25;
 	const uint32_t board_clkn = 10;
 	char stream[MAX_SYMBOLS];
@@ -1035,8 +1060,9 @@ static void test_the_settled_offset_reads_the_packets_own_header(void)
 		 offset);
 
 	/* What a capture tool does with it: the packet is handed back its own
-	 * symbols at the piconet's clock, CLKN counting half-slots, and the
-	 * header read again. */
+	 * symbols at the piconet's clock, which is the clock it read them at
+	 * plus twice the offset, CLKN counting half-slots, and the header is
+	 * read again. */
 	btbb_packet_set_uap(pkt, btbb_piconet_get_uap(pn));
 	btbb_packet_set_flag(pkt, BTBB_CLK6_VALID, 1);
 	btbb_packet_set_data(pkt, stream, length, 0,
@@ -1087,32 +1113,11 @@ static btbb_packet *packet_of_at_clock(uint32_t lap, uint8_t channel,
 				       int length, int whiten_clock)
 {
 	char stream[400];
-	uint64_t syncword = btbb_gen_syncword(lap);
-	uint32_t header = (uint32_t) header_data | ((uint32_t) hec << 10);
 	btbb_packet *pkt = NULL;
 	int i;
 
 	memset(stream, 0, sizeof(stream));
-	for (i = 0; i < 64; i++)
-		stream[i] = (char) ((syncword >> i) & 1);
-	for (i = 0; i < 4; i++)
-		stream[64 + i] = (char) (((syncword >> 63) ^ (i + 1)) & 1);
-	for (i = 0; i < 18; i++) {
-		char bit = (char) ((header >> i) & 1);
-
-		/* On air the header is whitened before it is encoded, with
-		 * the sequence the receive clock picks out, and the decoder
-		 * undoes it the other way round. Whitening here is what lets
-		 * UAP discovery tell one candidate clock from another: each
-		 * wrong clock reads a different header, and so a different
-		 * UAP, from the same symbols. */
-		if (whiten_clock >= 0)
-			bit ^= (char) WHITENING_DATA[
-				(INDICES[whiten_clock & 0x3f] + i) % 127];
-		stream[68 + i * 3] = bit;
-		stream[69 + i * 3] = bit;
-		stream[70 + i * 3] = bit;
-	}
+	lay_out_header(stream, lap, header_data, hec, whiten_clock);
 	/* Where a payload belongs, alternating symbols: a payload header that
 	 * claims a length, and bits under it that no CRC will check out. */
 	for (i = 122; i < length; i++)

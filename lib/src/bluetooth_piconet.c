@@ -610,6 +610,11 @@ int btbb_init_hop_reversal(int aliased, btbb_piconet *pn)
 	channel_map(pn, pn->candidates_afh_map);
 	btbb_piconet_set_flag(pn, BTBB_HOP_REVERSAL_INIT, 1);
 	btbb_piconet_set_flag(pn, BTBB_CLK27_VALID, 0);
+	/* The whole clock is being searched for again, so an offset left from
+	 * one already found describes nothing: the caller is told what is
+	 * known, which is CLK1-6 where the search has it. */
+	pn->clk_offset = btbb_piconet_get_flag(pn, BTBB_CLK6_VALID) ?
+			 pn->clk6_offset : 0;
 	/* the hops being reversed are the piconet's own, not an aliased
 	 * receiver's view of them */
 	btbb_piconet_set_flag(pn, BTBB_IS_ALIASED, 0);
@@ -721,6 +726,12 @@ static void reset(btbb_piconet *pn)
 	pn->winnowed = 0;
 	pn->clk27_confirmations = 0;
 	pn->clk_offset = 0;
+	/* Both clocks are being searched for again, so neither offset
+	 * describes this piconet.  The slot offset is what the reported one is
+	 * taken from while only CLK1-6 is known, and what every candidate's
+	 * low 6 bits come from, so a dead search's value left here would seed
+	 * the next one. */
+	pn->clk6_offset = 0;
 	/* The clocks given up for this LAP are the one thing a reset keeps,
 	 * because keeping them is what stops the new search from ending where
 	 * the last one did.  Only a new LAP clears them. */
