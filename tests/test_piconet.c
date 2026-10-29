@@ -52,11 +52,21 @@ static void *counted_malloc(size_t size);
 static void *refusable_calloc(size_t count, size_t size);
 #define calloc refusable_calloc
 
+/*
+ * free() is counted, so that a test can say an allocation was given back on a
+ * path where nothing else can see it. A block a failed function leaves behind
+ * is not always a leak a sanitizer reports: the pointer can still be sitting
+ * in a stack slot, which LeakSanitizer scans as a root.
+ */
+static void counted_free(void *block);
+#define free counted_free
+
 #include "bluetooth_packet.c"
 #include "bluetooth_piconet.c"
 
 #undef malloc
 #undef calloc
+#undef free
 
 #include "stream_capture.h"
 
@@ -65,6 +75,7 @@ static int allocation_calls;	/* calls, since it was last reset */
 static int refuse_allocations;
 static int refuse_from;		/* refuse this call onward, 0 to refuse none */
 static int refuse_callocs;
+static int free_calls;		/* calls, since the program started */
 
 /*
  * The size each live allocation was asked for, so a test can ask how long the
@@ -120,6 +131,12 @@ static void *refusable_calloc(size_t count, size_t size)
 	if (refuse_callocs)
 		return NULL;
 	return calloc(count, size);
+}
+
+static void counted_free(void *block)
+{
+	free_calls++;
+	free(block);
 }
 
 static int failures = 0;
@@ -2138,6 +2155,34 @@ static void test_a_piconet_taken_out_of_the_survey_is_gone_from_it(void)
 }
 
 /*
+ * The survey gives back everything it took. Reading the last piconet out of it
+ * frees that LAP's entry and, with it, the hash table and the bucket array the
+ * entry was the last one in. The walk this replaces freed the entry on its
+ * own, so every survey read to the end left its table behind.
+ */
+static void test_the_last_result_takes_the_survey_table_with_it(void)
+{
+	btbb_piconet *pn;
+	int frees;
+
+	survey_end();
+	btbb_init_survey();
+	survey_hears(SURVEY_LAP_A, 10);
+	CHECK_EQ(1, HASH_COUNT(piconet_survey));
+
+	frees = free_calls;
+	pn = btbb_next_survey_result();
+	frees = free_calls - frees;
+	CHECK(pn != NULL);
+	CHECK(piconet_survey == NULL);
+	/* the entry, the table, and the bucket array */
+	CHECK(frees >= 3);
+	if (pn != NULL)
+		btbb_piconet_unref(pn);
+	survey_mode = 0;
+}
+
+/*
  * A survey that cannot make room for a piconet drops the packet. Both
  * allocations it takes are failed in turn: the survey's own entry for the LAP,
  * and the piconet itself, which is the larger of the two and so the one a
@@ -2157,6 +2202,7 @@ static void test_a_survey_that_cannot_allocate_drops_the_packet(void)
 	btbb_init_survey();
 	for (round = 0; round < 2; round++) {
 		char out[4096], err[4096];
+		int frees;
 
 		if (capture_or_fail() != 0)
 			break;
@@ -2164,11 +2210,18 @@ static void test_a_survey_that_cannot_allocate_drops_the_packet(void)
 			refuse_allocations = 1;	/* the survey's entry */
 		else
 			refuse_callocs = 1;	/* the piconet */
+		frees = free_calls;
 		CHECK_EQ(0, btbb_process_packet(pkt, NULL));
+		frees = free_calls - frees;
 		refuse_allocations = 0;
 		refuse_callocs = 0;
 		capture_stop(out, sizeof(out), err, sizeof(err));
 
+		/* where the entry was made and the piconet was not, the entry
+		 * is given back: it is reachable from nothing afterwards, and
+		 * a pointer left in a stack slot can keep a sanitizer from
+		 * calling it a leak */
+		CHECK_EQ(round, frees);
 		CHECK(btbb_survey_piconet(SURVEY_LAP_A) == NULL);
 		CHECK_EQ(0, HASH_COUNT(piconet_survey));
 		/* a failed piconet says so, and on stderr */
@@ -2229,6 +2282,7 @@ int main(void)
 	test_a_survey_piconet_is_read_without_being_removed();
 	test_a_lap_the_survey_has_not_heard_has_no_piconet();
 	test_a_piconet_taken_out_of_the_survey_is_gone_from_it();
+	test_the_last_result_takes_the_survey_table_with_it();
 	test_a_survey_that_cannot_allocate_drops_the_packet();
 
 	if (failures != 0) {
