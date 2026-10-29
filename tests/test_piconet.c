@@ -1264,6 +1264,33 @@ static btbb_piconet *following_a_recovered_clock(void)
 }
 
 /*
+ * A packet whitened at one clock and handed over at another, as a board hears
+ * a piconet: the two run a fixed number of slots apart until the follow
+ * starts.  A header only reads at the clock it was whitened for, so a fixture
+ * whose clocks agreed would not notice the board's being used instead.
+ */
+static btbb_packet *packet_read_slots_late(uint32_t lap, uint8_t channel,
+					   uint16_t header_data, uint8_t hec,
+					   int whiten_clock, int slots)
+{
+	char stream[400];
+	btbb_packet *pkt = NULL;
+
+	memset(stream, 0, sizeof(stream));
+	lay_out_header(stream, lap, header_data, hec, whiten_clock);
+	/* finding the access code is what gives the packet its LAP */
+	if (btbb_find_ac(stream, 1, lap, 0, &pkt) != 0)
+		return NULL;
+	if (pkt == NULL)
+		return NULL;
+	/* the clock goes in as the 312.5 us count, which is two ticks a slot */
+	btbb_packet_set_data(pkt, stream, 122, channel,
+			     (uint32_t) ((whiten_clock + slots) << 1));
+	btbb_packet_set_flag(pkt, BTBB_WHITENED, 1);
+	return pkt;
+}
+
+/*
  * The other way a search settles: packet after packet rules candidate clocks
  * out until one is left, with no CRC to settle it - an idle link carries NULL
  * and POLL packets, which have no payload and so no CRC at all.  The clock is
@@ -1277,6 +1304,8 @@ static void test_a_clock_settled_by_elimination_records_the_header(void)
 	static const uint32_t clocks[8] = {
 		3, 11, 20, 29, 38, 47, 55, 62
 	};
+	/* how far the board's clock runs ahead of the piconet's */
+	const int slots_late = 7;
 	const uint8_t uap = 0x5b;
 	btbb_piconet *pn = btbb_piconet_new();
 	int settled = 0, i;
@@ -1296,9 +1325,9 @@ static void test_a_clock_settled_by_elimination_records_the_header(void)
 		uint16_t header = (uint16_t) ((i % 7 + 1) |
 					      (((i & 1) ? PACKET_TYPE_POLL :
 						PACKET_TYPE_NULL) << 3));
-		btbb_packet *pkt = packet_of_at_clock(
+		btbb_packet *pkt = packet_read_slots_late(
 			TEST_LAP, (uint8_t) (10 + i), header,
-			hec_for(header, uap), 122, (int) clocks[i]);
+			hec_for(header, uap), (int) clocks[i], slots_late);
 
 		CHECK(pkt != NULL);
 		if (pkt == NULL)
