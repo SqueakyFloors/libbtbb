@@ -118,6 +118,18 @@ if(BUILD_TESTING)
     # A million hops, for the one case that walks a range of clock values.
     set_tests_properties(hop PROPERTIES TIMEOUT 60)
 
+    # What the library's hash tables do when they cannot be allocated.
+    # Internal again, so it compiles the two translation units it reaches
+    # into, and it replaces the allocator uthash makes its own allocations
+    # with.
+    add_executable(test_uthash_oom test_uthash_oom.c)
+    target_include_directories(test_uthash_oom PRIVATE ${PROJECT_SOURCE_DIR}/lib/src)
+    target_compile_options(test_uthash_oom PRIVATE -std=gnu90)
+    add_test(NAME uthash_oom COMMAND test_uthash_oom)
+    # Four child processes and a few hundred survey entries: under a tenth of
+    # a second. The limit is for a case where the library does not exit.
+    set_tests_properties(uthash_oom PROPERTIES TIMEOUT 30)
+
     add_test(NAME release_version COMMAND ${CMAKE_COMMAND}
              -DSET_RELEASE_CMAKE=${PROJECT_SOURCE_DIR}/cmake/set_release.cmake
              -P ${CMAKE_CURRENT_SOURCE_DIR}/test_release_version.cmake)
