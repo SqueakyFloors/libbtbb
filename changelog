@@ -447,6 +447,25 @@ libbtbb (2020-12-R1+fork5) unstable; urgency=low
     with the capture writer, and hop() with the hopping sequence, as the
     entry above describes, along with gen_hop_pattern() and
     get_hop_pattern().
+  * The library exports only the functions btbb.h declares. Thirty-two
+    helpers of its own - single_hop(), precalc, pcapng_create(), crc_check()
+    and the rest - were exported under plain names, where each reads as part
+    of the interface to anyone looking at the symbol table, and becomes a
+    name the library cannot change once a program has taken it up. One of
+    them, bt_compidtostr(), is also a function in BlueZ's libbluetooth, so a
+    program linking both libraries got whichever the link order chose. The
+    sources are now compiled with -fvisibility=hidden, and each declaration
+    in btbb.h carries a BTBB_API macro, which is what gives that one function
+    default visibility again; on Windows the same macro is the dllexport or
+    dllimport declaration a shared library needs. A shared libbtbb exports 96
+    names where it exported 128, and those 96 are exactly what btbb.h
+    declares. The soname stays libbtbb.so.1: nothing btbb.h declares has
+    gone, so a program built against the header goes on working. A program
+    that had linked one of the 32 by reading it out of the symbol table has
+    to be rebuilt against the header.
+    The abi_surface test now holds the exported set to the declared one, on
+    Linux and on macOS, and the tests that reach internal helpers compile the
+    sources they need rather than linking the library.
   * libbtbb.pc names the directories the library and the header are really
     in. A program linked with `pkg-config --libs libbtbb` was given a -L for
     a directory holding no library, and linked by luck where the compiler's

@@ -43,6 +43,15 @@ endif()
 
 set(CMAKE_MACOSX_RPATH 1)
 
+# Nothing is exported unless btbb.h says so. The sources are compiled with
+# -fvisibility=hidden, which leaves every function internal, and the BTBB_API
+# macro on each declaration in btbb.h gives that one function default
+# visibility again. So the library's helpers - hop(), precalc(),
+# pcapng_create() and the rest - are no longer names a program can link
+# against and come to depend on, and a program that calls a function btbb.h
+# declares is unaffected. The abi_surface test compares the two sets.
+set(CMAKE_C_VISIBILITY_PRESET hidden)
+
 if( BUILD_SHARED_LIB )
     # Shared library
     message(STATUS "Building shared library")
@@ -67,6 +76,14 @@ if( BUILD_STATIC_LIB )
     # Static library
     message(STATUS "Building static library")
     add_library(btbb-static STATIC ${c_sources})
+    # BTBB_STATIC is what tells btbb.h to ask for neither of the Windows
+    # __declspec declarations. Without it a public function here would be
+    # declared dllimport and defined in the same file, which MSVC refuses,
+    # and so would a program linking this library. PUBLIC, so anything in
+    # this build that links the target is compiled with it too; a program
+    # built elsewhere against the installed archive defines it itself, as
+    # the comment in btbb.h says.
+    target_compile_definitions(btbb-static PUBLIC BTBB_STATIC)
     set_target_properties(btbb-static PROPERTIES OUTPUT_NAME "btbb")
     set_target_properties(btbb-static PROPERTIES CLEAN_DIRECT_OUTPUT 1)
     install(TARGETS btbb-static

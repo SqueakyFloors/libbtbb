@@ -56,9 +56,11 @@ if(BUILD_TESTING)
     # One walk over all 65,536 identifiers.
     set_tests_properties(companies PROPERTIES TIMEOUT 30)
 
+    # The hop kernel is internal, so this one compiles the two translation
+    # units it reaches into.
     add_executable(test_spec_hop test_spec_hop.c)
     target_include_directories(test_spec_hop PRIVATE ${PROJECT_SOURCE_DIR}/lib/src)
-    target_link_libraries(test_spec_hop ${btbb_library})
+    target_compile_options(test_spec_hop PRIVATE -std=gnu90)
     add_test(NAME spec_hop COMMAND test_spec_hop)
     set_tests_properties(spec_hop PROPERTIES TIMEOUT 60)
 
@@ -88,9 +90,11 @@ if(BUILD_TESTING)
     # them twice over; a sanitizer build takes several times as long.
     set_tests_properties(clock_sweep PROPERTIES TIMEOUT 300)
 
+    # Likewise internal: it compiles the two translation units it reaches
+    # into.
     add_executable(test_hop test_hop.c)
     target_include_directories(test_hop PRIVATE ${PROJECT_SOURCE_DIR}/lib/src)
-    target_link_libraries(test_hop ${btbb_library})
+    target_compile_options(test_hop PRIVATE -std=gnu90)
     add_test(NAME hop COMMAND test_hop)
     # A million hops, for the one case that walks a range of clock values.
     set_tests_properties(hop PROPERTIES TIMEOUT 60)
@@ -101,6 +105,8 @@ if(BUILD_TESTING)
     set_tests_properties(release_version PROPERTIES TIMEOUT 30)
 
     # Capture file writers, checked by reading the bytes back out of a file.
+    # Two of its cases call the generic PCAPNG writer, which is internal, so
+    # it compiles that translation unit as well as linking the library.
     add_executable(test_capture test_capture.c)
     target_include_directories(test_capture PRIVATE ${PROJECT_SOURCE_DIR}/lib/src)
     target_link_libraries(test_capture ${btbb_library})

@@ -33,7 +33,11 @@
 #include <stdlib.h>
 #include <string.h>
 
-#include "bluetooth_piconet.h"
+/* single_hop() and the tables it reads are internal to the library, so this
+ * test compiles the two translation units they live in rather than linking
+ * the library, which exports only what btbb.h declares. */
+#include "bluetooth_packet.c"
+#include "bluetooth_piconet.c"
 
 static int failures = 0;
 

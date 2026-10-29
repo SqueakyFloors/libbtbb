@@ -35,8 +35,13 @@
 
 #include "btbb.h"
 #include "bluetooth_le_packet.h"
-#include "pcapng.h"
 #include "pcapng-bt.h"
+
+/* Two cases below call the generic PCAPNG writer, which is internal to the
+ * library, so this test compiles that translation unit as well as linking
+ * the library for the btbb_pcapng_ and lell_pcap_ functions btbb.h
+ * declares. */
+#include "pcapng.c"
 
 static int failures = 0;
 
