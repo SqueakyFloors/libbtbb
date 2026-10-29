@@ -4,19 +4,26 @@
 #         [-DSTRIP_UNDERSCORE=ON] [-DDYNAMIC_SYMBOLS=ON] -P test_abi_surface.cmake
 #
 # btbb.h is the only header the install puts in include/, so it is the whole
-# of what a program linking this library can call. Two things have to agree
-# with it. Every function it declares has to be in the library, or a program
-# that includes the header does not link. And no symbol under the library's
-# own btbb_ or lell_ prefix may be exported without being declared, because
-# such a symbol reads as part of the library's interface to anyone looking at
-# the exported names, and once a program calls it, withdrawing it breaks that
-# program.
+# of what a program linking this library can call, and the names the library
+# exports have to be exactly the functions it declares. Three things are
+# checked.
 #
-# The library also exports internal symbols under other names: no prefix at
-# all ("precalc", "DH", "fhs") or one of its own ("bt_compidtostr",
-# "pcapng_append_packet"). Hiding those is a change to the build and to the
-# tests that call them, so they are left out here rather than listed as
-# exceptions; issue #79 covers them.
+# Every function the header declares has to be exported, or a program that
+# includes the header does not link.
+#
+# Nothing else may be exported. An exported symbol reads as part of the
+# library's interface to anyone looking at the symbol table, and once a
+# program calls it, withdrawing it breaks that program: that is how internal
+# helpers named precalc, single_hop() or pcapng_create() come to be names the
+# library cannot change. Names beginning with an underscore are left out,
+# because those belong to the linker (_init, _end, __bss_start) rather than
+# to the library.
+#
+# And every declaration in the header has to carry the BTBB_API macro, which
+# is what gives the function default visibility in a library compiled with
+# -fvisibility=hidden. Without it the function is declared but hidden, and
+# the first check above is the one that would report it; naming the missing
+# macro says what to do about it.
 
 if(NOT DEFINED LIBRARY OR NOT DEFINED HEADER OR NOT DEFINED NM)
 	message(FATAL_ERROR "LIBRARY, HEADER and NM must be set")
@@ -41,7 +48,13 @@ file(STRINGS "${HEADER}" header_lines)
 foreach(line IN LISTS header_lines)
 	if(line MATCHES "^[A-Za-z_][A-Za-z0-9_ *]*[A-Za-z0-9_]\\(")
 		string(REGEX MATCH "([A-Za-z_][A-Za-z0-9_]*)\\(" unused "${line}")
-		list(APPEND declared "${CMAKE_MATCH_1}")
+		set(name "${CMAKE_MATCH_1}")
+		list(APPEND declared "${name}")
+		if(NOT line MATCHES "^BTBB_API ")
+			fail("${name}() is declared in btbb.h without BTBB_API, "
+			     "so the library does not export it: write "
+			     "BTBB_API in front of the declaration")
+		endif()
 	endif()
 endforeach()
 list(REMOVE_DUPLICATES declared)
@@ -101,6 +114,11 @@ foreach(line IN LISTS nm_lines)
 		if(STRIP_UNDERSCORE)
 			string(REGEX REPLACE "^_" "" name "${name}")
 		endif()
+		# What is left beginning with an underscore belongs to the
+		# linker, not to the library.
+		if(name MATCHES "^_")
+			continue()
+		endif()
 		list(APPEND exported "${name}")
 	endif()
 endforeach()
@@ -126,13 +144,11 @@ foreach(name IN LISTS declared)
 endforeach()
 
 foreach(name IN LISTS exported)
-	if(NOT name MATCHES "^(btbb|lell)_")
-		continue()
-	endif()
 	list(FIND declared "${name}" found)
 	if(found EQUAL -1)
-		fail("${name} is exported under the library's public prefix but "
-		     "btbb.h does not declare it: make it static, or declare it")
+		fail("${name} is exported but btbb.h does not declare it: "
+		     "make it static, or leave BTBB_API off it so the library "
+		     "keeps it to itself, or declare it in the header")
 	endif()
 endforeach()
 
@@ -140,5 +156,5 @@ if(failures GREATER 0)
 	message(FATAL_ERROR "${failures} case(s) failed")
 endif()
 message(STATUS
-	"all ${declared_count} declared functions are exported, and no other "
-	"btbb_ or lell_ symbol is")
+	"the library exports exactly the ${declared_count} functions btbb.h "
+	"declares")

@@ -43,6 +43,15 @@ endif()
 
 set(CMAKE_MACOSX_RPATH 1)
 
+# Nothing is exported unless btbb.h says so. The sources are compiled with
+# -fvisibility=hidden, which leaves every function internal, and the BTBB_API
+# macro on each declaration in btbb.h gives that one function default
+# visibility again. So the library's helpers - hop(), precalc(),
+# pcapng_create() and the rest - are no longer names a program can link
+# against and come to depend on, and a program that calls a function btbb.h
+# declares is unaffected. The abi_surface test compares the two sets.
+set(CMAKE_C_VISIBILITY_PRESET hidden)
+
 if( BUILD_SHARED_LIB )
     # Shared library
     message(STATUS "Building shared library")
