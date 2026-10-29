@@ -1,3 +1,117 @@
+# Testing libbtbb
+
+libbtbb was built by volunteers and has decoded Bluetooth traffic for Ubertooth
+and other projects for many years. It came with a few test programs, from 2012
+and 2015; that is typical for a volunteer project of this size and scope. This
+fork adds to that foundation with a test suite in the normal build.
+
+There are now 17 tests, driven in large part by the Bluetooth Core
+Specification's own published sample data, and they run on every push and pull
+request on Linux and macOS, plain and under AddressSanitizer and
+UndefinedBehaviorSanitizer. The vectors of the original test programs were
+kept and ported (see #9).
+
+The tests have helped find and fix 63 issues, many of them in packet types and
+capture paths that are rarely seen on the air.
+
+- [How to run them](#how-to-run-them)
+- [What each test covers](#what-each-test-covers)
+- [How big the suite is](#how-big-the-suite-is)
+- [What the tests found](#what-the-tests-found)
+- [Measured improvements](#measured-improvements)
+- [Still unverified on air](#still-unverified-on-air)
+- [Adding to this page](#adding-to-this-page)
+
+## How to run them
+
+```
+$ cmake -S . -B build -DENABLE_PYTHON=OFF -DCMAKE_C_FLAGS="-Wall -Wextra -Werror -Wno-error=implicit-fallthrough"
+$ cmake --build build -j8
+$ ctest --test-dir build
+```
+
+That leaves the python tools out, and with them the two tests that cover
+`btaptap`. Drop `-DENABLE_PYTHON=OFF` for those, or run the keystroke one on
+its own: `python3 python/pcaptools/tests/test_btaptap.py`.
+
+Under the sanitizers, which is what CI's fourth job does:
+
+```
+$ cmake -S . -B build-asan -DENABLE_PYTHON=OFF \
+        -DCMAKE_C_FLAGS="-Wall -Wextra -Werror -Wno-error=implicit-fallthrough -fsanitize=address,undefined -fno-sanitize-recover=all"
+$ cmake --build build-asan -j8
+$ ctest --test-dir build-asan
+```
+
+One test, `ctest -R piconet --output-on-failure`. Each test is also a plain
+program you can run on its own: `build/tests/test_piconet`. A failure prints
+`FAIL <file>:<line>: <condition>` and the program exits non-zero, so the line
+that failed names the vector.
+
+CI (`.github/workflows/ci.yml`) runs four jobs: Ubuntu 24.04 with gcc,
+macOS 15 with clang, both with `-Wall -Wextra -Werror` and an install into a
+temporary prefix, Ubuntu 24.04 with gcc building the static library on its own,
+and Ubuntu 24.04 with clang under AddressSanitizer and
+UndefinedBehaviorSanitizer with `-fno-sanitize-recover=all`.
+
+## What each test covers
+
+Several tests reach functions that are internal to the library, so they
+`#include` the translation unit under test rather than linking the library.
+That is the only way to pin a `static` function without widening the library's
+linkage, and `tests/CMakeLists.txt` says which tests do it.
+
+| Test | Covers | Where the vectors come from |
+|---|---|---|
+| `spec_bredr` | BR/EDR baseband: access codes and sync words, the header HEC, the payload CRC, both FEC codes, the whitening sequence, complete DH1 and DM1 packets, a payload at the longest length every ACL, SCO, eSCO, DV, AUX1 and FHS type allows, truncated captures, uncorrectable FEC blocks, and UAP and CLK6 recovery | Bluetooth Core Specification v5.4, Vol 2, Part G "Sample Data", Sections 3 to 9, with the definitions of Vol 2, Part B. Where the specification publishes no vector for something the library still has to get right, the test builds the packet with its own `spec_hec()`, `spec_whiten()` and `spec_fec23()`, each pinned by published sample data before it is used, so a built packet is the specification's answer and not libbtbb's |
+| `spec_hop` | Connection-state hop selection: the basic kernel, the AFH re-mapping function, the AFH same channel mechanism, and the Nmin fallback | Vol 2, Part G, Section 2: three addresses, the basic sequence and four channel maps each, 512 clock values per table. 7680 vectors, transcribed from the published tables |
+| `spec_le` | Low Energy link layer: physical channel indices, advertising and data PDU headers, every length the one-octet field can claim up to 255, including each of the four a 260-byte buffer could not hold, and a 255-octet PDU on a primary advertising channel and on two secondary ones, and the access address rules | Vol 6, Part B, Sections 1.4.1, 2.1.2, 2.3 and 2.4. The CRC-24, the per-channel whitening and the channel selection algorithms are not in this library, so they have no vectors here |
+| `hop` | `single_hop()` with and without AFH, and `get_hop_pattern()`'s streams and cache | The Ubertooth project's `firmware/tests/test_bluetooth_hop.c`, an independent transcription of Vol 2, Part B, Section 2.6 computed outside either code base. Using them here pins the host's predictions and the channels the board tunes to against one source of truth |
+| `piconet` | Clock recovery (hop reversal): the CLK1-27 candidate list, winnowing it against observed hops, the AFH detector, the confirmation rule, and giving up a clock whose headers keep failing without choosing it again | The hops are produced by `single_hop()`, which `hop` and `spec_hop` pin against the specification, so a "truth" piconet standing in for the device under observation hops the way a real one does |
+| `clock_sweep` | What clock recovery does over a range of true-clock values: how often it locks the piconet's clock, a wrong one or none at all; what following each lock does with it; how long a clock whose headers all fail is kept, and whether the search that follows ends up back on it; and how often a header fails its HEC while the clock and the UAP are right | The hops come from `single_hop()`, as `piconet`'s do. The packets are built in the test and found by the library's own access code search, with bit errors applied symbol by symbol at a given rate |
+| `internal` | The FEC 2/3 code, the sync word syndrome tables, and the packet header decode through both the pieces and `btbb_decode_header()` | The 20 FEC 2/3 blocks and two syndrome values from upstream's `test_fec23.c` (2012) and `test_syndromes.c` (2012), plus the table of 20 UAP, header and HEC rows that was the only real content of upstream's `test_header.c` (2015), whose program never compiled |
+| `esco` | The length an eSCO payload is decoded at, and the HV3 voice packet that shares a type code with an EV3: a payload three lengths agree with, a payload whose own CRC ends in a zero byte so that the length one short agrees too, captures of noise and of zeros past the packet, a length the caller gives, and a voice payload with no CRC at all | Payloads built in the test, each carrying the CRC the library's own `crcgen()` computes - which `spec_bredr` pins against the specification's sample data first - so the lengths that agree are known before the decoder is asked |
+| `capture` | What reaches a capture file: block and option layout, record fields, the four snapshot lengths, header block padding, the option-space limit, and a write to a closed descriptor and to a file at `RLIMIT_FSIZE` | The pcapng specification and the published `LINKTYPE_BLUETOOTH_BREDR_BB` and `LINKTYPE_BLUETOOTH_LE_LL_WITH_PHDR` layouts. Every record is read back out of the file by a small block and option walker rather than compared with the struct that wrote it, so a field at the wrong offset shows up |
+| `capture_internal` | The two record assemblers called directly, so the test owns the record's memory and can set the padding to a known pattern before the record is built | The same layouts; this is the half `capture` cannot see, because a file cannot say what a padding byte held beforehand |
+| `le_long` | A PDU's length read from all eight bits of the field, payload lengths 0, 1, 27, 31, 32, 55, 56, 100 and 251 to 255 preserved with their last byte intact, a header claiming 251 bytes in a 50-byte capture, and a 251-octet data PDU and a 255-octet advertising PDU on a primary and on a secondary advertising channel, each written to PCAP and PCAPNG and read back | Vol 6, Part B, Section 2.3 and 2.4 lengths and the two published record layouts |
+| `le_print` | What `lell_print()` writes and on which stream: a `CONNECT_REQ`, advertising data carrying 16-bit service UUIDs, the four value lines that carry their own indentation, and seven malformed packets, one per diagnostic message | Hand-built packets, each case comparing the whole of stderr against the expected text and checking stdout carries none of it |
+| `smoke` | The public API end to end: one known packet of each kind decoded, `btbb_gen_syncword()` and `btbb_find_ac()` with and without a bit error, and every frequency from 2400 to 2480 MHz decoded to a channel index and a PCAP `channel_k` | Sync words computed independently from the (64,30) block code in `python/utils/encode_sw.py`, not from the library's own tables |
+| `release_version` | That `cmake/set_release.cmake` produces the version the build claims | The script itself |
+| `btaptap` | The keystroke decoder end to end, run as a user runs it: keystrokes out of baseband and HCI captures, modifier keys, a held key, `-c`, `-h` beside a capture, a frame cut short, and every way a run can fail, each one an `error:` line on stderr and a non-zero exit. Also the `pcapdump` module the README offers on its own, which writes a capture file and reads it back | The Ellisys export recorded in `python/pcaptools/tests`, 864 keyboard reports of someone typing, and captures the test builds itself from the HID boot-mode report layout |
+| `library_config` | The library configurations the build offers: that one building neither library is refused while configuring, and that a static-only build builds a test program | Configures, and builds, a tree of its own, because a build is in one configuration only |
+
+## How big the suite is
+
+Counted on 2026-10-28, at `374a48c` on `master`, macOS 15 arm64 with Apple
+clang, with the `esco` test counted the same way when it was added:
+
+| | Count | How it was counted |
+|---|---|---|
+| Tests in the build | 17 | `ctest` case count; 13 C programs and four script tests, two of them only with the Python tools enabled |
+| Assertion sites | 870 | 856 `CHECK`, `CHECK_EQ`, `CHECK_EQUALS`, `CHECK_CONTAINS`, `CHECK_LACKS` and `XFAIL` call sites across the eleven programs that use those macros, plus the 14 explicit failure conditions in `test_le_long.c`, which checks with plain `if` |
+| Assertions executed per run | 176,054 | a scratch copy of the tree with a counter added to each `CHECK` macro body and reported from a destructor, then every test binary run once and the counts summed. The macros do not nest, so nothing is double counted. `test_le_long` is not in this figure |
+| Published spec vectors | 7680 hop frequencies | 15 tables of `TABLE_ENTRIES` (512) in `tests/test_spec_hop.c`: three addresses, the basic sequence and four channel maps each |
+
+Where the assertions are:
+
+| Test | Assertions executed |
+|---|---|
+| `piconet` | 131,575 |
+| `spec_bredr` | 31,707 |
+| `spec_hop` | 7,199 |
+| `capture` | 3,474 |
+| `spec_le` | 984 |
+| `internal` | 457 |
+| `hop` | 221 |
+| `smoke` | 161 |
+| `esco` | 116 |
+| `le_print` | 82 |
+| `capture_internal` | 78 |
+
+The large counts are loops over vectors: `piconet` walks candidate clock lists,
+`spec_bredr` walks every truncation of several packet types, `spec_hop` walks
+the published tables.
+
 ## What the tests found
 
 One row per defect a test exposed or holds down. "User impact" is what someone
