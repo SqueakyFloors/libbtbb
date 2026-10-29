@@ -28,7 +28,9 @@ the access code, HEC, CRC, FEC and whitening vectors and the complete DH1 and
 DM1 packets of Sections 3 to 9, and the Low Energy link layer rules of Vol 6,
 Part B. CI builds and runs them on Linux with gcc and macOS with clang under
 `-Wall -Wextra -Werror`, and again under AddressSanitizer and
-UndefinedBehaviorSanitizer.
+UndefinedBehaviorSanitizer. Malformed radio packets are this library's normal
+input, so the decoders and the capture writers are fuzzed as well: five
+libFuzzer targets, which CI runs for a minute each.
 
 The tests have helped find and fix 75 issues, many in packet types and capture
 paths that are rarely seen on the air. [TESTING.md](TESTING.md) describes what

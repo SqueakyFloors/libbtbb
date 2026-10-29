@@ -1,4 +1,13 @@
 libbtbb (2020-12-R1+fork5) unstable; urgency=low
+  * A capture file in pcapng format is created in a few milliseconds rather
+    than a few hundred. The file reserves a page for its section header block
+    and another for its interface description, and it filled both by writing
+    one zero byte per system call: about 65,000 of them for the two pages each
+    block is given, which took 300 ms on an Apple laptop where the same file
+    now takes 7 ms. The bytes written are unchanged.
+    one zero byte per system call: about 65,000 of them on a host with 16 kB
+    pages, which took 300 ms on an Apple laptop where the same file now takes
+    7 ms. The bytes written are unchanged.
   * The library is installed to the directory the system keeps libraries in.
     It went to lib under the prefix unless a build command asked for
     somewhere else with LIB_SUFFIX, so a 64-bit build on most Linux systems

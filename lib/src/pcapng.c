@@ -76,6 +76,39 @@ static void write_padding_options( void * block,
 	}
 }
 
+/* Write 'count' zero bytes, which is how a new file is grown to the room its
+   first two blocks are given: a whole page for each, so this is thousands of
+   bytes. They go out a buffer at a time rather than a byte at a time, which
+   is 4096 times fewer system calls for the same file.
+
+   Returns the number of bytes written, or -1 for a write that failed, which
+   is what the caller treats as an error. */
+#define ZERO_CHUNK 4096
+
+static ssize_t write_zeroes( int fd, size_t count )
+{
+	static const char ZEROES[ZERO_CHUNK];
+	size_t written = 0;
+
+	while (written < count) {
+		size_t chunk = count - written;
+		ssize_t result;
+
+		if (chunk > sizeof( ZEROES )) {
+			chunk = sizeof( ZEROES );
+		}
+		result = write( fd, ZEROES, chunk );
+		/* A write that stopped short carries on from where it got to,
+		   as one interrupted by a signal does; one that wrote nothing
+		   at all would never finish, so it is a failure. */
+		if (result <= 0) {
+			return -1;
+		}
+		written += (size_t) result;
+	}
+	return (ssize_t) written;
+}
+
 PCAPNG_RESULT pcapng_create( PCAPNG_HANDLE * handle,
 			     const char * filename,
 			     const option_header * section_options,
@@ -135,9 +168,8 @@ PCAPNG_RESULT pcapng_create( PCAPNG_HANDLE * handle,
 			size_t paddedsz = 4*((section_options->option_length+3)/4);
 			zeroes = paddedsz - section_options->option_length;
 			result = write( handle->fd, section_options, 4+section_options->option_length );
-			while ((zeroes > 0) && (result != -1)) {
-				result = write( handle->fd, "\0", 1 );
-				zeroes--;
+			if (result != -1) {
+				result = write_zeroes( handle->fd, zeroes );
 			}
 			section_options = (const option_header *) &((uint8_t *)section_options)[4+paddedsz];
 			handle->section_header_size += (4+paddedsz);
@@ -154,9 +186,8 @@ PCAPNG_RESULT pcapng_create( PCAPNG_HANDLE * handle,
 					 section_options_space + PGSZ - 1)/PGSZ) -
 			handle->section_header_size;
 		handle->section_header_size += zeroes;
-		while ((zeroes > 0) && (result != -1)) {
-			result = write( handle->fd, "\0", 1 );
-			zeroes--;
+		if (result != -1) {
+			result = write_zeroes( handle->fd, zeroes );
 		}
 
 		/* mmap the section header */
@@ -192,9 +223,8 @@ PCAPNG_RESULT pcapng_create( PCAPNG_HANDLE * handle,
 				size_t paddedsz = 4*((interface_options->option_length+3)/4);
 				zeroes = paddedsz - interface_options->option_length;
 				result = write( handle->fd, interface_options, 4+interface_options->option_length );
-				while ((zeroes > 0) && (result != -1)) {
-					result = write( handle->fd, "\0", 1 );
-					zeroes--;
+				if (result != -1) {
+					result = write_zeroes( handle->fd, zeroes );
 				}
 				interface_options = (const option_header *) &((uint8_t *)interface_options)[4+paddedsz];
 				handle->interface_description_size += (4+paddedsz);
@@ -213,9 +243,8 @@ PCAPNG_RESULT pcapng_create( PCAPNG_HANDLE * handle,
 						 interface_options_space + PGSZ - 1)/PGSZ) -
 				handle->interface_description_size;
 			handle->interface_description_size += zeroes;
-			while ((zeroes > 0) && (result != -1)) {
-				result = write( handle->fd, "\0", 1 );
-				zeroes--;
+			if (result != -1) {
+				result = write_zeroes( handle->fd, zeroes );
 			}
 
 			/* mmap the interface description */

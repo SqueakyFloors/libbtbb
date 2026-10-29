@@ -5,16 +5,19 @@ and other projects for many years. It came with a few test programs, from 2012
 and 2015; that is typical for a volunteer project of this size and scope. This
 fork adds to that foundation with a test suite in the normal build.
 
-There are now 21 tests, driven in large part by the Bluetooth Core
+There are now 21 tests, and five more where the compiler can build a fuzz
+target, driven in large part by the Bluetooth Core
 Specification's own published sample data, and they run on every push and pull
 request on Linux and macOS, plain and under AddressSanitizer and
 UndefinedBehaviorSanitizer. The vectors of the original test programs were
-kept and ported (see #9).
+kept and ported (see #9). Malformed radio packets are this library's normal
+input, so the decoders and the capture writers are fuzzed as well.
 
 The tests have helped find and fix 75 issues, many of them in packet types and
 capture paths that are rarely seen on the air.
 
 - [How to run them](#how-to-run-them)
+- [Fuzzing](#fuzzing)
 - [What each test covers](#what-each-test-covers)
 - [How big the suite is](#how-big-the-suite-is)
 - [What the tests found](#what-the-tests-found)
@@ -48,11 +51,69 @@ program you can run on its own: `build/tests/test_piconet`. A failure prints
 `FAIL <file>:<line>: <condition>` and the program exits non-zero, so the line
 that failed names the vector.
 
-CI (`.github/workflows/ci.yml`) runs four jobs: Ubuntu 24.04 with gcc,
+CI (`.github/workflows/ci.yml`) runs five jobs: Ubuntu 24.04 with gcc,
 macOS 15 with clang, both with `-Wall -Wextra -Werror` and an install into a
 temporary prefix, Ubuntu 24.04 with gcc building the static library on its own,
-and Ubuntu 24.04 with clang under AddressSanitizer and
-UndefinedBehaviorSanitizer with `-fno-sanitize-recover=all`.
+Ubuntu 24.04 with clang under AddressSanitizer and
+UndefinedBehaviorSanitizer with `-fno-sanitize-recover=all`, and Ubuntu 24.04
+with clang running each fuzz target for a minute.
+
+## Fuzzing
+
+The decoders take whatever the radio gave them, so five libFuzzer targets in
+`tests/fuzz/` feed them bytes: the access code search, the BR/EDR header and
+payload decoders with the packet dump, the LE decoder with its dump, the PCAP
+writers and the PCAPNG writers. The writer targets decode a frame first and
+write the packet that came out, which is what a capture tool does.
+
+Each target is built only where the compiler can build a libFuzzer program,
+so a gcc build, or one with the clang Apple ships, is unaffected and simply
+has no fuzz targets. Under a clang that can:
+
+```
+$ CC=clang cmake -S . -B build-fuzz -DENABLE_PYTHON=OFF -DCMAKE_BUILD_TYPE=Debug \
+        -DCMAKE_C_FLAGS="-g -fno-omit-frame-pointer -fsanitize=address,undefined -fno-sanitize-recover=all"
+$ cmake --build build-fuzz -j8
+$ ./build-fuzz/tests/fuzz/fuzz_le -max_total_time=600 -max_len=512 \
+        -close_fd_mask=1 tests/fuzz/corpus/le
+```
+
+`-close_fd_mask=1` closes the dumps, which are the point of those functions
+and not of a fuzzing run, and leaves standard error open so that a
+sanitizer's report of a real failure is in the log. Add 2 to it, closing the
+decoders' complaints about bad packets as well, only together with the
+sanitizers' `log_path`, which then holds the report:
+
+```
+$ ASAN_OPTIONS=log_path=/tmp/fuzz-asan UBSAN_OPTIONS=print_stacktrace=1:log_path=/tmp/fuzz-ubsan \
+        ./build-fuzz/tests/fuzz/fuzz_le -max_total_time=600 -close_fd_mask=3 tests/fuzz/corpus/le
+```
+
+A run that finds something writes the input it stopped on to a file, which the
+target replays if it is given that file instead of a directory.
+
+The first long run, 50 minutes for each of the five targets on 2026-10-29
+(4 hours 10 minutes in all, from the seed corpus, Debug with
+AddressSanitizer and UndefinedBehaviorSanitizer and
+`-fno-sanitize-recover=all`, macOS 15 arm64), executed 87.3 million inputs:
+19.3 million through the access code search, 12.3 million through the BR/EDR
+decoders, 49.8 million through the LE decoder, 3.3 million through the PCAP
+writers and 2.6 million through the PCAPNG writers. Nothing crashed, and
+neither sanitizer reported anything.
+
+Before that run, `fuzz_pcapng` stopped within seconds on the unterminated
+interface-description option list of #23, independently of the audit that
+found it, and PR #71 fixed it while this was being written. The input it
+stopped on is a seed now - `corpus/pcapng/long_description`, a 255-character
+description - so that it stays fixed.
+
+The seed corpus in `tests/fuzz/corpus/` is the sample data the rest of the
+suite uses - the specification's DH1 packet, the frames of the LE print test,
+and a data channel PDU claiming all 255 octets - each with the parameter bytes
+the target reads in front of it, which the comment at the top of each target
+lists. `ctest` replays the corpus through every target, so the targets keep
+working rather than merely building, and an input that once failed stays
+covered.
 
 ## What each test covers
 
@@ -82,6 +143,7 @@ which tests do it.
 | `smoke` | The public API end to end: one known packet of each kind decoded, `btbb_gen_syncword()` and `btbb_find_ac()` with and without a bit error, and every frequency from 2400 to 2480 MHz decoded to a channel index and a PCAP `channel_k` | Sync words computed independently from the (64,30) block code in `python/utils/encode_sw.py`, not from the library's own tables |
 | `release_version` | That `cmake/set_release.cmake` produces the version the build claims | The script itself |
 | `btaptap` | The keystroke decoder end to end, run as a user runs it: keystrokes out of baseband and HCI captures, modifier keys, a held key, `-c`, `-h` beside a capture, a frame cut short, and every way a run can fail, each one an `error:` line on stderr and a non-zero exit. Also the `pcapdump` module the README offers on its own, which writes a capture file and reads it back | The Ellisys export recorded in `python/pcaptools/tests`, 864 keyboard reports of someone typing, and captures the test builds itself from the HID boot-mode report layout |
+| `fuzz_find_ac_corpus`, `fuzz_bredr_corpus`, `fuzz_le_corpus`, `fuzz_pcap_corpus`, `fuzz_pcapng_corpus` | The seed corpus of each fuzz target replayed through it: the access code search, the BR/EDR header and payload decoders, the LE decoder, and the PCAP and PCAPNG writers fed packets that were decoded from the same bytes. Present only where the compiler builds a libFuzzer program | The suite's own sample packets, with the parameter bytes each target reads in front of them, plus any input a run of that target once failed on. [Fuzzing](#fuzzing) says how to run a target for longer |
 | `library_config` | The library configurations and install directories the build offers: that one building neither library is refused while configuring, that a static-only build builds a test program, that the library, the header and `libbtbb.pc` land in the directories the build was given - `CMAKE_INSTALL_LIBDIR`, `CMAKE_INSTALL_INCLUDEDIR`, `LIB_SUFFIX`, each empty, a path, an absolute path, and the precedence between them - that the two directories `libbtbb.pc` names hold the library and the header, including after the install is staged into a second prefix, and that a directory leading out of the prefix is refused | Configures, builds and installs trees of its own, because a build is in one configuration and one prefix only |
 | `uthash_oom` | What the library's two hash tables do when they cannot be allocated: each of the three allocations uthash makes for the piconet survey's table - the table, its bucket array, and a larger bucket array once a bucket chain has grown - and the table `btbb_init()` builds, with the message, the stream it goes on and the exit status checked, and the survey keeping its piconet while the allocator serves every request | An allocator of the test's own under `uthash_malloc`, so that only the tables' own allocations fail and the entries the library allocates and checks are left working. Each failure runs in a child process, since the library is expected to exit |
 | `abi_surface` | What the shared library exports, against `btbb.h`: that every function the header declares is in the library, so a program including it links; that nothing else is exported, so no helper of the library's own reads as part of the interface; and that every declaration carries the `BTBB_API` macro, which is what gives a function default visibility in a library compiled with `-fvisibility=hidden` | The header and the built library, read with `nm`, where the build found one. Names beginning with an underscore are the linker's own and are left out |
@@ -95,7 +157,7 @@ count:
 
 | | Count | How it was counted |
 |---|---|---|
-| Tests in the build | 21 | `ctest` case count; 16 C programs and five script tests, two of them only with the Python tools enabled and one only in a shared build where `nm` is found |
+| Tests in the build | 21, and 26 with the fuzz targets | `ctest` case count; 16 C programs and five script tests, two of them only with the Python tools enabled and one only in a shared build where `nm` is found, plus the five corpus replays a libFuzzer-capable compiler adds |
 | Assertion sites | 870 | 856 `CHECK`, `CHECK_EQ`, `CHECK_EQUALS`, `CHECK_CONTAINS`, `CHECK_LACKS` and `XFAIL` call sites across the eleven programs that use those macros, plus the 14 explicit failure conditions in `test_le_long.c`, which checks with plain `if` |
 | Assertions executed per run | 176,054 | a scratch copy of the tree with a counter added to each `CHECK` macro body and reported from a destructor, then every test binary run once and the counts summed. The macros do not nest, so nothing is double counted. `test_le_long` is not in this figure |
 | Published spec vectors | 7680 hop frequencies | 15 tables of `TABLE_ENTRIES` (512) in `tests/test_spec_hop.c`: three addresses, the basic sequence and four channel maps each |
@@ -211,6 +273,7 @@ Rows are ordered by severity, most severe first.
 | 🟠 | Python and build | `libbtbb.pc` took its `libdir` and `includedir` from GNUInstallDirs, while the install writes the library to `lib${LIB_SUFFIX}` and the header to `include`, and its prefix was the one the build was configured with rather than where the files ended up | `pkg-config --libs libbtbb` gave a `-L` for a directory holding no library - `/usr/lib/x86_64-linux-gnu` where the prefix is `/usr` on a multiarch distribution, `lib64` on some others, and the configure-time prefix for any install staged with `cmake --install --prefix`, which is what this repository's CI does - so a program linked by luck where the compiler's own search path covered for it and not at all where it did not | `library_config`, an install whose libdir and includedir are set to names the install does not use, and the same build installed into a second prefix with the first one taken away | #80 | #73 |
 | 🟠 | Python and build | The install wrote the library to `lib${LIB_SUFFIX}` under the prefix and the header to `include`, so the only way to install into the directory a system keeps its libraries in was to pass `-DLIB_SUFFIX=<suffix>` for it; `CMAKE_INSTALL_LIBDIR` and `CMAKE_INSTALL_INCLUDEDIR`, the standard settings, were read for `libbtbb.pc` and then not used | a plain build on a 64-bit Fedora, RHEL or SUSE put the library in `lib` where the rest of the machine looks in `lib64`, and one into `/usr` on a multiarch Debian or Ubuntu put it in `/usr/lib` rather than `/usr/lib/x86_64-linux-gnu`, so a program linked it where the compiler's own search path covered for it and not at all where it did not, and a packager's `-DCMAKE_INSTALL_LIBDIR=` was ignored. Installed with it, `install.sh` in the Ubertooth fork then built tools that would not start | `library_config`, eight installs into prefixes of their own: the directories left to the system, the two settings given names of their own, `LIB_SUFFIX` carrying a path, `LIB_SUFFIX` set alongside a `CMAKE_INSTALL_LIBDIR` asking for somewhere else, an empty `LIB_SUFFIX` beside the same, both settings empty so that the prefix itself is asked for, a libdir with a `.` in it beside an absolute includedir, and a libdir given as an absolute path. Each checks where the library, the header and `libbtbb.pc` landed and what `libbtbb.pc` says, and two of them install a second time into another prefix. Two more cases need no build: a suffix CMake reads as false is still a suffix, and a directory leading out of the prefix is refused | #94 | #88 |
 | 🟠 | Python and build | The library exported 32 helpers of its own that no installed header declares - `single_hop()`, `precalc`, `pcapng_create()`, `crc_check()` and the rest. One of them, `bt_compidtostr()`, is also a function in BlueZ's `libbluetooth`, declared there taking an `int` where libbtbb defines it taking a `uint16_t` | a program linking both libraries - which `ubertooth-scan` and `ubertooth-follow` do - called whichever the link order chose, so the manufacturer name it printed came from either library's table without saying which. The other 31 each read as part of the interface to anyone looking at the symbol table, and become names the library cannot change once a program has taken them up | `abi_surface`, the exported names against the 96 functions `btbb.h` declares, on Linux and on macOS | #92 | #79 |
+| 🟠 | Capture files | A new pcapng file was grown to the room its first two blocks are given by writing a single zero byte per `write()` call: about 65,000 system calls to create one file on a host with 16 kB pages | a tool starting a capture stalled before it recorded anything: 300 ms a file on an Apple laptop, where the same file now takes 7 ms | `capture` and `capture_internal`, which read every block and option back out of the file, pin the bytes; `fuzz_pcapng`, which managed 3 runs a second before the fix and about 1,300 after, is what exposed the cost | #93 | #74 |
 | 🟡 | Decoders | `btbb_find_ac()`'s documented bound said it reads `search_length + 72` symbols where it reads `search_length + 63` | a caller sizing its buffer from the header over-allocated, and could not tell what was really required | `spec_bredr`, several offsets with the match at the last of them | #28 | #32 |
 | 🟡 | Hop and clock | `fill_hop_pattern()` and `get_hop_pattern()` wrote "Calculating complete hopping sequence.", "Hopping sequence calculated." and "Found hopping sequence in cache." to stdout | a tool streaming its capture to stdout had them mixed into the stream, where a script cannot tell them from capture data | `hop`, both streams captured, on a cache miss and a cache hit | #30 | #14 |
 | 🟡 | Output streams | `lell_print()` complained about malformed packets with `printf` | the six diagnostic messages landed on stdout in the middle of the packet dump, so a tool writing its capture to stdout had them mixed in and a script could not tell them from packet fields | `le_print`, seven malformed packets, one per message, each comparing the whole of stderr and checking stdout carries none of it | #8 | #4 |
@@ -253,6 +316,8 @@ issue that recorded them, with the source named.
 | Peak resident memory of `test_hop`, which reached the sequence twice | 270,336,000 bytes (258 MiB) | 2,113,536 bytes (2.0 MiB) | **re-measured** |
 | `test_hop` wall time | 5.76 s | 0.05 s | **re-measured** |
 | Whole `ctest` suite | 16.9 s and 18.9 s, 12/12 | 7.5 s and 6.5 s, 12/12 | **re-measured**, two runs each |
+| Creating and closing one pcapng capture file | 299.3 ms and 301.2 ms | 6.6 ms and 6.3 ms | **measured for PR #93**, a program that creates and closes 100 files, timed with `CLOCK_MONOTONIC`, Apple clang `-O2`, two runs each, on a host with 16 kB pages. The 65,000 one-byte writes a file took are now 16 writes of 4 kB |
+| `fuzz_pcapng` runs a second, over the same corpus | 3 | about 1,300 | **measured for PR #93**, the same 50 inputs replayed: 31 s before, under 1 s after, of which 13.7 s and 0.09 s were system time |
 | Largest single allocation `btbb_piconet_set_afh_map()` requests | 134,217,728 bytes | 0 | `tests/test_piconet.c`, which replaces the library's `malloc` and asserts the call allocates nothing at all |
 
 The 128 MB is `SEQUENCE_LENGTH`, 2^27 bytes: one entry per CLK1-27 value. It
