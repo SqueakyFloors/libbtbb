@@ -110,26 +110,35 @@ static void test_the_whole_identifier_range(void)
 {
 	unsigned compid;
 	unsigned named = 0;
+	/* One message per kind of anomaly, so a table that is wrong for a
+	 * whole range does not bury the count check below in output. */
+	int said_empty = 0;
+	int said_above = 0;
 
 	for (compid = 0; compid <= 0xFFFF; ++compid) {
 		const char *name = bt_compidtostr((uint16_t)compid);
 
 		if (name == NULL || name[0] == '\0') {
-			printf("FAIL %s:%d: 0x%04X has no name at all\n",
-			       __FILE__, __LINE__, compid);
-			++failures;
-			return;
+			if (!said_empty) {
+				printf("FAIL %s:%d: 0x%04X has no name at "
+				       "all\n",
+				       __FILE__, __LINE__, compid);
+				++failures;
+				said_empty = 1;
+			}
+			continue;
 		}
-		if (compid <= HIGHEST_ASSIGNED &&
-		    strcmp(name, "not assigned") != 0)
+		if (compid > HIGHEST_ASSIGNED && compid != 0xFFFF) {
+			if (strcmp(name, "not assigned") != 0 && !said_above) {
+				printf("FAIL %s:%d: 0x%04X is above the "
+				       "assigned range but names \"%s\"\n",
+				       __FILE__, __LINE__, compid, name);
+				++failures;
+				said_above = 1;
+			}
+		} else if (compid <= HIGHEST_ASSIGNED &&
+			   strcmp(name, "not assigned") != 0) {
 			++named;
-		if (compid > HIGHEST_ASSIGNED && compid != 0xFFFF &&
-		    strcmp(name, "not assigned") != 0) {
-			printf("FAIL %s:%d: 0x%04X is above the assigned range "
-			       "but names \"%s\"\n",
-			       __FILE__, __LINE__, compid, name);
-			++failures;
-			return;
 		}
 	}
 

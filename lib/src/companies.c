@@ -7,11 +7,12 @@
  *  Copyright (C) 2002-2003  Maxim Krasnyansky <maxk@qualcomm.com>
  *  Copyright (C) 2002-2010  Marcel Holtmann <marcel@holtmann.org>
  *
- *  The table below was regenerated on 2026-10-29 from company_identifiers.yaml
- *  in the Bluetooth SIG's published Assigned Numbers,
- *  https://bitbucket.org/bluetooth-SIG/public . The 73 identifiers the earlier
- *  table named that the SIG no longer lists are kept, so a capture of an older
- *  device still decodes by name.
+ *  The table below was regenerated on 2026-10-29 UTC from
+ *  company_identifiers.yaml in the Bluetooth SIG's published Assigned Numbers,
+ *  https://bitbucket.org/bluetooth-SIG/public , by
+ *  python/utils/gen_companies.py . The 73 identifiers the earlier table named
+ *  that the SIG no longer lists are kept, so a capture of an older device still
+ *  decodes by name.
  *
  *
  *  This program is free software; you can redistribute it and/or modify
