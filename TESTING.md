@@ -8,10 +8,9 @@ vectors.
 
 Rows are ordered by severity, most severe first.
 
-- 🔴 memory safety (a read or write past a buffer, use of uninitialized data,
-  a crash, an unbounded allocation), or wrong data delivered silently.
-- 🟠 a feature that did not work, a visible failure, or a large performance cost.
-- 🟡 cosmetic, wording, which stream a message went to, or a latent defect.
+🔴 memory safety (a read or write past a buffer, use of uninitialized data, a crash, an unbounded allocation), or wrong data delivered silently.  
+🟠 a feature that did not work, a visible failure, or a large performance cost.  
+🟡 cosmetic, wording, which stream a message went to, or a latent defect.
 
 | Sev | Area | What the test found | User impact | Pinned by | PR | Issue |
 |---|---|---|---|---|---|---|
