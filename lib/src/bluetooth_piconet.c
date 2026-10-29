@@ -915,6 +915,16 @@ int btbb_uap_from_header(btbb_packet *pkt, btbb_piconet *pn)
 	uint8_t UAP;
 	int count, crc_chk, first_clock = 0;
 
+	/* The trials below put their own address part and type on the packet,
+	 * because that is how crc_check() knows which payload decoder to run.
+	 * A search that does not settle has found out nothing about this
+	 * packet, so what the caller set is put back on the way out: nothing
+	 * else would say which of up to 64 abandoned guesses the two came
+	 * from, and btbb_packet_get_uap() and btbb_packet_get_type() are
+	 * public. */
+	const uint8_t caller_uap = pkt->UAP;
+	const uint8_t caller_type = pkt->packet_type;
+
 	int remaining = 0;
 	/* The packet's clock as CLK1-27, the 625 us slot count. Its name on
 	 * the packet is clkn, but btbb_packet_set_data() shifts the 312.5 us
@@ -1049,6 +1059,8 @@ int btbb_uap_from_header(btbb_packet *pkt, btbb_piconet *pn)
 		reset(pn);
 	}
 
+	pkt->UAP = caller_uap;
+	pkt->packet_type = caller_type;
 	return 0;
 }
 

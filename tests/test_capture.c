@@ -929,6 +929,16 @@ static void test_bredr_uap_search(void)
 		if (found) {
 			CHECK(btbb_packet_get_lt_addr(pkt) == 3);
 			CHECK(btbb_packet_get_type(pkt) == 4);	/* DH1 */
+			CHECK(btbb_packet_get_uap(pkt) == SPEC_DH1_UAP);
+		}
+		else {
+			/* and none of the up to 64 clocks it tried and gave
+			   up leaves its address part or its type behind: the
+			   trials need both on the packet to run, and a search
+			   that settles nothing puts back what the caller set,
+			   which here is nothing */
+			CHECK(btbb_packet_get_uap(pkt) == 0);
+			CHECK(btbb_packet_get_type(pkt) == 0);
 		}
 
 		CHECK(btbb_pcapng_create_file(filename, "test", &h) == 0);
