@@ -27,11 +27,9 @@ else (LIBBTBB_INCLUDE_DIR AND LIBBTBB_LIBRARIES)
     PATHS /usr/include /usr/local/include
     /opt/local/include
     ${CMAKE_SOURCE_DIR}/../libbtbb/src
-    # Last, so it adds an install in a prefix of its own without changing
-    # which libbtbb is found where one of the directories above has one.
-    # pkg_check_modules answers in ..._INCLUDE_DIRS; the ..._INCLUDEDIR in
-    # the hints above is not a variable it sets, which is why the library
-    # search below also names ..._LIBRARY_DIRS.
+    # What pkg-config says -I would be, which is a libbtbb installed in a
+    # prefix of its own. Last, so it adds that without changing which
+    # libbtbb is found where one of the directories above has one.
     ${PC_LIBBTBB_INCLUDE_DIRS}
     ${LIBBTBB_INCLUDE_DIR}
   )

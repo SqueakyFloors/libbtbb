@@ -6,8 +6,8 @@
 # it, documented from pkg-config 0.29 and present in it well before that. This
 # file sits in the pkgconfig directory of the library's own directory, and the
 # walk back out to the prefix is written for that depth. A library directory
-# given as an absolute path has no such relation to the prefix, and the three
-# lines below then hold the paths the build was configured with.
+# given as an absolute path has no such relation to the prefix, and the lines
+# below then hold the paths the build was configured with.
 prefix=@PC_PREFIX@
 exec_prefix=${prefix}
 libdir=@PC_LIBDIR@

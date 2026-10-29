@@ -58,11 +58,17 @@ endif()
 # A ".." segment is refused rather than cleaned: the files would land outside
 # the prefix, and nothing here could tell a program where they went.
 function(btbb_clean_install_dir out_var depth_var dir what)
-	string(REGEX REPLACE "/+" "/" dir "${dir}")
+	# The slashes an absolute path starts with are kept as they are: two of
+	# them mean something of their own on Windows and in POSIX, where the
+	# rest of a run of slashes does not.
+	set(absolute FALSE)
 	set(lead "")
 	if(IS_ABSOLUTE "${dir}")
-		string(REGEX MATCH "^/" lead "${dir}")
+		set(absolute TRUE)
+		string(REGEX MATCH "^/+" lead "${dir}")
+		string(REGEX REPLACE "^/+" "" dir "${dir}")
 	endif()
+	string(REGEX REPLACE "/+" "/" dir "${dir}")
 	string(REPLACE "/" ";" segments "${dir}")
 	set(kept "")
 	foreach(segment IN LISTS segments)
@@ -79,12 +85,12 @@ function(btbb_clean_install_dir out_var depth_var dir what)
 			message(FATAL_ERROR
 				"${what} is \"${dir}\", which leads out of the directory it "
 				"is given relative to. Give a directory under the prefix, "
-				"as lib64 or lib/x86_64-linux-gnu, or an absolute path.")
+				"or an absolute path.")
 		endif()
 		list(APPEND kept "${segment}")
 	endforeach()
 	string(REPLACE ";" "/" cleaned "${kept}")
-	if(lead)
+	if(absolute)
 		set(${out_var} "${lead}${cleaned}" PARENT_SCOPE)
 		set(${depth_var} 0 PARENT_SCOPE)
 		return()

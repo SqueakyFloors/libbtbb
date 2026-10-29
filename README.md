@@ -102,6 +102,11 @@ The configure step reports the two directories it will use, and `libbtbb.pc`
 names them, so `pkg-config --libs libbtbb` and `pkg-config --cflags libbtbb`
 point a program at the files that were really installed.
 
+Either directory may be an absolute path, which is installed to exactly that
+wherever the prefix is. One that leads out of the prefix, as `../elsewhere`,
+is refused while configuring: `libbtbb.pc` could not then say where the files
+had gone.
+
 If you have previous versions of libbtbb, libubertooth or the Ubertooth tools
 installed, you can use the cleanup script to remove them:
 ```

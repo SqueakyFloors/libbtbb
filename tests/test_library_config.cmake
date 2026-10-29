@@ -405,22 +405,31 @@ check_configured_pc_libdir("LIB_SUFFIX=0" "\${prefix}/lib0"
 
 # A directory leading out of the prefix is refused while configuring: the
 # install would write outside it, and libbtbb.pc could not say where.
-set(out_build ${BINARY_DIR}/out-of-prefix)
-file(REMOVE_RECURSE ${out_build})
-execute_process(
-	COMMAND ${CMAKE_COMMAND} -S ${SOURCE_DIR} -B ${out_build}
-	        ${like_this_build}
-	        -DCMAKE_INSTALL_LIBDIR=../outside
-	        -DENABLE_PYTHON=OFF -DBUILD_TESTING=OFF
-	RESULT_VARIABLE result
-	OUTPUT_VARIABLE output
-	ERROR_VARIABLE error)
-if(result EQUAL 0)
-	fail("a libdir leading out of the prefix was accepted")
-elseif(NOT "${output}${error}" MATCHES "leads out of the directory")
-	fail("the refusal of a libdir leading out of the prefix does not say "
-	     "what is wrong:\n${output}${error}")
-endif()
+# A ".." that has a directory before it to go back through is followed, as
+# the install follows it, so each of these is a directory that really would
+# land outside the prefix.
+foreach(out_option -DCMAKE_INSTALL_LIBDIR=../outside
+                   -DCMAKE_INSTALL_INCLUDEDIR=../outside
+                   -DLIB_SUFFIX=/../..)
+	set(out_build ${BINARY_DIR}/out-of-prefix)
+	file(REMOVE_RECURSE ${out_build})
+	execute_process(
+		COMMAND ${CMAKE_COMMAND} -S ${SOURCE_DIR} -B ${out_build}
+		        ${like_this_build}
+		        ${out_option}
+		        -DENABLE_PYTHON=OFF -DBUILD_TESTING=OFF
+		RESULT_VARIABLE result
+		OUTPUT_VARIABLE output
+		ERROR_VARIABLE error)
+	if(result EQUAL 0)
+		fail("${out_option} leads out of the prefix and was accepted")
+	# "leads out" alone: message() wraps its text, so a longer phrase can be
+	# broken across two lines.
+	elseif(NOT "${output}${error}" MATCHES "leads out")
+		fail("the refusal of ${out_option} does not say what is wrong:"
+		     "\n${output}${error}")
+	endif()
+endforeach()
 
 # A libdir given as an absolute path, which GNUInstallDirs allows and a
 # packager can hand to any CMake project: the library goes exactly there
