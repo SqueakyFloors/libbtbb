@@ -1,4 +1,18 @@
 libbtbb (2020-12-R1+fork5) unstable; urgency=low
+  * A malformed advertising payload is counted rather than reported line by
+    line. Advertising data whose length fields describe more than the payload
+    holds is ordinary on the air - a real packet with a corrupted byte
+    produces one as readily as noise that decoded as a packet - and a
+    ten-second capture on a busy bench holds hundreds. Each one wrote a line
+    beginning "Error:" to standard error, which both read as though the
+    capture had failed and crowded out a real failure: a capture of 4915 good
+    packets ended in "Error from extcap pipe" under tshark. A packet off the
+    air that cannot be read is not an error, so the decode now counts these
+    payloads by kind and writes the detail of a single payload only for a
+    caller that has asked for verbose output. lell_malformed_count() reads a
+    count, and starts it again, so a capture tool can report one line when a
+    run ends; lell_set_verbose() asks for the detail as it goes. Nothing the
+    dump writes to standard output changes.
   * A capture file in pcapng format is created in a few milliseconds rather
     than a few hundred. The file reserves a page for its section header block
     and another for its interface description, and it filled both by writing

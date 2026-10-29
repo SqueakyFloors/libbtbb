@@ -496,6 +496,46 @@ BTBB_API unsigned lell_get_payload_length(const lell_packet *pkt);
 BTBB_API const char * lell_get_adv_type_str(const lell_packet *pkt);
 BTBB_API void lell_print(const lell_packet *pkt);
 
+/* A payload lell_print() cannot read as what it claims to be. Advertising
+   data that does not hold what its length fields describe is ordinary on the
+   air: both a real packet with a corrupted byte and noise that decoded as a
+   packet produce one, and a ten-second capture on a busy bench holds
+   hundreds. So lell_print() counts them by kind instead of writing a line
+   for each, and writes the detail of a single payload only for a caller that
+   has asked for verbose output. A capture tool can read the counts when the
+   run ends and report one line.
+
+   The counts belong to the process, as the piconet survey's table does, and
+   are not safe to read while another thread is decoding. */
+typedef enum {
+	/* the PDU holds fewer payload bytes than its own type needs */
+	LELL_MALFORMED_PDU_TOO_SHORT = 0,
+	/* an advertising data element runs past the end of the payload */
+	LELL_MALFORMED_AD_PAST_END,
+	/* an advertising data element claims a length of zero */
+	LELL_MALFORMED_AD_ZERO_LENGTH,
+	/* an advertising data element's length is not one its type allows */
+	LELL_MALFORMED_AD_FIELD_LENGTH,
+	/* how many kinds there are; not a kind itself */
+	LELL_MALFORMED_KINDS,
+	/* every kind above, summed */
+	LELL_MALFORMED_ANY = 255
+} lell_malformed_kind;
+
+/* How many malformed payloads of this kind the decoder has met, or every
+   kind summed for LELL_MALFORMED_ANY. The count is per element rather than
+   per packet, so a payload carrying two elements of the wrong length counts
+   twice. A kind this library does not know counts 0.
+
+   A non-zero 'reset' starts the kinds it has just returned again from zero,
+   which is how a tool reports a count per run. */
+BTBB_API uint64_t lell_malformed_count(lell_malformed_kind kind, int reset);
+
+/* Ask for the detail of each malformed payload on standard error, or stop
+   asking. It is off until a caller asks, and the counts above are kept
+   either way. Returns what the setting was, so a caller can put it back. */
+BTBB_API int lell_set_verbose(int verbose);
+
 typedef struct lell_pcapng_handle lell_pcapng_handle;
 /* create a PCAPNG file for LE captures */
 BTBB_API int lell_pcapng_create_file(const char *filename, const char *interface_desc, lell_pcapng_handle ** ph);

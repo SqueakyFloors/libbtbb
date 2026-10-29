@@ -42,14 +42,62 @@ typedef char le_symbol_buffer_is_the_longest_frame[
 /* company identifier lookup */
 const char *bt_compidtostr(uint16_t compid);
 
-/* Report a problem with a packet. These go to stderr so that a dump on
- * stdout holds nothing but the dump. */
+/* How many malformed payloads of each kind the decoder has met. Malformed
+ * advertising data arrives by the hundred in a ten-second capture, so the
+ * count is what a caller reads at the end of a run; see btbb.h. */
+static uint64_t malformed_counts[LELL_MALFORMED_KINDS];
+
+/* Whether the caller has asked for the detail of each malformed payload. */
+static int malformed_detail_wanted = 0;
+
+int lell_set_verbose(int verbose)
+{
+	int was = malformed_detail_wanted;
+
+	malformed_detail_wanted = verbose ? 1 : 0;
+	return was;
+}
+
+uint64_t lell_malformed_count(lell_malformed_kind kind, int reset)
+{
+	uint64_t count = 0;
+	int i;
+
+	if (kind == LELL_MALFORMED_ANY) {
+		for (i = 0; i < LELL_MALFORMED_KINDS; i++) {
+			count += malformed_counts[i];
+			if (reset)
+				malformed_counts[i] = 0;
+		}
+		return count;
+	}
+
+	/* compared as unsigned so that a kind from a later version of the
+	 * header, and a negative one, are both out of range here */
+	if ((unsigned) kind >= (unsigned) LELL_MALFORMED_KINDS)
+		return 0;
+
+	count = malformed_counts[kind];
+	if (reset)
+		malformed_counts[kind] = 0;
+	return count;
+}
+
+/* Record a payload the decode could not read as what it claims to be. The
+ * detail goes to stderr, so that a dump on stdout holds nothing but the
+ * dump, and only for a caller that has asked for it. */
 #ifdef __GNUC__
-__attribute__((format(printf, 1, 2)))
+__attribute__((format(printf, 2, 3)))
 #endif
-static void _warn(const char *fmt, ...)
+static void _malformed(lell_malformed_kind kind, const char *fmt, ...)
 {
 	va_list ap;
+
+	if ((unsigned) kind < (unsigned) LELL_MALFORMED_KINDS)
+		malformed_counts[kind]++;
+
+	if (!malformed_detail_wanted)
+		return;
 
 	/* keep the two streams in order when both are a terminal */
 	fflush(stdout);
@@ -545,11 +593,17 @@ static void _dump_scan_rsp_data(const uint8_t *buf, int len) {
 		sublen = buf[pos];
 		++pos;
 		if (pos + sublen > len) {
-			_warn("Error: attempt to read past end of buffer (%d + %d > %d)\n", pos, sublen, len);
+			_malformed(LELL_MALFORMED_AD_PAST_END,
+				   "note: advertising data element at byte"
+				   " %d claims %d bytes, the payload holds"
+				   " %d\n",
+				   pos, sublen, len);
 			return;
 		}
 		if (sublen == 0) {
-			_warn("Early return due to 0 length\n");
+			_malformed(LELL_MALFORMED_AD_ZERO_LENGTH,
+				   "note: advertising data element claims a"
+				   " length of 0\n");
 			return;
 		}
 		type = buf[pos];
@@ -558,7 +612,9 @@ static void _dump_scan_rsp_data(const uint8_t *buf, int len) {
 			case 0x01:
 				printf(" (Flags)\n");
 				if (sublen - 1 < 1) {
-					_warn("Wrong length (0, should be >= 1)\n");
+					_malformed(LELL_MALFORMED_AD_FIELD_LENGTH,
+						   "note: wrong length (0,"
+						   " should be >= 1)\n");
 					break;
 				}
 				printf("           ");
@@ -611,7 +667,10 @@ print128:
 					}
 				}
 				else {
-					_warn("Wrong length (%d, must be divisible by 16)\n", sublen-1);
+					_malformed(LELL_MALFORMED_AD_FIELD_LENGTH,
+						   "note: wrong length (%d,"
+						   " must be divisible by"
+						   " 16)\n", sublen-1);
 				}
 				break;
 			case 0x09:
@@ -632,7 +691,10 @@ print128:
 					int8_t level = (int8_t) buf[pos+1];
 					printf("           %d dBm\n", level);
 				} else {
-					_warn("Wrong length (%d, should be 1)\n", sublen-1);
+					_malformed(LELL_MALFORMED_AD_FIELD_LENGTH,
+						   "note: wrong length (%d,"
+						   " should be 1)\n",
+						   sublen-1);
 				}
 				break;
 			case 0x12:
@@ -644,7 +706,10 @@ print128:
 					printf("%0.2f) ms\n", val * 1.25);
 				}
 				else {
-					_warn("Wrong length (%d, should be 4)\n", sublen-1);
+					_malformed(LELL_MALFORMED_AD_FIELD_LENGTH,
+						   "note: wrong length (%d,"
+						   " should be 4)\n",
+						   sublen-1);
 				}
 				break;
 			case 0x16:
@@ -660,7 +725,10 @@ print128:
 					printf("\n");
 				}
 				else {
-					_warn("Wrong length (%d, should be >= 2)\n", sublen-1);
+					_malformed(LELL_MALFORMED_AD_FIELD_LENGTH,
+						   "note: wrong length (%d,"
+						   " should be >= 2)\n",
+						   sublen-1);
 				}
 				break;
 			case 0xff:
@@ -675,7 +743,10 @@ print128:
 					printf("\n");
 				}
 				else {
-					_warn("Wrong length (%d, should be >= 2)\n", sublen-1);
+					_malformed(LELL_MALFORMED_AD_FIELD_LENGTH,
+						   "note: wrong length (%d,"
+						   " should be >= 2)\n",
+						   sublen-1);
 				}
 				break;
 			default:
@@ -712,7 +783,9 @@ void lell_print(const lell_packet *pkt)
 		switch (llid) {
 		case 3: // LL Control PDU
 			if (pkt->length < 1) {
-				_warn("Error: an LL Control PDU needs 1 payload byte, 0 received\n");
+				_malformed(LELL_MALFORMED_PDU_TOO_SHORT,
+					   "note: an LL Control PDU needs"
+					   " 1 payload byte, 0 received\n");
 				break;
 			}
 			opcode = pkt->symbols[6];
@@ -753,8 +826,11 @@ void lell_print(const lell_packet *pkt)
 
 		needed = adv_payload_needed(pkt->adv_type);
 		if (pkt->length < needed) {
-			_warn("Error: %s needs %d payload bytes, %d received\n",
-			      lell_get_adv_type_str(pkt), needed, pkt->length);
+			_malformed(LELL_MALFORMED_PDU_TOO_SHORT,
+				   "note: %s needs %d payload bytes, %d"
+				   " received\n",
+				   lell_get_adv_type_str(pkt), needed,
+				   pkt->length);
 			goto dump;
 		}
 
