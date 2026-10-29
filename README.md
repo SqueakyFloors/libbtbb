@@ -46,6 +46,43 @@ parts, access code, whitening, clock recovery, the Low Energy connection
 request — is explained in [How Bluetooth sniffing works](https://github.com/SqueakyFloors/ubertooth/blob/main/docs/concepts.md).
 
 
+Python tools
+============
+
+An install also carries `btaptap`, a Bluetooth keyboard sniffer, and the
+`pcapdump` module it reads and writes capture files with.
+
+Many Bluetooth keyboards work by default in "boot mode", a simplified HID
+messaging a PC BIOS can read, and some of them send those messages
+unencrypted. `btaptap` extracts the keystrokes from such a capture and writes
+them to standard output:
+
+```
+$ btaptap -r keyboard.pcap
+```
+
+It reads a libpcap capture with `-r`, either baseband frames with the
+`DLT_EN10MB` data link layer and the frame 20 bytes in, or HCI traffic with
+`DLT_BLUETOOTH_HCI_H4`, and an Ellisys CSV export with `-e`. The Ubertooth
+tools write their captures with a Bluetooth baseband data link layer, which
+`btaptap` refuses rather than decoding. `python/pcaptools/README` describes
+both tools and the rest of the options.
+
+The build installs them when `ENABLE_PYTHON` is on, which it is by default,
+and it finds Python 3; the `pcapdump` module needs pip as well, and the
+configure step says so when pip is missing. Both can also be run straight out
+of `python/pcaptools`, where the module sits beside the script.
+
+An install under a prefix of its own works: `btaptap` looks for `pcapdump` in
+the prefix it was installed in, so `cmake --install build --prefix /tmp/pfx`
+followed by `/tmp/pfx/bin/btaptap` finds the module, which the interpreter's
+own `sys.path` would not.
+
+`python/utils` is development scripts, not part of an install: they generated
+the tables that are committed in the library's source, such as the company
+identifiers in `lib/src/companies.c` and the check and whitening tables.
+
+
 Build Instructions
 ==================
 
