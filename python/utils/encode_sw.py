@@ -1,8 +1,15 @@
-#!/usr/bin/python
+#!/usr/bin/env python3
 
 # produce a sync word for a given LAP
+#
+# The LAP is the first argument, as hex or decimal, and defaults to the
+# all-ones LAP. Three values are printed: the LAP, the codeword the barker
+# sequence and the PN sequence are folded into, and the sync word that
+# codeword scrambles to. For the all-ones LAP the codeword is DEFAULT_AC in
+# lib/src/bluetooth_packet.c, and for any LAP the sync word is what the
+# library's btbb_gen_syncword() returns.
 
-lap = 0xffffff
+import sys
 
 pn = 0x83848D96BBCC54FC
 
@@ -49,6 +56,12 @@ def encode(data):
 			codeword ^= g[i]
 	return codeword
 
+if len(sys.argv) > 2:
+	sys.exit("usage: encode_sw.py [LAP]")
+lap = int(sys.argv[1], 0) if len(sys.argv) == 2 else 0xffffff
+if not 0 <= lap <= 0xffffff:
+	sys.exit("error: a LAP is 24 bits, so 0 to 0xffffff")
+
 # append barker code
 if (lap & 0x800000):
 	data = 0x13000000 | lap
@@ -64,4 +77,4 @@ codeword = encode(data)
 # scramble again
 syncword = codeword ^ pn
 
-print "0x%06x 0x%016x 0x%016x" % (lap, codeword, syncword)
+print("0x%06x 0x%016x 0x%016x" % (lap, codeword, syncword))

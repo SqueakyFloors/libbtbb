@@ -79,8 +79,16 @@ followed by `/tmp/pfx/bin/btaptap` finds the module, which the interpreter's
 own `sys.path` would not.
 
 `python/utils` is development scripts, not part of an install: they generated
-the tables that are committed in the library's source, such as the company
-identifiers in `lib/src/companies.c` and the check and whitening tables.
+the tables that are committed in the library's source. `gen_check_tables.py`
+produces the sync word syndrome tables in `lib/src/sw_check_tables.h`,
+`gen_barker_correct.py` the barker distance and correction tables,
+`encode_sw.py` the sync word of a given LAP, `le_whitening.py` the LE
+whitening sequence and each channel's offset into it, and `gen_companies.py`
+the company identifiers in `lib/src/companies.c` from the Bluetooth SIG's
+published list. The test suite runs the first four and compares what they
+print with what is committed, so a table and the script behind it cannot drift
+apart; `gen_companies.py` needs the SIG's published file, so the `companies`
+test covers that table instead.
 
 
 Build Instructions
