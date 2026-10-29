@@ -6,7 +6,7 @@
  *   byte 0      options: bit 0 searches for any LAP instead of the one
  *               below, bits 1-2 are the error budget, 0 to 2
  *   bytes 1-3   the LAP to search for, least significant byte first
- *   bytes 4-5   the search length, least significant byte first
+ *   bytes 4-7   the search length, least significant byte first, signed
  *   rest        the symbol stream, 8 symbols to a byte
  *
  * This file is part of libbtbb
@@ -41,7 +41,7 @@ int LLVMFuzzerInitialize(int *argc, char ***argv)
 int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size)
 {
 	struct fuzz_input in;
-	char symbols[MAX_SYMBOLS];
+	char *symbols;
 	const uint8_t *rest;
 	size_t rest_len;
 	btbb_packet *pkt = NULL;
@@ -54,7 +54,10 @@ int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size)
 	lap = fz_u8(&in);
 	lap |= (uint32_t) fz_u8(&in) << 8;
 	lap |= (uint32_t) fz_u8(&in) << 16;
-	search_length = fz_u16(&in);
+	/* signed, and the whole range: a caller that worked a search length
+	 * out by subtraction can arrive with a negative one, and the search
+	 * has to hold its own against both ends */
+	search_length = (int) (int32_t) fz_u32(&in);
 	if (options & 1)
 		lap = LAP_ANY;
 	max_ac_errors = (options >> 1) & 3;
@@ -62,14 +65,27 @@ int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size)
 		max_ac_errors = FZ_MAX_AC_ERRORS;
 
 	rest = fz_rest(&in, &rest_len);
-	symbol_count = fz_symbols(rest, rest_len, symbols, sizeof(symbols));
+	/*
+	 * A stream of exactly the symbols it holds, on the heap, so that a
+	 * read one symbol past the length the search was given is a read past
+	 * the end of an object and the sanitizer says so. A fixed array would
+	 * hide it.
+	 */
+	symbol_count = (int) (rest_len * 8 < MAX_SYMBOLS ? rest_len * 8
+							 : MAX_SYMBOLS);
+	symbols = malloc(symbol_count != 0 ? (size_t) symbol_count : 1);
+	if (symbols == NULL)
+		return 0;
+	(void) fz_symbols(rest, rest_len, symbols, (size_t) symbol_count);
 
 	/* The length form is told what the stream holds and reads no
 	 * further, so any search length is in bounds for it. */
 	offset = btbb_find_ac_n(symbols, (size_t) symbol_count, search_length,
 				lap, max_ac_errors, &pkt);
-	if (offset >= 0 && offset >= symbol_count)
-		abort();	/* a match outside the stream it was given */
+	/* A match is the start of a sync word, so the stream has to hold a
+	 * whole one after it. */
+	if (offset >= 0 && offset > symbol_count - SYNCWORD_SYMBOLS)
+		abort();	/* a match the stream does not hold */
 	if (pkt != NULL) {
 		btbb_packet_unref(pkt);
 		pkt = NULL;
@@ -94,5 +110,6 @@ int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size)
 			btbb_packet_unref(pkt);
 	}
 
+	free(symbols);
 	return 0;
 }

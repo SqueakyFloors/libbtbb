@@ -34,6 +34,7 @@
 #include "btbb.h"
 #include "bluetooth_packet.h"
 #include "bluetooth_le_packet.h"
+#include "bluetooth_piconet.h"
 
 /*
  * How many access code bit errors the targets ask the library to correct.
@@ -114,10 +115,9 @@ static inline int fz_symbols(const uint8_t *bytes, size_t len, char *out,
  * whitening a target asks for.
  *
  * btbb_find_ac() is the only way in the public interface to put an address
- * part on a packet, so it is called here with an error budget nothing can
- * exceed: it then matches at the first offset whatever the symbols are, and
- * the packet comes back initialized for the given LAP. The stream it searches
- * is a sync word of its own, so no symbol the caller passed is read for it.
+ * part on a packet, so it is called here on a sync word of its own - built
+ * for the LAP, so the search matches it with no errors, as a receiver that
+ * found a packet does. No symbol the caller passed is read for it.
  *
  * Returns NULL if the packet could not be allocated.
  */
@@ -127,11 +127,15 @@ static inline btbb_packet *fz_packet(char *symbols, int length, uint32_t lap,
 {
 	/* a sync word's worth of symbols, plus the offset being searched */
 	char ac_stream[SYNCWORD_SYMBOLS + 1];
+	uint64_t syncword = btbb_gen_syncword((int) lap);
 	btbb_packet *pkt = NULL;
+	int i;
 
-	memset(ac_stream, 0, sizeof(ac_stream));
-	if (btbb_find_ac(ac_stream, 1, lap, SYNCWORD_SYMBOLS, &pkt) < 0 ||
-	    pkt == NULL)
+	for (i = 0; i < SYNCWORD_SYMBOLS; i++)
+		ac_stream[i] = (char) ((syncword >> i) & 1);
+	ac_stream[SYNCWORD_SYMBOLS] = 0;
+
+	if (btbb_find_ac(ac_stream, 1, lap, 0, &pkt) < 0 || pkt == NULL)
 		return NULL;
 
 	btbb_packet_set_data(pkt, symbols, length, channel, clkn);

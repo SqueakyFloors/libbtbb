@@ -86,7 +86,10 @@ int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size)
 
 	fz_start(&in, data, size);
 	options = fz_u8(&in);
-	channel = fz_u8(&in);
+	/* the values the interface defines: 79 channels, three modulations
+	 * and five transports, so that what is fuzzed is what a caller can
+	 * ask for */
+	channel = (uint8_t) (fz_u8(&in) % BT_NUM_CHANNELS);
 	radio = fz_u8(&in);
 	uap = fz_u8(&in);
 	sigdbm = (int8_t) fz_u8(&in);
@@ -98,8 +101,6 @@ int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size)
 	/* A description the fuzzer chose, which the file carries as an option
 	 * of its interface description block. */
 	description_length = fz_u8(&in);
-	if (description_length > LONGEST_DESCRIPTION)
-		description_length = LONGEST_DESCRIPTION;
 	for (i = 0; i < description_length; i++) {
 		uint8_t byte = fz_u8(&in);
 
@@ -120,8 +121,8 @@ int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size)
 			(uint32_t) ns, options & 1);
 	if (pkt == NULL)
 		return 0;
-	btbb_packet_set_modulation(pkt, (uint8_t) (radio & 3));
-	btbb_packet_set_transport(pkt, (uint8_t) ((radio >> 2) & 7));
+	btbb_packet_set_modulation(pkt, (uint8_t) ((radio & 3) % 3));
+	btbb_packet_set_transport(pkt, (uint8_t) (((radio >> 2) & 7) % 5));
 	if (btbb_decode_header(pkt))
 		(void) btbb_decode_payload(pkt);
 

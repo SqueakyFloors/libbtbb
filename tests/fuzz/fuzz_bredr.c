@@ -60,7 +60,10 @@ int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size)
 
 	fz_start(&in, data, size);
 	options = fz_u8(&in);
-	channel = fz_u8(&in);
+	/* the values the interface defines: 79 channels, three modulations
+	 * and five transports, so that what is fuzzed is what a caller can
+	 * ask for */
+	channel = (uint8_t) (fz_u8(&in) % BT_NUM_CHANNELS);
 	uap = fz_u8(&in);
 	clkn = fz_u32(&in);
 	esco_length = fz_u8(&in);
@@ -74,8 +77,8 @@ int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size)
 		return 0;
 
 	btbb_packet_set_flag(pkt, BTBB_CLK27_VALID, (options >> 1) & 1);
-	btbb_packet_set_modulation(pkt, (uint8_t) ((options >> 2) & 3));
-	btbb_packet_set_transport(pkt, (uint8_t) ((options >> 4) & 7));
+	btbb_packet_set_modulation(pkt, (uint8_t) (((options >> 2) & 3) % 3));
+	btbb_packet_set_transport(pkt, (uint8_t) (((options >> 4) & 7) % 5));
 	/* 0 leaves the decoder to search for the length, as a tool that was
 	 * not told the link's does */
 	btbb_packet_set_esco_length(pkt, esco_length);

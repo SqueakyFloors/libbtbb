@@ -34,8 +34,11 @@ set(FUZZER_LINK_FLAGS "-fsanitize=fuzzer" CACHE STRING
     "Flags that link the libFuzzer runtime, which provides main()")
 
 # A libFuzzer program has no main() of its own, so this is a link of the
-# runtime as much as a compile check.
-set(CMAKE_REQUIRED_FLAGS "${FUZZER_COMPILE_FLAGS} ${FUZZER_LINK_FLAGS}")
+# runtime as much as a compile check. The check wants one string where the
+# targets below want a list, so several flags are joined here.
+string(REPLACE ";" " " fuzzer_check_flags
+       "${FUZZER_COMPILE_FLAGS};${FUZZER_LINK_FLAGS}")
+set(CMAKE_REQUIRED_FLAGS "${fuzzer_check_flags}")
 check_c_source_compiles("
 #include <stddef.h>
 #include <stdint.h>
@@ -72,8 +75,11 @@ foreach(fuzz_target find_ac bredr le pcap pcapng)
     # Standard output is closed because a dump of every packet is not what a
     # test run is for; standard error is left open, so that a sanitizer's
     # report of a failure is in the log.
+    # The seeds are named one by one rather than by their directory, so that a
+    # run cannot write a new input into the source tree.
+    file(GLOB fuzz_corpus ${CMAKE_CURRENT_SOURCE_DIR}/corpus/${fuzz_target}/*)
     add_test(NAME fuzz_${fuzz_target}_corpus
              COMMAND fuzz_${fuzz_target} -runs=0 -close_fd_mask=1
-                     ${CMAKE_CURRENT_SOURCE_DIR}/corpus/${fuzz_target})
+                     ${fuzz_corpus})
     set_tests_properties(fuzz_${fuzz_target}_corpus PROPERTIES TIMEOUT 60)
 endforeach()

@@ -81,11 +81,8 @@ static void write_padding_options( void * block,
    bytes. They go out a buffer at a time rather than a byte at a time, which
    is 4096 times fewer system calls for the same file.
 
-   Returns the number of bytes written, or -1 for a write that failed or
-   stopped short, which is what the caller treats as an error. A write that
-   stops short now fails the file's creation rather than being passed over,
-   which is the right way round: the file would otherwise be short of the room
-   its blocks are mapped over. */
+   Returns the number of bytes written, or -1 for a write that failed, which
+   is what the caller treats as an error. */
 #define ZERO_CHUNK 4096
 
 static ssize_t write_zeroes( int fd, size_t count )
@@ -101,10 +98,13 @@ static ssize_t write_zeroes( int fd, size_t count )
 			chunk = sizeof( ZEROES );
 		}
 		result = write( fd, ZEROES, chunk );
-		if ((result == -1) || ((size_t) result != chunk)) {
+		/* A write that stopped short carries on from where it got to,
+		   as one interrupted by a signal does; one that wrote nothing
+		   at all would never finish, so it is a failure. */
+		if (result <= 0) {
 			return -1;
 		}
-		written += chunk;
+		written += (size_t) result;
 	}
 	return (ssize_t) written;
 }
