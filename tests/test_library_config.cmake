@@ -77,6 +77,79 @@ else()
 	endif()
 endif()
 
+# What pkg-config tells a program that links the installed library. The
+# install writes the library to lib${LIB_SUFFIX} and the header to include,
+# and libbtbb.pc has to name those two directories; a -L or -I for a
+# directory holding neither leaves the program to link by luck or not at all.
+# CMAKE_INSTALL_LIBDIR and CMAKE_INSTALL_INCLUDEDIR are set to names the
+# install does not use, which is what a multiarch or lib64 system does on its
+# own.
+set(pc_build ${BINARY_DIR}/pkgconfig-build)
+set(pc_install ${BINARY_DIR}/pkgconfig-install)
+file(REMOVE_RECURSE ${pc_build} ${pc_install})
+execute_process(
+	COMMAND ${CMAKE_COMMAND} -S ${SOURCE_DIR} -B ${pc_build}
+	        ${like_this_build}
+	        -DCMAKE_INSTALL_PREFIX=${pc_install}
+	        -DCMAKE_INSTALL_LIBDIR=lib-not-used
+	        -DCMAKE_INSTALL_INCLUDEDIR=include-not-used
+	        -DBUILD_STATIC_LIB=OFF
+	        -DENABLE_PYTHON=OFF -DBUILD_TESTING=OFF
+	RESULT_VARIABLE result
+	OUTPUT_VARIABLE output
+	ERROR_VARIABLE error)
+if(NOT result EQUAL 0)
+	fail("the tree for the pkg-config case was refused:\n${output}${error}")
+else()
+	execute_process(COMMAND ${CMAKE_COMMAND} --build ${pc_build}
+		RESULT_VARIABLE result OUTPUT_VARIABLE output ERROR_VARIABLE error)
+	if(NOT result EQUAL 0)
+		fail("the tree for the pkg-config case does not build:\n${output}${error}")
+	else()
+		execute_process(COMMAND ${CMAKE_COMMAND} --install ${pc_build}
+			RESULT_VARIABLE result OUTPUT_VARIABLE output ERROR_VARIABLE error)
+		if(NOT result EQUAL 0)
+			fail("the install for the pkg-config case failed:\n${output}${error}")
+		endif()
+	endif()
+endif()
+
+file(GLOB pc_files ${pc_install}/*/pkgconfig/libbtbb.pc)
+if(NOT pc_files)
+	fail("the install wrote no libbtbb.pc under ${pc_install}")
+else()
+	list(GET pc_files 0 pc_file)
+	set(pc_libdir)
+	set(pc_includedir)
+	file(STRINGS ${pc_file} pc_lines)
+	foreach(line IN LISTS pc_lines)
+		if(line MATCHES "^libdir=(.+)$")
+			set(pc_libdir "${CMAKE_MATCH_1}")
+		elseif(line MATCHES "^includedir=(.+)$")
+			set(pc_includedir "${CMAKE_MATCH_1}")
+		endif()
+	endforeach()
+	# Both are written relative to the prefix, which is where this case
+	# installed.
+	string(REPLACE "\${prefix}" "${pc_install}" pc_libdir "${pc_libdir}")
+	string(REPLACE "\${prefix}" "${pc_install}" pc_includedir "${pc_includedir}")
+
+	if(NOT pc_libdir)
+		fail("libbtbb.pc has no libdir line:\n${pc_lines}")
+	else()
+		file(GLOB pc_libs ${pc_libdir}/libbtbb.*)
+		if(NOT pc_libs)
+			fail("libbtbb.pc names libdir ${pc_libdir}, which holds no library")
+		endif()
+	endif()
+
+	if(NOT pc_includedir)
+		fail("libbtbb.pc has no includedir line:\n${pc_lines}")
+	elseif(NOT EXISTS ${pc_includedir}/btbb.h)
+		fail("libbtbb.pc names includedir ${pc_includedir}, which holds no btbb.h")
+	endif()
+endif()
+
 if(failures GREATER 0)
 	message(FATAL_ERROR "${failures} case(s) failed")
 endif()

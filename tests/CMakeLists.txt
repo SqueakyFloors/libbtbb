@@ -132,7 +132,31 @@ if(BUILD_TESTING)
              -DC_COMPILER=${CMAKE_C_COMPILER}
              -DTOOLCHAIN_FILE=${CMAKE_TOOLCHAIN_FILE}
              -P ${CMAKE_CURRENT_SOURCE_DIR}/test_library_config.cmake)
-    # Two configures and one compile: 5.5 s on an arm64 Mac, 15 s on a
-    # slower CI runner.
-    set_tests_properties(library_config PROPERTIES TIMEOUT 60)
+    # Two configures, one compile and one install: 7 s on an arm64 Mac, 20 s
+    # on a slower CI runner.
+    set_tests_properties(library_config PROPERTIES TIMEOUT 90)
+
+    # The exported names against the header the install offers. It reads the
+    # built library with nm, so it needs the shared one: a static archive's
+    # symbol table is not what a program links against.
+    if(TARGET btbb)
+        find_program(ABI_NM NAMES ${CMAKE_NM} nm)
+        if(ABI_NM)
+            # A Mach-O symbol name carries a leading underscore that an ELF
+            # one does not.
+            set(abi_strip_underscore OFF)
+            if(APPLE)
+                set(abi_strip_underscore ON)
+            endif()
+            add_test(NAME abi_surface COMMAND ${CMAKE_COMMAND}
+                     -DLIBRARY=$<TARGET_FILE:btbb>
+                     -DHEADER=${PROJECT_SOURCE_DIR}/lib/src/btbb.h
+                     -DNM=${ABI_NM}
+                     -DSTRIP_UNDERSCORE=${abi_strip_underscore}
+                     -P ${CMAKE_CURRENT_SOURCE_DIR}/test_abi_surface.cmake)
+            set_tests_properties(abi_surface PROPERTIES TIMEOUT 30)
+        else()
+            message(STATUS "nm was not found: leaving out the abi_surface test")
+        endif()
+    endif()
 endif()

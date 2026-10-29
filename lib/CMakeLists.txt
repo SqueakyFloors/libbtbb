@@ -37,6 +37,14 @@ endif()
 
 add_subdirectory(src)
 
+# The directories libbtbb.pc names have to be the ones the install writes to,
+# which are lib${LIB_SUFFIX} and include. GNUInstallDirs answers something
+# else on some systems - lib/x86_64-linux-gnu where the prefix is /usr on a
+# multiarch distribution, lib64 on others - and a consumer whose pkg-config
+# -L names a directory holding no library links by luck or not at all.
+set(PC_LIBDIR lib${LIB_SUFFIX})
+set(PC_INCLUDEDIR include)
+
 CONFIGURE_FILE(
     ${CMAKE_CURRENT_SOURCE_DIR}/libbtbb.pc.in
     ${CMAKE_CURRENT_BINARY_DIR}/libbtbb.pc

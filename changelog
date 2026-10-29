@@ -401,6 +401,52 @@ libbtbb (2020-12-R1+fork5) unstable; urgency=low
     packet's, and a clock ruled out by the piconet's own address part - which
     is what a known UAP does to another piconet on the same LAP - is no
     longer decoded at all, so nothing of it reaches a record either.
+  * The interface was compared with 2020-12-R1 before the release, by reading
+    the debug information of both shared libraries with abidiff. The soname
+    stays libbtbb.so.1, so a program built against an earlier fork build goes
+    on working. btbb.h, the only header the install offers, has gained five
+    functions - btbb_find_ac_n(), btbb_packet_set_esco_length(),
+    btbb_packet_get_esco_length(), lell_allocate_and_decode_n() and
+    lell_get_payload_length() - and five constants, and has lost nothing; no
+    function it declares has changed its signature; and pkt_queue, the one
+    structure it defines rather than leaves opaque, is unchanged. The
+    structures behind btbb_packet, btbb_piconet and lell_packet have all
+    grown, which a program cannot see, because no installed header describes
+    them and the library allocates every one of them. The library version is
+    1.1, where 2020-12-R1's was 1.0.
+  * Behavior an existing caller sees even with that unchanged interface comes
+    in three groups, each recorded in its own entry above or in an earlier
+    release. Two functions have gained a positive return value where they
+    answered 0: btbb_process_packet() answers BTBB_PROCESS_LOCK_LOST when it
+    gives up a clock, and lell_pcapng_append_packet() answers
+    LELL_PCAPNG_CONNECT_INFO_NOT_RECORDED when the packet reached the file
+    but the connection it belongs to could not be recorded. A caller reading
+    anything other than 0 as failure sees a failure that is not one; one
+    testing for a negative value is unaffected. Next, the capture writers
+    report a write that did not reach the file, where
+    btbb_pcap_append_packet() and its three siblings answered 0 whether the
+    bytes got there or not. Last, a decode says less where it knows less: a
+    packet whose payload did not decode no longer reports a payload, an eSCO
+    payload is reported at the length its type and CRC settle on rather than
+    the first length whose CRC agreed, btbb_init_hop_reversal() refuses the
+    aliased case it does not implement instead of answering as though it had
+    a sequence for it, and lell_print()'s complaints about a malformed packet
+    go to standard error rather than into the packet dump on standard output.
+  * btbb_pcap_open() is no longer exported. It carries the library's public
+    prefix but no installed header declares it, so nothing outside the
+    library's own sources could call it; its companion btbb_pcap_dump()
+    stopped being exported when the PCAP writer was rewritten. A new
+    abi_surface test holds the exported names to what btbb.h declares, so a
+    public function cannot go missing unnoticed and an internal one cannot
+    join the interface unnoticed.
+  * libbtbb.pc names the directories the install writes to. It took its
+    libdir and includedir from GNUInstallDirs, which answers
+    lib/x86_64-linux-gnu where the prefix is /usr on a multiarch
+    distribution and lib64 on others, while the library is installed to
+    lib${LIB_SUFFIX} and the header to include. A program linked with
+    `pkg-config --libs libbtbb` was given a -L for a directory holding no
+    library, and linked by luck where the compiler's own search path covered
+    for it, or not at all where it did not.
 
   * Manufacturer-specific advertising data decodes the company name for
     identifiers assigned since 2020. The table came from BlueZ and ended at

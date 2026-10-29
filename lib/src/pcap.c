@@ -49,7 +49,10 @@ typedef struct __attribute__((packed)) pcap_hdr_s {
 	uint32_t network;        /* data link type */
 } pcap_hdr_t;
 
-FILE *btbb_pcap_open(const char *filename, uint32_t dlt, uint32_t snaplen) {
+/* Internal, although the name carries the library's public prefix: no header
+   the install puts in include/ declares it, so nothing outside these sources
+   can call it. */
+static FILE *btbb_pcap_open(const char *filename, uint32_t dlt, uint32_t snaplen) {
 	pcap_hdr_t pcap_header = {
 		.magic_number = 0xa1b23c4d,
 		.version_major = 2,
