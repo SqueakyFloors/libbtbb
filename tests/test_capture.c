@@ -1300,11 +1300,13 @@ static void test_bredr_payload_does_not_survive_the_uap_search(void)
 static void test_bredr_payload_survives_a_successful_uap_search(void)
 {
 	const char *filename = "test_capture_search_payload_ok.pcapng";
+	const char *pcap_name = "test_capture_search_payload_ok.pcap";
 	char header_symbols[55];
 	char stream[1024];
 	/* a DH1 carries at most 30 payload bytes */
 	char payload_bytes[32];
 	btbb_pcapng_handle *h = NULL;
+	btbb_pcap_handle *ph = NULL;
 	btbb_piconet *pn;
 	btbb_packet *pkt = NULL;
 	size_t blk, data;
@@ -1334,6 +1336,14 @@ static void test_bredr_payload_survives_a_successful_uap_search(void)
 		return;
 	}
 	btbb_init_piconet(pn, SPEC_DH1_LAP);
+	/* A real search reaches the clock that works after trying others, and
+	   each one it rejects clears this flag. These symbols are not
+	   whitened, so every candidate clock decodes the same and the first
+	   one tried is the one that works; clearing the flag here puts the
+	   packet in the state the rejections would have left it in, so what
+	   the record carries below comes from the trial that settled the
+	   address part rather than from the decode above. */
+	btbb_packet_set_flag(pkt, BTBB_HAS_PAYLOAD, 0);
 	CHECK(btbb_uap_from_header(pkt, pn) == 1);
 	CHECK(btbb_piconet_get_uap(pn) == SPEC_DH1_UAP);
 	CHECK(btbb_packet_get_flag(pkt, BTBB_HAS_PAYLOAD) == 1);
@@ -1352,6 +1362,18 @@ static void test_bredr_payload_survives_a_successful_uap_search(void)
 	CHECK(btbb_pcapng_append_packet(h, 33ull, -20, -80, SPEC_DH1_LAP,
 					btbb_piconet_get_uap(pn), pkt) == 0);
 	(void) btbb_pcapng_close(h);
+
+	/* the same record in a plain pcap file, which has a payload gate of
+	   its own */
+	unlink_quietly(pcap_name);
+	CHECK(btbb_pcap_create_file(pcap_name, &ph) == 0);
+	if (ph != NULL) {
+		CHECK(btbb_pcap_append_packet(ph, 33ull, -20, -80,
+					      SPEC_DH1_LAP,
+					      btbb_piconet_get_uap(pn),
+					      pkt) == 0);
+		CHECK(btbb_pcap_close(ph) == 0);
+	}
 	btbb_packet_unref(pkt);
 	btbb_piconet_unref(pn);
 
@@ -1369,6 +1391,19 @@ static void test_bredr_payload_survives_a_successful_uap_search(void)
 		BREDR_PAYLOAD_PRESENT)) ==
 	      (BREDR_CRC_CHECKED | BREDR_CRC_VALID | BREDR_PAYLOAD_PRESENT));
 	CHECK(rd32(blk + 20) == 22 + sizeof(SPEC_DH1_BYTES));
+	for (i = 0; i < (int) sizeof(SPEC_DH1_BYTES); i++)
+		CHECK(capture[data + 22 + i] == SPEC_DH1_BYTES[i]);
+
+	if (ph == NULL)
+		return;
+	CHECK(read_capture(pcap_name));
+	unlink_quietly(pcap_name);
+	if (capture_len == 0)
+		return;
+	/* the 24-byte file header, then a 16-byte record header */
+	data = 24 + 16;
+	CHECK(rd32(24 + 8) == 22 + sizeof(SPEC_DH1_BYTES));
+	CHECK((rd16(data + 20) & BREDR_PAYLOAD_PRESENT) != 0);
 	for (i = 0; i < (int) sizeof(SPEC_DH1_BYTES); i++)
 		CHECK(capture[data + 22 + i] == SPEC_DH1_BYTES[i]);
 }
