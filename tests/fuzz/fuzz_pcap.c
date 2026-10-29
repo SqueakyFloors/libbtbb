@@ -7,13 +7,16 @@
  *   byte 0      options: bit 0 whitens the BR/EDR symbols, bit 1 chooses
  *               the PPI version, bits 2-3 how many records to write,
  *               bits 4-5 which of the three writers to write with
- *   byte 1      the channel
- *   byte 2      the UAP the BR/EDR decoder checks the header against
- *   byte 3      the signal level in dBm
- *   byte 4      the noise level in dBm
- *   bytes 5-8   the address the capture tool was listening for
- *   byte 9      the reference UAP
- *   bytes 10-17 the timestamp in nanoseconds
+ *   byte 1      the channel: 0 to 79 for the BR/EDR record, and the LE one
+ *               is decoded at the frequency of LE channel 'channel % 40'
+ *   byte 2      bits 0-1 the modulation, bits 2-4 the transport, both of
+ *               which a BR/EDR record carries
+ *   byte 3      the UAP the BR/EDR decoder checks the header against
+ *   byte 4      the signal level in dBm
+ *   byte 5      the noise level in dBm
+ *   bytes 6-9   the address the capture tool was listening for
+ *   byte 10     the reference UAP
+ *   bytes 11-18 the timestamp in nanoseconds
  *   rest        the frame: the bytes of an LE frame, and the same bytes
  *               unpacked into BR/EDR symbols
  *
@@ -59,7 +62,7 @@ int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size)
 	lell_packet *le_pkt;
 	btbb_pcap_handle *bredr_capture = NULL;
 	lell_pcap_handle *le_capture = NULL;
-	uint8_t options, channel, uap, refuap;
+	uint8_t options, channel, radio, uap, refuap;
 	int8_t sigdbm, noisedbm;
 	uint32_t refaddress;
 	uint64_t ns;
@@ -68,6 +71,7 @@ int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size)
 	fz_start(&in, data, size);
 	options = fz_u8(&in);
 	channel = fz_u8(&in);
+	radio = fz_u8(&in);
 	uap = fz_u8(&in);
 	sigdbm = (int8_t) fz_u8(&in);
 	noisedbm = (int8_t) fz_u8(&in);
@@ -85,10 +89,16 @@ int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size)
 			(uint32_t) ns, options & 1);
 	if (pkt == NULL)
 		return 0;
+	btbb_packet_set_modulation(pkt, (uint8_t) (radio & 3));
+	btbb_packet_set_transport(pkt, (uint8_t) ((radio >> 2) & 7));
 	if (btbb_decode_header(pkt))
 		(void) btbb_decode_payload(pkt);
 
-	le_pkt = fz_le_packet(rest, rest_len, 2402, (uint32_t) ns);
+	/* 2402 to 2480 MHz: the advertising channels among them, and the
+	 * data channels that make lell_packet_is_data() true */
+	le_pkt = fz_le_packet(rest, rest_len,
+			      (uint16_t) (2402 + 2 * (channel % 40)),
+			      (uint32_t) ns);
 
 	/* One writer a run: creating a file costs more than a decode, so a run
 	 * that wrote all three would spend its time in the file system. */

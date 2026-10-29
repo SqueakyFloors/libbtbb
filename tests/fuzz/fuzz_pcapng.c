@@ -8,14 +8,17 @@
  *   byte 0      options: bit 0 whitens the BR/EDR symbols, bits 2-3 how
  *               many records to write, bit 4 writes the LE capture instead
  *               of the BR/EDR one
- *   byte 1      the channel
- *   byte 2      the UAP the BR/EDR decoder checks the header against
- *   byte 3      the signal level in dBm
- *   byte 4      the noise level in dBm
- *   bytes 5-8   the address the capture tool was listening for
- *   byte 9      the reference UAP
- *   bytes 10-17 the timestamp in nanoseconds
- *   byte 18     the length of the interface description that follows
+ *   byte 1      the channel: 0 to 79 for the BR/EDR record, and the LE one
+ *               is decoded at the frequency of LE channel 'channel % 40'
+ *   byte 2      bits 0-1 the modulation, bits 2-4 the transport, both of
+ *               which a BR/EDR record carries
+ *   byte 3      the UAP the BR/EDR decoder checks the header against
+ *   byte 4      the signal level in dBm
+ *   byte 5      the noise level in dBm
+ *   bytes 6-9   the address the capture tool was listening for
+ *   byte 10     the reference UAP
+ *   bytes 11-18 the timestamp in nanoseconds
+ *   byte 19     the length of the interface description that follows
  *   then        that many bytes of interface description
  *   rest        the frame: the bytes of an LE frame, and the same bytes
  *               unpacked into BR/EDR symbols
@@ -39,20 +42,22 @@
  */
 
 #include "fuzz_input.h"
+#include "pcapng-bt.h"
 
-/* The 34 bytes of a connection request's payload, InitA through HopSCA,
- * which lell_pcapng_record_connect_req() reads. */
-#define CONNECT_REQ_PDU_BYTES 34
+/* The bytes of a connection request's payload, InitA through HopSCA, which
+ * lell_pcapng_record_connect_req() reads. The library's own constant, so that
+ * the buffer here cannot be shorter than what that function reads. */
+#define CONNECT_REQ_PDU_BYTES LE_CONNECT_IND_PDU_LENGTH
 
 /*
  * Longer than any interface description a capture tool writes - Ubertooth's
  * pass nine characters - and long enough to reach the room the file sets
  * aside for its options.
  *
- * It stops at 251 because a description of 252 or more is handed to the
- * writer as an option list with no terminating option, which the writer then
- * reads past the end of (#23). PR #71 is the fix; raise this to 255 once that
- * is in, and the longest descriptions are fuzzed too.
+ * It stops short of 255 because a long description is handed to the writer as
+ * an option list with no terminating option, which the writer then reads past
+ * the end of (#23). PR #71 is the fix; raise this to 255 once that is in, and
+ * the longest descriptions are fuzzed too.
  */
 #define LONGEST_DESCRIPTION 251
 
@@ -78,7 +83,7 @@ int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size)
 	lell_packet *le_pkt;
 	btbb_pcapng_handle *bredr_capture = NULL;
 	lell_pcapng_handle *le_capture = NULL;
-	uint8_t options, channel, uap, refuap, description_length;
+	uint8_t options, channel, radio, uap, refuap, description_length;
 	int8_t sigdbm, noisedbm;
 	uint32_t refaddress;
 	uint64_t ns;
@@ -87,6 +92,7 @@ int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size)
 	fz_start(&in, data, size);
 	options = fz_u8(&in);
 	channel = fz_u8(&in);
+	radio = fz_u8(&in);
 	uap = fz_u8(&in);
 	sigdbm = (int8_t) fz_u8(&in);
 	noisedbm = (int8_t) fz_u8(&in);
@@ -119,10 +125,16 @@ int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size)
 			(uint32_t) ns, options & 1);
 	if (pkt == NULL)
 		return 0;
+	btbb_packet_set_modulation(pkt, (uint8_t) (radio & 3));
+	btbb_packet_set_transport(pkt, (uint8_t) ((radio >> 2) & 7));
 	if (btbb_decode_header(pkt))
 		(void) btbb_decode_payload(pkt);
 
-	le_pkt = fz_le_packet(rest, rest_len, 2402, (uint32_t) ns);
+	/* 2402 to 2480 MHz: the advertising channels among them, and the
+	 * data channels that make lell_packet_is_data() true */
+	le_pkt = fz_le_packet(rest, rest_len,
+			      (uint16_t) (2402 + 2 * (channel % 40)),
+			      (uint32_t) ns);
 
 	/* One capture a run: creating a file costs more than a decode, so a
 	 * run that wrote both would spend its time in the file system. */

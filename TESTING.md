@@ -71,19 +71,26 @@ so a gcc build, or one with the clang Apple ships, is unaffected and simply
 has no fuzz targets. Under a clang that can:
 
 ```
-$ cmake -S . -B build-fuzz -DENABLE_PYTHON=OFF -DCMAKE_BUILD_TYPE=Debug \
+$ CC=clang cmake -S . -B build-fuzz -DENABLE_PYTHON=OFF -DCMAKE_BUILD_TYPE=Debug \
         -DCMAKE_C_FLAGS="-g -fno-omit-frame-pointer -fsanitize=address,undefined -fno-sanitize-recover=all"
 $ cmake --build build-fuzz -j8
 $ ./build-fuzz/tests/fuzz/fuzz_le -max_total_time=600 -max_len=512 \
-        -close_fd_mask=3 tests/fuzz/corpus/le
+        -close_fd_mask=1 tests/fuzz/corpus/le
 ```
 
-`-close_fd_mask=3` closes the dumps and the decoders' complaints about bad
-packets, which are the point of those functions and not of a fuzzing run; keep
-standard error open, or set the sanitizers' `log_path`, so that a report of a
-real failure is not among what is closed. A run that finds something writes
-the input it stopped on to a file, which the target replays if it is given that
-file instead of a directory.
+`-close_fd_mask=1` closes the dumps, which are the point of those functions
+and not of a fuzzing run, and leaves standard error open so that a
+sanitizer's report of a real failure is in the log. Add 2 to it, closing the
+decoders' complaints about bad packets as well, only together with the
+sanitizers' `log_path`, which then holds the report:
+
+```
+$ ASAN_OPTIONS=log_path=/tmp/fuzz-asan UBSAN_OPTIONS=print_stacktrace=1:log_path=/tmp/fuzz-ubsan \
+        ./build-fuzz/tests/fuzz/fuzz_le -max_total_time=600 -close_fd_mask=3 tests/fuzz/corpus/le
+```
+
+A run that finds something writes the input it stopped on to a file, which the
+target replays if it is given that file instead of a directory.
 
 The seed corpus in `tests/fuzz/corpus/` is the sample data the rest of the
 suite uses - the specification's DH1 packet, the frames of the LE print test,
