@@ -37,11 +37,44 @@
 #include "bluetooth_le_packet.h"
 #include "pcapng-bt.h"
 
-/* Two cases below call the generic PCAPNG writer, which is internal to the
+/* Three cases below call the generic PCAPNG writer, which is internal to the
  * library, so this test compiles that translation unit as well as linking
  * the library for the btbb_pcapng_ and lell_pcap_ functions btbb.h
  * declares. */
+
+/* A write() the writer can be made to stop short, which is what a signal or
+ * a nearly full disk does. The compiled-in copy of pcapng.c below has its
+ * writes sent here; this file reaches the real write() through
+ * real_write(), which is defined before the macro is.
+ *
+ * With short_write_call at 0 nothing is injected, so every other case in
+ * this file writes as it always did. */
+static unsigned write_calls;		/* writes the copy below has made */
+static unsigned short_write_call;	/* which one to cut short, 0 for none */
+static size_t short_write_bytes;	/* how much of it to let through */
+static int short_write_fired;		/* whether the cut really happened */
+static int stop_writing_after_cut;	/* later writes write nothing at all */
+
+static ssize_t real_write(int fd, const void *buf, size_t count)
+{
+	return write(fd, buf, count);
+}
+
+static ssize_t test_write(int fd, const void *buf, size_t count)
+{
+	++write_calls;
+	if (write_calls == short_write_call && count > short_write_bytes) {
+		short_write_fired = 1;
+		return real_write(fd, buf, short_write_bytes);
+	}
+	if (short_write_fired && stop_writing_after_cut)
+		return 0;
+	return real_write(fd, buf, count);
+}
+
+#define write(fd, buf, count) test_write(fd, buf, count)
 #include "pcapng.c"
+#undef write
 
 static int failures = 0;
 
@@ -479,12 +512,15 @@ static void test_bredr_pcapng_record(void)
 	/* a reference UAP with its top bit set is recorded as given; it is the
 	   value whose shift used to run into the sign bit of an int */
 	CHECK(high_refuap_lap_uap == (SPEC_DH1_LAP | 0x80000000u));
-	/* and it is not the UAP the HEC and CRC were checked against, so this
-	   record says nothing about either */
+	/* The reference UAP flag describes that field, and the four result
+	   flags say what the library checked, so a reference UAP other than
+	   the packet's own does not take the results away. */
 	CHECK((rd16(blk + 28 + 20) & BREDR_REFUAP_VALID) != 0);
 	CHECK((rd16(blk + 28 + 20) &
 	       (BREDR_HEC_CHECKED | BREDR_HEC_VALID |
-		BREDR_CRC_CHECKED | BREDR_CRC_VALID)) == 0);
+		BREDR_CRC_CHECKED | BREDR_CRC_VALID)) ==
+	      (BREDR_HEC_CHECKED | BREDR_HEC_VALID |
+	       BREDR_CRC_CHECKED | BREDR_CRC_VALID));
 }
 
 /* A POLL has no payload, so the record carries none and says so. */
@@ -538,11 +574,13 @@ static void test_bredr_pcapng_empty_payload(void)
 	}
 	btbb_packet_unref(pkt);
 
-	/* No reference LAP or UAP was given, so the record has no UAP to
-	   attribute a HEC or CRC result to and says nothing was checked, and
-	   a POLL carries no CRC in any case. */
+	/* No reference LAP or UAP was given, so neither field is flagged as
+	   holding one. The HEC was still checked and held, and the record
+	   says so: the result flags do not depend on the reference UAP. A
+	   POLL carries no CRC, so nothing is said about that. */
 	expected_flags = BREDR_DEWHITENED | BREDR_SIGPOWER_VALID |
-		BREDR_NOISEPOWER_VALID;
+		BREDR_NOISEPOWER_VALID |
+		BREDR_HEC_CHECKED | BREDR_HEC_VALID;
 
 	if (ph != NULL) {
 		CHECK(read_capture(pcap_name));
@@ -572,7 +610,9 @@ static void test_bredr_pcapng_empty_payload(void)
 	data = blk + 28;
 	CHECK(rd16(data + 20) == expected_flags);
 	CHECK((rd16(data + 20) & BREDR_PAYLOAD_PRESENT) == 0);
-	CHECK((rd16(data + 20) & (BREDR_HEC_CHECKED | BREDR_CRC_CHECKED)) == 0);
+	CHECK((rd16(data + 20) & BREDR_REFUAP_VALID) == 0);
+	CHECK((rd16(data + 20) & BREDR_HEC_CHECKED) != 0);
+	CHECK((rd16(data + 20) & BREDR_CRC_CHECKED) == 0);
 
 	CHECK(all_zero(blk + 50, 2));
 	CHECK(rd32(blk + 52) == 0);
@@ -2629,6 +2669,100 @@ static void test_section_option_limit(void)
 }
 
 /*
+ * A write of a section-header option that stops short. The rest of the option
+ * has to reach the file, or the block holds an option cut in half and a
+ * reader walking it falls out of step; a write that cannot be finished at all
+ * has to be reported.
+ */
+static void test_section_option_short_write(void)
+{
+	const char *filename = "test_capture_shortwrite.pcapng";
+	struct {
+		option_header header;
+		char text[12];
+		option_header end_of_options;
+	} comment;
+	PCAPNG_HANDLE handle;
+	size_t blk, off, end;
+	int found = 0;
+
+	/* The list ends with an all-zero option header, which is how the
+	   writer knows where it stops. */
+	memset(&comment, 0, sizeof(comment));
+	comment.header.option_code = OPT_COMMENT;
+	comment.header.option_length = sizeof(comment.text);
+	memcpy(comment.text, "short write", sizeof(comment.text));
+
+	/* The option body is the second write the writer makes, after the
+	   section header block itself. Let 6 of its 16 bytes through, which
+	   leaves it cut in the middle of its value. */
+	write_calls = 0;
+	short_write_call = 2;
+	short_write_bytes = 6;
+	short_write_fired = 0;
+	stop_writing_after_cut = 0;
+
+	unlink_quietly(filename);
+	CHECK(pcapng_create(&handle, filename,
+			    (const option_header *) &comment, 64,
+			    DLT_BLUETOOTH_BREDR_BB, BREDR_MAX_PAYLOAD, NULL,
+			    64) == PCAPNG_OK);
+	(void) pcapng_close(&handle);
+	short_write_call = 0;
+	CHECK(short_write_fired);
+
+	CHECK(read_capture(filename));
+	unlink_quietly(filename);
+	if (capture_len == 0)
+		return;
+
+	blk = find_block(BLOCK_TYPE_SECTION_HEADER, 0);
+	CHECK(blk < capture_len);
+	if (blk >= capture_len)
+		return;
+
+	/* The comment option is whole: its length, and all 12 bytes of its
+	   value, are the ones the caller gave. */
+	off = blk + 24;
+	end = blk + rd32(blk + 4) - 4;
+	while (off + 4 <= end) {
+		uint16_t code = rd16(off);
+		uint16_t len = rd16(off + 2);
+
+		if (code == OPT_ENDOFOPT)
+			break;
+		if (code == OPT_COMMENT) {
+			found = 1;
+			CHECK(len == sizeof(comment.text));
+			CHECK(off + 4 + len <= capture_len);
+			if (off + 4 + len <= capture_len)
+				CHECK(memcmp(&capture[off + 4], comment.text,
+					     sizeof(comment.text)) == 0);
+		}
+		off += 4 + 4 * ((len + 3u) / 4u);
+	}
+	CHECK(found);
+
+	/* The same cut, with nothing more accepted afterwards: the file cannot
+	   be written, and the caller is told. */
+	write_calls = 0;
+	short_write_call = 2;
+	short_write_bytes = 6;
+	short_write_fired = 0;
+	stop_writing_after_cut = 1;
+
+	unlink_quietly(filename);
+	CHECK(pcapng_create(&handle, filename,
+			    (const option_header *) &comment, 64,
+			    DLT_BLUETOOTH_BREDR_BB, BREDR_MAX_PAYLOAD, NULL,
+			    64) == PCAPNG_FILE_WRITE_ERROR);
+	short_write_call = 0;
+	stop_writing_after_cut = 0;
+	CHECK(short_write_fired);
+	unlink_quietly(filename);
+}
+
+/*
  * A write that cannot be completed must be reported, and only the bytes that
  * reached the file may be counted into the section length.
  */
@@ -2820,6 +2954,7 @@ int main(void)
 	test_header_padding_options();
 	test_padding_beyond_one_option();
 	test_section_option_limit();
+	test_section_option_short_write();
 	test_write_errors();
 
 	if (failures) {

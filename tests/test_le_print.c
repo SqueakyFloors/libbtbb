@@ -453,6 +453,30 @@ static void test_malformed_payloads_are_counted_not_printed(void)
 }
 
 /*
+ * A 16-bit Service UUID list whose length is not a whole number of UUIDs
+ * still carries the ones that come before the odd byte, so the dump prints
+ * them. The odd byte is counted, as the rest of a malformed payload is.
+ */
+static void test_odd_uuid16_list_prints_the_uuids_it_holds(void)
+{
+	char out[8192], err[1024];
+
+	reset_malformed_counts();
+
+	if (decode_and_capture(BAD_UUID16_PACKET, out, sizeof(out),
+			       err, sizeof(err)) != 0)
+		return;
+
+	/* three bytes of list: the UUID 180d, and one byte over */
+	CHECK_CONTAINS(out, "Type 03 (16-bit Service UUIDs)");
+	CHECK_CONTAINS(out, "\n           180d\n");
+	/* and no second value line, since the odd byte is not a UUID */
+	CHECK_LACKS(out, "180d\n           ");
+	CHECK_EQUALS(err, "");
+	check_count(LELL_MALFORMED_AD_FIELD_LENGTH, 1, "the odd byte");
+}
+
+/*
  * A caller that asks for verbose output gets the detail of each payload, on
  * stderr so that a dump on stdout holds nothing but the dump. No line calls
  * a malformed packet off the air an error.
@@ -814,6 +838,7 @@ int main(void)
 	test_tx_power_level_is_signed();
 	test_uuid16_advertising_data();
 	test_malformed_payloads_are_counted_not_printed();
+	test_odd_uuid16_list_prints_the_uuids_it_holds();
 	test_verbose_prints_the_detail();
 	test_counts_add_up_and_reset();
 	test_well_formed_values_keep_their_indent();

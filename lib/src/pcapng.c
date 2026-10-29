@@ -76,13 +76,37 @@ static void write_padding_options( void * block,
 	}
 }
 
+/* Write the whole of a buffer, however many calls that takes.
+
+   A write that stopped short carries on from where it got to, as one
+   interrupted by a signal does; one that wrote nothing at all would never
+   finish, so it is a failure. Taking a short write for a whole one would
+   leave a block in the file that no reader can walk, with nothing to say so.
+
+   Returns the number of bytes written, or -1 for a write that failed, which
+   is what the caller treats as an error. */
+static ssize_t write_all( int fd, const void * buf, size_t count )
+{
+	const uint8_t * bytes = (const uint8_t *) buf;
+	size_t written = 0;
+
+	while (written < count) {
+		ssize_t result = write( fd, &bytes[written], count - written );
+
+		if (result <= 0) {
+			return -1;
+		}
+		written += (size_t) result;
+	}
+	return (ssize_t) written;
+}
+
 /* Write 'count' zero bytes, which is how a new file is grown to the room its
    first two blocks are given: a whole page for each, so this is thousands of
    bytes. They go out a buffer at a time rather than a byte at a time, which
    is 4096 times fewer system calls for the same file.
 
-   Returns the number of bytes written, or -1 for a write that failed, which
-   is what the caller treats as an error. */
+   Returns the number of bytes written, or -1 for a write that failed. */
 #define ZERO_CHUNK 4096
 
 static ssize_t write_zeroes( int fd, size_t count )
@@ -92,19 +116,14 @@ static ssize_t write_zeroes( int fd, size_t count )
 
 	while (written < count) {
 		size_t chunk = count - written;
-		ssize_t result;
 
 		if (chunk > sizeof( ZEROES )) {
 			chunk = sizeof( ZEROES );
 		}
-		result = write( fd, ZEROES, chunk );
-		/* A write that stopped short carries on from where it got to,
-		   as one interrupted by a signal does; one that wrote nothing
-		   at all would never finish, so it is a failure. */
-		if (result <= 0) {
+		if (write_all( fd, ZEROES, chunk ) == -1) {
 			return -1;
 		}
-		written += (size_t) result;
+		written += chunk;
 	}
 	return (ssize_t) written;
 }
@@ -159,7 +178,7 @@ PCAPNG_RESULT pcapng_create( PCAPNG_HANDLE * handle,
 			.section_length = (uint64_t) -1,
 		};
 		handle->section_header_size = sizeof( shb );
-		result = write( handle->fd, &shb, sizeof( shb ) );
+		result = write_all( handle->fd, &shb, sizeof( shb ) );
 		/* write initial section options */
 		while ((result != -1) &&
 		       section_options &&
@@ -167,7 +186,7 @@ PCAPNG_RESULT pcapng_create( PCAPNG_HANDLE * handle,
 		       section_options->option_length) {
 			size_t paddedsz = 4*((section_options->option_length+3)/4);
 			zeroes = paddedsz - section_options->option_length;
-			result = write( handle->fd, section_options, 4+section_options->option_length );
+			result = write_all( handle->fd, section_options, 4+section_options->option_length );
 			if (result != -1) {
 				result = write_zeroes( handle->fd, zeroes );
 			}
@@ -213,7 +232,7 @@ PCAPNG_RESULT pcapng_create( PCAPNG_HANDLE * handle,
 				.snaplen = snaplen
 			};
 			handle->interface_description_size = sizeof( idb );
-			result = write( handle->fd, &idb, sizeof( idb ) );
+			result = write_all( handle->fd, &idb, sizeof( idb ) );
 
 			/* write interface options */
 			while ((result != -1) &&
@@ -222,7 +241,7 @@ PCAPNG_RESULT pcapng_create( PCAPNG_HANDLE * handle,
 			       interface_options->option_length) {
 				size_t paddedsz = 4*((interface_options->option_length+3)/4);
 				zeroes = paddedsz - interface_options->option_length;
-				result = write( handle->fd, interface_options, 4+interface_options->option_length );
+				result = write_all( handle->fd, interface_options, 4+interface_options->option_length );
 				if (result != -1) {
 					result = write_zeroes( handle->fd, zeroes );
 				}

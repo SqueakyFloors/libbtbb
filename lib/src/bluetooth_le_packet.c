@@ -637,20 +637,23 @@ static void _dump_scan_rsp_data(const uint8_t *buf, int len) {
 			case 0x03:
 				printf(" (16-bit Service UUIDs) \n");
 print16:
-				if ((sublen - 1) % 2 == 0) {
-					for (i = 0; i < sublen - 1; i += 2) {
-						/* assembled a byte at a time: the
-						 * buffer is not aligned for a
-						 * uint16_t, and the UUID is
-						 * little endian whatever the
-						 * host is */
-						uint16_t uuid = (uint16_t)
-							(buf[pos+2+i] << 8 |
-							 buf[pos+1+i]);
-						printf("           %04x\n", uuid);
-					}
+				/* Print the whole UUIDs the list holds. A
+				 * length that is not a whole number of them
+				 * still carries the ones before the odd
+				 * byte, and the note below says the byte is
+				 * there. */
+				for (i = 0; i + 2 <= sublen - 1; i += 2) {
+					/* assembled a byte at a time: the
+					 * buffer is not aligned for a
+					 * uint16_t, and the UUID is
+					 * little endian whatever the
+					 * host is */
+					uint16_t uuid = (uint16_t)
+						(buf[pos+2+i] << 8 |
+						 buf[pos+1+i]);
+					printf("           %04x\n", uuid);
 				}
-				else {
+				if ((sublen - 1) % 2 != 0) {
 					_malformed(LELL_MALFORMED_AD_FIELD_LENGTH,
 						   "note: wrong length (%d,"
 						   " must be divisible by"

@@ -21,6 +21,15 @@ NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
 SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 */
 
+/* libbtbb reaches uthash through btbb_uthash.h, which first sets the
+   settings uthash reads as it is included - among them what an allocation
+   failure does. A source that included this file directly would get uthash's
+   own defaults, where a failure ends the process with no message, so an
+   include that has not been through the wrapper is refused here. */
+#ifndef BTBB_UTHASH_SETTINGS
+#error "include btbb_uthash.h, which sets this library's uthash settings, rather than uthash.h"
+#endif
+
 #ifndef UTHASH_H
 #define UTHASH_H
 
