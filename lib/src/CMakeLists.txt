@@ -76,6 +76,14 @@ if( BUILD_STATIC_LIB )
     # Static library
     message(STATUS "Building static library")
     add_library(btbb-static STATIC ${c_sources})
+    # BTBB_STATIC is what tells btbb.h to ask for neither of the Windows
+    # __declspec declarations. Without it a public function here would be
+    # declared dllimport and defined in the same file, which MSVC refuses,
+    # and so would a program linking this library. PUBLIC, so anything in
+    # this build that links the target is compiled with it too; a program
+    # built elsewhere against the installed archive defines it itself, as
+    # the comment in btbb.h says.
+    target_compile_definitions(btbb-static PUBLIC BTBB_STATIC)
     set_target_properties(btbb-static PROPERTIES OUTPUT_NAME "btbb")
     set_target_properties(btbb-static PROPERTIES CLEAN_DIRECT_OUTPUT 1)
     install(TARGETS btbb-static

@@ -105,6 +105,8 @@ if(BUILD_TESTING)
     set_tests_properties(release_version PROPERTIES TIMEOUT 30)
 
     # Capture file writers, checked by reading the bytes back out of a file.
+    # Two of its cases call the generic PCAPNG writer, which is internal, so
+    # it compiles that translation unit as well as linking the library.
     add_executable(test_capture test_capture.c)
     target_include_directories(test_capture PRIVATE ${PROJECT_SOURCE_DIR}/lib/src)
     target_link_libraries(test_capture ${btbb_library})
