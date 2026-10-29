@@ -43,10 +43,30 @@
 static void *counted_malloc(size_t size);
 #define malloc counted_malloc
 
+/*
+ * calloc() is rewritten separately, with a refusal flag of its own and no
+ * counting, so that a test can fail an allocation made with calloc() -
+ * btbb_piconet_new()'s, and btbb_packet_new()'s in the other translation unit
+ * below - without disturbing the malloc() counts the tests below assert on.
+ */
+static void *refusable_calloc(size_t count, size_t size);
+#define calloc refusable_calloc
+
+/*
+ * free() is counted, so that a test can say an allocation was given back on a
+ * path where nothing else can see it. A block a failed function leaves behind
+ * is not always a leak a sanitizer reports: the pointer can still be sitting
+ * in a stack slot, which LeakSanitizer scans as a root.
+ */
+static void counted_free(void *block);
+#define free counted_free
+
 #include "bluetooth_packet.c"
 #include "bluetooth_piconet.c"
 
 #undef malloc
+#undef calloc
+#undef free
 
 #include "stream_capture.h"
 
@@ -54,6 +74,8 @@ static size_t largest_request;	/* bytes, since it was last reset */
 static int allocation_calls;	/* calls, since it was last reset */
 static int refuse_allocations;
 static int refuse_from;		/* refuse this call onward, 0 to refuse none */
+static int refuse_callocs;
+static int free_calls;		/* calls, since the program started */
 
 /*
  * The size each live allocation was asked for, so a test can ask how long the
@@ -102,6 +124,19 @@ static void *counted_malloc(size_t size)
 			REMEMBERED_ALLOCATIONS;
 	}
 	return block;
+}
+
+static void *refusable_calloc(size_t count, size_t size)
+{
+	if (refuse_callocs)
+		return NULL;
+	return calloc(count, size);
+}
+
+static void counted_free(void *block)
+{
+	free_calls++;
+	free(block);
 }
 
 static int failures = 0;
@@ -829,17 +864,18 @@ static uint8_t hec_for(uint16_t header_data, uint8_t uap)
 }
 
 /*
- * A BR/EDR packet as one reaches btbb_process_packet() while a piconet is
- * being followed: the access code for the piconet's LAP, the access code
- * trailer, and the 18 header bits each sent three times, which is the rate
- * 1/3 code of Vol 2, Part B, Section 7.4. Nothing is whitened, so the header
- * reads back as it was built whatever clock the decoder is given.
+ * A BR/EDR packet as one reaches btbb_process_packet(): the access code for
+ * the given LAP, the access code trailer, and the 18 header bits each sent
+ * three times, which is the rate 1/3 code of Vol 2, Part B, Section 7.4.
+ * Nothing is whitened, so the header reads back as it was built whatever
+ * clock the decoder is given.
  */
-static btbb_packet *followed_packet(uint16_t header_data, uint8_t hec,
-				    int length)
+static btbb_packet *packet_of_at_clock(uint32_t lap, uint8_t channel,
+				       uint16_t header_data, uint8_t hec,
+				       int length, int whiten_clock)
 {
 	char stream[400];
-	uint64_t syncword = btbb_gen_syncword(TEST_LAP);
+	uint64_t syncword = btbb_gen_syncword(lap);
 	uint32_t header = (uint32_t) header_data | ((uint32_t) hec << 10);
 	btbb_packet *pkt = NULL;
 	int i;
@@ -852,6 +888,15 @@ static btbb_packet *followed_packet(uint16_t header_data, uint8_t hec,
 	for (i = 0; i < 18; i++) {
 		char bit = (char) ((header >> i) & 1);
 
+		/* On air the header is whitened before it is encoded, with
+		 * the sequence the receive clock picks out, and the decoder
+		 * undoes it the other way round. Whitening here is what lets
+		 * UAP discovery tell one candidate clock from another: each
+		 * wrong clock reads a different header, and so a different
+		 * UAP, from the same symbols. */
+		if (whiten_clock >= 0)
+			bit ^= (char) WHITENING_DATA[
+				(INDICES[whiten_clock & 0x3f] + i) % 127];
 		stream[68 + i * 3] = bit;
 		stream[69 + i * 3] = bit;
 		stream[70 + i * 3] = bit;
@@ -861,13 +906,33 @@ static btbb_packet *followed_packet(uint16_t header_data, uint8_t hec,
 	for (i = 122; i < length; i++)
 		stream[i] = (char) (i & 1);
 	/* finding the access code is what gives the packet its LAP */
-	if (btbb_find_ac(stream, 1, TEST_LAP, 0, &pkt) != 0)
+	if (btbb_find_ac(stream, 1, lap, 0, &pkt) != 0)
 		return NULL;
 	if (pkt == NULL)
 		return NULL;
-	btbb_packet_set_data(pkt, stream, length, 0, 0);
-	btbb_packet_set_flag(pkt, BTBB_WHITENED, 0);
+	/* btbb_packet_set_data() is given the 312.5 us clock and keeps the
+	 * 625 us slot count, so the clock the header was whitened for is
+	 * handed over doubled */
+	btbb_packet_set_data(pkt, stream, length, channel,
+			     (whiten_clock >= 0) ?
+			     (uint32_t) (whiten_clock << 1) : 0);
+	btbb_packet_set_flag(pkt, BTBB_WHITENED, whiten_clock >= 0);
 	return pkt;
+}
+
+/* A packet whose header is not whitened, so it reads back as it was built
+ * whatever clock the decoder tries. */
+static btbb_packet *packet_of(uint32_t lap, uint8_t channel,
+			      uint16_t header_data, uint8_t hec, int length)
+{
+	return packet_of_at_clock(lap, channel, header_data, hec, length, -1);
+}
+
+/* The same packet, of the one piconet the tests above follow. */
+static btbb_packet *followed_packet(uint16_t header_data, uint8_t hec,
+				    int length)
+{
+	return packet_of(TEST_LAP, 0, header_data, hec, length);
 }
 
 /* An lt_addr of 1 and the packet type NULL, which has no payload to decode. */
@@ -1956,6 +2021,315 @@ static void test_a_refused_aliased_request_leaves_recovery_alone(void)
 	btbb_piconet_unref(pn);
 }
 
+/* Three LAPs, as a survey of several piconets hears them. */
+#define SURVEY_LAP_A 0x2a3b4c
+#define SURVEY_LAP_B 0x5d6e7f
+#define SURVEY_LAP_C 0x010203
+
+/* One packet of a LAP, on a channel, through the survey. The piconet
+ * argument is ignored in survey mode: the survey keeps its own. */
+static void survey_hears(uint32_t lap, uint8_t channel)
+{
+	btbb_packet *pkt = packet_of(lap, channel, FOLLOWED_HEADER,
+				     hec_for(FOLLOWED_HEADER, TEST_UAP), 122);
+
+	CHECK(pkt != NULL);
+	if (pkt == NULL)
+		return;
+	CHECK_EQ(0, btbb_process_packet(pkt, NULL));
+	btbb_packet_unref(pkt);
+}
+
+/* Empty the survey and leave survey mode, so the tests either side of these
+ * find the library as it was. The survey's reference to each piconet comes
+ * with the piconet, so the caller releases it. */
+static void survey_end(void)
+{
+	btbb_piconet *pn;
+
+	while ((pn = btbb_next_survey_result()) != NULL)
+		btbb_piconet_unref(pn);
+	survey_mode = 0;
+}
+
+/*
+ * A survey's results used to be reachable only through
+ * btbb_next_survey_result(), which takes each piconet out of the survey. So a
+ * tool surveying piconets could not read the UAP the survey had recovered for
+ * a LAP while the survey was still running: ubertooth-rx -z, whose whole job
+ * is finding addresses, wrote capture records with no reference address in
+ * them. btbb_survey_piconet() reads the live piconet and leaves it there.
+ */
+static void test_a_survey_piconet_is_read_without_being_removed(void)
+{
+	btbb_piconet *a, *b;
+
+	btbb_init_survey();
+	survey_hears(SURVEY_LAP_A, 10);
+	survey_hears(SURVEY_LAP_B, 20);
+
+	a = btbb_survey_piconet(SURVEY_LAP_A);
+	b = btbb_survey_piconet(SURVEY_LAP_B);
+	CHECK(a != NULL);
+	CHECK(b != NULL);
+	if ((a == NULL) || (b == NULL)) {
+		survey_end();
+		return;
+	}
+	CHECK(a != b);
+	CHECK_EQ(SURVEY_LAP_A, btbb_piconet_get_lap(a));
+	CHECK_EQ(SURVEY_LAP_B, btbb_piconet_get_lap(b));
+	/* each piconet holds the channels its own LAP was heard on */
+	CHECK_EQ(1, btbb_piconet_get_channel_seen(a, 10));
+	CHECK_EQ(0, btbb_piconet_get_channel_seen(a, 20));
+
+	/* reading it leaves it in the survey: the same piconet comes back */
+	CHECK(btbb_survey_piconet(SURVEY_LAP_A) == a);
+	/* the reference stays the survey's, which is what lets a caller read
+	 * a piconet and drop it without releasing the survey's copy */
+	CHECK_EQ(1, a->refcount);
+	CHECK(btbb_survey_piconet(SURVEY_LAP_A) == a);
+	CHECK_EQ(1, a->refcount);
+	/* and it is still the piconet the survey updates */
+	survey_hears(SURVEY_LAP_A, 30);
+	CHECK(btbb_survey_piconet(SURVEY_LAP_A) == a);
+	CHECK_EQ(1, btbb_piconet_get_channel_seen(a, 30));
+
+	/* the UAP the survey recovers for a LAP, which is what a caller
+	 * wanting to record a reference address is after, is readable while
+	 * the survey runs. It is set here through the survey's own lookup,
+	 * the one btbb_process_packet() uses, and read through the accessor */
+	btbb_piconet_set_uap(get_piconet(SURVEY_LAP_A), TEST_UAP);
+	CHECK_EQ(TEST_UAP,
+		 btbb_piconet_get_uap(btbb_survey_piconet(SURVEY_LAP_A)));
+
+	/* nothing was taken out of the survey along the way */
+	CHECK_EQ(2, HASH_COUNT(piconet_survey));
+	survey_end();
+}
+
+/* A LAP the survey has not heard has no piconet, and neither does any LAP
+ * before a survey starts or after its results have been read. */
+static void test_a_lap_the_survey_has_not_heard_has_no_piconet(void)
+{
+	/* whatever ran before this, the survey starts out empty here */
+	survey_end();
+	CHECK(btbb_survey_piconet(SURVEY_LAP_A) == NULL);
+
+	btbb_init_survey();
+	survey_hears(SURVEY_LAP_A, 10);
+	CHECK(btbb_survey_piconet(SURVEY_LAP_A) != NULL);
+	CHECK(btbb_survey_piconet(SURVEY_LAP_B) == NULL);
+
+	survey_end();
+	CHECK(btbb_survey_piconet(SURVEY_LAP_A) == NULL);
+}
+
+/*
+ * A piconet btbb_next_survey_result() hands out is gone from the survey. Its
+ * entry used to be freed while the hash table's buckets still pointed at it,
+ * so looking that LAP up again - which is what a survey carrying on after
+ * some of its results have been read does, for every further packet of that
+ * piconet - walked freed memory and handed back the released piconet.
+ */
+static void test_a_piconet_taken_out_of_the_survey_is_gone_from_it(void)
+{
+	static const uint32_t laps[3] = {
+		SURVEY_LAP_A, SURVEY_LAP_B, SURVEY_LAP_C
+	};
+	btbb_piconet *was[3];
+	btbb_piconet *taken, *fresh;
+	uint32_t taken_lap;
+	int i;
+
+	btbb_init_survey();
+	for (i = 0; i < 3; i++) {
+		survey_hears(laps[i], (uint8_t) (10 + i * 10));
+		was[i] = btbb_survey_piconet(laps[i]);
+		CHECK(was[i] != NULL);
+	}
+	CHECK_EQ(3, HASH_COUNT(piconet_survey));
+
+	taken = btbb_next_survey_result();
+	CHECK(taken != NULL);
+	if (taken == NULL) {
+		survey_end();
+		return;
+	}
+	taken_lap = btbb_piconet_get_lap(taken);
+	CHECK_EQ(2, HASH_COUNT(piconet_survey));
+	for (i = 0; i < 3; i++) {
+		if (was[i] == taken)
+			CHECK(btbb_survey_piconet(laps[i]) == NULL);
+		else
+			CHECK(btbb_survey_piconet(laps[i]) == was[i]);
+	}
+
+	/* a further packet of that LAP starts a new piconet, rather than
+	 * being written through the one that was released */
+	survey_hears(taken_lap, 40);
+	fresh = btbb_survey_piconet(taken_lap);
+	CHECK(fresh != NULL);
+	CHECK(fresh != taken);
+	CHECK_EQ(3, HASH_COUNT(piconet_survey));
+
+	btbb_piconet_unref(taken);
+	survey_end();
+}
+
+/*
+ * The case the accessor exists for: a UAP the survey worked out for itself,
+ * read back while the survey is still running. The survey is given packets of
+ * one LAP at clocks of its own choosing, each header whitened for the clock it
+ * arrives at, which is how discovery narrows its 64 candidate values for the
+ * clock of the first packet down to the one that agrees on a UAP.
+ */
+static void test_the_uap_the_survey_recovered_is_readable(void)
+{
+	/* Clocks far enough apart that each one picks a different whitening
+	 * sequence, as packets of a real piconet do. */
+	static const uint32_t clocks[8] = {
+		3, 11, 20, 29, 38, 47, 55, 62
+	};
+	const uint8_t uap = 0x5b;
+	btbb_piconet *pn;
+	char out[4096], err[4096];
+	int i;
+
+	survey_end();
+	btbb_init_survey();
+	if (capture_or_fail() != 0)
+		return;
+	for (i = 0; i < 8; i++) {
+		/* NULL and POLL packets of several devices of the piconet, as
+		 * an idle link carries. Two candidate clocks can agree on a
+		 * UAP for as long as every packet is identical, so the header
+		 * varies: a wrong clock reads a different type out of the
+		 * same symbols, and a type the decoder goes looking for a
+		 * payload for is what rules that clock out. */
+		uint16_t header = (uint16_t) ((i % 7 + 1) |
+					      (((i & 1) ? PACKET_TYPE_POLL :
+						PACKET_TYPE_NULL) << 3));
+		btbb_packet *pkt = packet_of_at_clock(
+			SURVEY_LAP_A, (uint8_t) (10 + i), header,
+			hec_for(header, uap), 122, (int) clocks[i]);
+
+		if (pkt == NULL) {
+			CHECK(pkt != NULL);
+			break;
+		}
+		CHECK_EQ(0, btbb_process_packet(pkt, NULL));
+		btbb_packet_unref(pkt);
+		pn = btbb_survey_piconet(SURVEY_LAP_A);
+		if ((pn != NULL) && btbb_piconet_get_flag(pn, BTBB_UAP_VALID))
+			break;
+	}
+	capture_stop(out, sizeof(out), err, sizeof(err));
+
+	pn = btbb_survey_piconet(SURVEY_LAP_A);
+	CHECK(pn != NULL);
+	if (pn == NULL) {
+		survey_end();
+		return;
+	}
+	/* the survey found it, and said so on stderr */
+	CHECK(btbb_piconet_get_flag(pn, BTBB_UAP_VALID));
+	CHECK_EQ(uap, btbb_piconet_get_uap(pn));
+	CHECK(strstr(err, "UAP = 0x5b found after") != NULL);
+	CHECK_EQ(0, strlen(out));
+	if (failures != 0)
+		printf("stdout was: %s\nstderr was: %s\n", out, err);
+
+	/* and it is still the survey's: reading it took nothing out */
+	CHECK_EQ(1, HASH_COUNT(piconet_survey));
+	CHECK(btbb_survey_piconet(SURVEY_LAP_A) == pn);
+	survey_end();
+}
+
+/*
+ * The survey gives back everything it took. Reading the last piconet out of it
+ * frees that LAP's entry and, with it, the hash table and the bucket array the
+ * entry was the last one in. The walk this replaces freed the entry on its
+ * own, so every survey read to the end left its table behind.
+ */
+static void test_the_last_result_takes_the_survey_table_with_it(void)
+{
+	btbb_piconet *pn;
+	int frees;
+
+	survey_end();
+	btbb_init_survey();
+	survey_hears(SURVEY_LAP_A, 10);
+	CHECK_EQ(1, HASH_COUNT(piconet_survey));
+
+	frees = free_calls;
+	pn = btbb_next_survey_result();
+	frees = free_calls - frees;
+	CHECK(pn != NULL);
+	CHECK(piconet_survey == NULL);
+	/* the entry, the table, and the bucket array */
+	CHECK(frees >= 3);
+	if (pn != NULL)
+		btbb_piconet_unref(pn);
+	survey_mode = 0;
+}
+
+/*
+ * A survey that cannot make room for a piconet drops the packet. Both
+ * allocations it takes are failed in turn: the survey's own entry for the LAP,
+ * and the piconet itself, which is the larger of the two and so the one a
+ * process short of memory fails first. Either used to be written through.
+ */
+static void test_a_survey_that_cannot_allocate_drops_the_packet(void)
+{
+	/* built before allocations are refused, since finding the access
+	 * code allocates the packet */
+	btbb_packet *pkt = packet_of(SURVEY_LAP_A, 10, FOLLOWED_HEADER,
+				     hec_for(FOLLOWED_HEADER, TEST_UAP), 122);
+	int round;
+
+	CHECK(pkt != NULL);
+	if (pkt == NULL)
+		return;
+	btbb_init_survey();
+	for (round = 0; round < 2; round++) {
+		char out[4096], err[4096];
+		int frees;
+
+		if (capture_or_fail() != 0)
+			break;
+		if (round == 0)
+			refuse_allocations = 1;	/* the survey's entry */
+		else
+			refuse_callocs = 1;	/* the piconet */
+		frees = free_calls;
+		CHECK_EQ(0, btbb_process_packet(pkt, NULL));
+		frees = free_calls - frees;
+		refuse_allocations = 0;
+		refuse_callocs = 0;
+		capture_stop(out, sizeof(out), err, sizeof(err));
+
+		/* where the entry was made and the piconet was not, the entry
+		 * is given back: it is reachable from nothing afterwards, and
+		 * a pointer left in a stack slot can keep a sanitizer from
+		 * calling it a leak */
+		CHECK_EQ(round, frees);
+		CHECK(btbb_survey_piconet(SURVEY_LAP_A) == NULL);
+		CHECK_EQ(0, HASH_COUNT(piconet_survey));
+		/* either failure says so, and on stderr */
+		CHECK_EQ(0, strlen(out));
+		CHECK(strstr(err, (round == 0) ?
+			     "could not allocate a survey entry" :
+			     "could not allocate a piconet") != NULL);
+	}
+	btbb_packet_unref(pkt);
+
+	/* and the next packet, with room again, is surveyed */
+	survey_hears(SURVEY_LAP_A, 10);
+	CHECK(btbb_survey_piconet(SURVEY_LAP_A) != NULL);
+	survey_end();
+}
+
 int main(void)
 {
 	test_afh_candidates_fit_their_list();
@@ -1997,6 +2371,12 @@ int main(void)
 	test_dropped_clocks_are_counted_and_reported_once();
 	test_the_quiet_after_the_note_covers_both_kinds();
 	test_a_refused_aliased_request_leaves_recovery_alone();
+	test_a_survey_piconet_is_read_without_being_removed();
+	test_a_lap_the_survey_has_not_heard_has_no_piconet();
+	test_a_piconet_taken_out_of_the_survey_is_gone_from_it();
+	test_the_uap_the_survey_recovered_is_readable();
+	test_the_last_result_takes_the_survey_table_with_it();
+	test_a_survey_that_cannot_allocate_drops_the_packet();
 
 	if (failures != 0) {
 		printf("%d check(s) failed\n", failures);

@@ -236,6 +236,8 @@ typedef struct pkt_queue {
 
 typedef struct btbb_piconet btbb_piconet;
 
+/* A piconet with one reference held, or NULL where it cannot be
+ * allocated. */
 btbb_piconet *btbb_piconet_new(void);
 void btbb_piconet_ref(btbb_piconet *pn);
 void btbb_piconet_unref(btbb_piconet *pn);
@@ -345,9 +347,35 @@ int btbb_init_hop_reversal(int aliased, btbb_piconet *pn);
 /* narrow a list of candidate clock values based on all observed hops */
 int btbb_winnow(btbb_piconet *pn);
 
+/* Survey every piconet heard instead of one given piconet.
+ * btbb_process_packet() then keeps a piconet of its own per LAP it
+ * sees, and recovers each one's UAP, ignoring the piconet it is
+ * given. The mode belongs to the library rather than to a piconet or a
+ * packet, so it is on for everything the process decodes from here on,
+ * and there is no call that turns it off again. Always returns 0. */
 int btbb_init_survey(void);
-/* Destructively iterate over survey results - optionally remove elements */
+
+/* Take the next piconet out of the survey, or NULL once none is left.
+ * The piconet is no longer in the survey and the caller owns the
+ * reference, so this empties the survey as it walks it. To read a
+ * piconet while the survey is still running, use the accessor below. */
 btbb_piconet *btbb_next_survey_result(void);
+
+/* The piconet the survey keeps for this LAP, or NULL where the survey
+ * holds none: a LAP it has not heard, or one already taken out by
+ * btbb_next_survey_result(). The piconet stays in the survey and goes
+ * on being updated as packets arrive.
+ *
+ * This is how a tool reads what the survey has recovered for a LAP -
+ * the UAP, for a capture record's reference address - without taking
+ * the piconet out of the survey. The UAP is only the piconet's once
+ * BTBB_UAP_VALID is set; before that btbb_piconet_get_uap() reads 0.
+ *
+ * The reference belongs to the survey, so the pointer is good until
+ * that piconet is taken out of the survey and released. A caller that
+ * wants to keep it longer takes a reference of its own with
+ * btbb_piconet_ref(); one that does not must not unref it. */
+btbb_piconet *btbb_survey_piconet(uint32_t lap);
 
 typedef struct btbb_pcapng_handle btbb_pcapng_handle;
 /* create a PCAPNG file for BREDR captures */
