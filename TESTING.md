@@ -5,7 +5,7 @@ and other projects for many years. It came with a few test programs, from 2012
 and 2015; that is typical for a volunteer project of this size and scope. This
 fork adds to that foundation with a test suite in the normal build.
 
-There are now 20 tests, and five more where the compiler can build a fuzz
+There are now 21 tests, and five more where the compiler can build a fuzz
 target, driven in large part by the Bluetooth Core
 Specification's own published sample data, and they run on every push and pull
 request on Linux and macOS, plain and under AddressSanitizer and
