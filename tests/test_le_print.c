@@ -423,7 +423,8 @@ static void check_count(lell_malformed_kind kind, uint64_t want,
 /*
  * Malformed advertising data is ordinary on the air - a ten-second capture
  * on a busy bench holds hundreds of these - so the decode counts them and
- * says nothing per payload. The dump on stdout is unchanged.
+ * says nothing per payload. The counting leaves the dump on stdout as it
+ * was.
  */
 static void test_malformed_payloads_are_counted_not_printed(void)
 {
@@ -452,28 +453,68 @@ static void test_malformed_payloads_are_counted_not_printed(void)
 	}
 }
 
+/* A Service UUID list whose length is not a whole number of UUIDs. Each
+ * holds more than one whole UUID, so a loop reading one element too far
+ * shows up as a value line too many. */
+static const uint8_t ODD_UUID16_LIST_PACKET[MAX_LE_SYMBOLS] = {
+	0xd6, 0xbe, 0x89, 0x8e,
+	0x00,					/* ADV_IND */
+	13,					/* 6 + 7 bytes */
+	0x66, 0x55, 0x44, 0x33, 0x22, 0x11,	/* AdvA */
+	0x06, 0x03, 0x0d, 0x18, 0x0f, 0x18,	/* 16-bit UUIDs, 5 bytes: */
+	0x0f,					/* two of them and a byte over */
+	0xde, 0xad, 0xbe,			/* CRC, unchecked */
+};
+
+static const uint8_t ODD_UUID128_LIST_PACKET[MAX_LE_SYMBOLS] = {
+	0xd6, 0xbe, 0x89, 0x8e,
+	0x00,					/* ADV_IND */
+	28,					/* 6 + 22 bytes */
+	0x66, 0x55, 0x44, 0x33, 0x22, 0x11,	/* AdvA */
+	0x15, 0x07,				/* 128-bit UUIDs, 20 bytes: */
+	0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07,
+	0x08, 0x09, 0x0a, 0x0b, 0x0c, 0x0d, 0x0e, 0x0f,	/* one of them */
+	0x10, 0x11, 0x12, 0x13,			/* and four bytes over */
+	0xde, 0xad, 0xbe,			/* CRC, unchecked */
+};
+
 /*
- * A 16-bit Service UUID list whose length is not a whole number of UUIDs
- * still carries the ones that come before the odd byte, so the dump prints
- * them. The odd byte is counted, as the rest of a malformed payload is.
+ * A Service UUID list whose length is not a whole number of UUIDs still
+ * carries the ones that come before the bytes left over, so the dump prints
+ * those and nothing else. The leftover bytes are counted, as the rest of a
+ * malformed payload is.
  */
-static void test_odd_uuid16_list_prints_the_uuids_it_holds(void)
+static void test_odd_uuid_lists_print_the_uuids_they_hold(void)
 {
 	char out[8192], err[1024];
 
 	reset_malformed_counts();
 
-	if (decode_and_capture(BAD_UUID16_PACKET, out, sizeof(out),
+	if (decode_and_capture(ODD_UUID16_LIST_PACKET, out, sizeof(out),
 			       err, sizeof(err)) != 0)
 		return;
 
-	/* three bytes of list: the UUID 180d, and one byte over */
+	/* five bytes of list: the UUIDs 180d and 180f, and one byte over */
 	CHECK_CONTAINS(out, "Type 03 (16-bit Service UUIDs)");
-	CHECK_CONTAINS(out, "\n           180d\n");
-	/* and no second value line, since the odd byte is not a UUID */
-	CHECK_LACKS(out, "180d\n           ");
+	CHECK_CONTAINS(out, "\n           180d\n           180f\n");
+	/* and no third value line, since one byte is not a UUID */
+	CHECK_LACKS(out, "180f\n           ");
 	CHECK_EQUALS(err, "");
 	check_count(LELL_MALFORMED_AD_FIELD_LENGTH, 1, "the odd byte");
+
+	reset_malformed_counts();
+
+	if (decode_and_capture(ODD_UUID128_LIST_PACKET, out, sizeof(out),
+			       err, sizeof(err)) != 0)
+		return;
+
+	/* 20 bytes of list: one UUID, and four bytes over */
+	CHECK_CONTAINS(out, "Type 07 (128-bit Service UUIDs)");
+	CHECK_CONTAINS(out,
+		       "\n           0f0e0d0c-0b0a-0908-0706-050403020100\n");
+	CHECK_LACKS(out, "050403020100\n           ");
+	CHECK_EQUALS(err, "");
+	check_count(LELL_MALFORMED_AD_FIELD_LENGTH, 1, "the four bytes over");
 }
 
 /*
@@ -838,7 +879,7 @@ int main(void)
 	test_tx_power_level_is_signed();
 	test_uuid16_advertising_data();
 	test_malformed_payloads_are_counted_not_printed();
-	test_odd_uuid16_list_prints_the_uuids_it_holds();
+	test_odd_uuid_lists_print_the_uuids_they_hold();
 	test_verbose_prints_the_detail();
 	test_counts_add_up_and_reset();
 	test_well_formed_values_keep_their_indent();

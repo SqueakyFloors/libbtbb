@@ -44,13 +44,17 @@
 
 /* A write() the writer can be made to stop short, which is what a signal or
  * a nearly full disk does. The compiled-in copy of pcapng.c below has its
- * writes sent here; this file reaches the real write() through
- * real_write(), which is defined before the macro is.
+ * writes sent here; this file reaches the real write() through real_write(),
+ * which is defined before the macro is. <unistd.h> is included above, before
+ * the macro, so that the declaration of write() is not rewritten into one of
+ * test_write().
  *
- * With short_write_call at 0 nothing is injected, so every other case in
- * this file writes as it always did. */
-static unsigned write_calls;		/* writes the copy below has made */
-static unsigned short_write_call;	/* which one to cut short, 0 for none */
+ * The write to cut short is picked out by the option code it begins with,
+ * rather than by its place in the order, so a change to the order of the
+ * writer's calls cannot leave the case passing without cutting the option.
+ * With short_write_option negative nothing is injected, so every other case
+ * in this file writes as it always did. */
+static int short_write_option = -1;	/* option code to cut, -1 for none */
 static size_t short_write_bytes;	/* how much of it to let through */
 static int short_write_fired;		/* whether the cut really happened */
 static int stop_writing_after_cut;	/* later writes write nothing at all */
@@ -62,8 +66,13 @@ static ssize_t real_write(int fd, const void *buf, size_t count)
 
 static ssize_t test_write(int fd, const void *buf, size_t count)
 {
-	++write_calls;
-	if (write_calls == short_write_call && count > short_write_bytes) {
+	const unsigned char *bytes = buf;
+
+	if (short_write_option >= 0 && count > short_write_bytes &&
+	    count >= 2 &&
+	    bytes[0] == (short_write_option & 0xff) &&
+	    bytes[1] == ((short_write_option >> 8) & 0xff)) {
+		short_write_option = -1;
 		short_write_fired = 1;
 		return real_write(fd, buf, short_write_bytes);
 	}
@@ -2693,11 +2702,9 @@ static void test_section_option_short_write(void)
 	comment.header.option_length = sizeof(comment.text);
 	memcpy(comment.text, "short write", sizeof(comment.text));
 
-	/* The option body is the second write the writer makes, after the
-	   section header block itself. Let 6 of its 16 bytes through, which
-	   leaves it cut in the middle of its value. */
-	write_calls = 0;
-	short_write_call = 2;
+	/* Let 6 of the option's 16 bytes through, which leaves it cut in the
+	   middle of its value. */
+	short_write_option = OPT_COMMENT;
 	short_write_bytes = 6;
 	short_write_fired = 0;
 	stop_writing_after_cut = 0;
@@ -2708,7 +2715,7 @@ static void test_section_option_short_write(void)
 			    DLT_BLUETOOTH_BREDR_BB, BREDR_MAX_PAYLOAD, NULL,
 			    64) == PCAPNG_OK);
 	(void) pcapng_close(&handle);
-	short_write_call = 0;
+	short_write_option = -1;
 	CHECK(short_write_fired);
 
 	CHECK(read_capture(filename));
@@ -2744,9 +2751,9 @@ static void test_section_option_short_write(void)
 	CHECK(found);
 
 	/* The same cut, with nothing more accepted afterwards: the file cannot
-	   be written, and the caller is told. */
-	write_calls = 0;
-	short_write_call = 2;
+	   be written, the caller is told, and the writer gives up rather than
+	   asking for the rest of the option forever. */
+	short_write_option = OPT_COMMENT;
 	short_write_bytes = 6;
 	short_write_fired = 0;
 	stop_writing_after_cut = 1;
@@ -2756,9 +2763,10 @@ static void test_section_option_short_write(void)
 			    (const option_header *) &comment, 64,
 			    DLT_BLUETOOTH_BREDR_BB, BREDR_MAX_PAYLOAD, NULL,
 			    64) == PCAPNG_FILE_WRITE_ERROR);
-	short_write_call = 0;
+	short_write_option = -1;
 	stop_writing_after_cut = 0;
 	CHECK(short_write_fired);
+	short_write_fired = 0;
 	unlink_quietly(filename);
 }
 

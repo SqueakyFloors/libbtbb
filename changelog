@@ -16,8 +16,9 @@ libbtbb (2020-12-R1+fork5) unstable; urgency=low
     16-bit service UUIDs whose length is not a whole number of them is
     counted with the rest, where it used to be passed over in silence, and
     the dump prints the whole UUIDs such a list does hold rather than
-    dropping all of them.
-    Nothing the dump writes to standard output changes.
+    dropping all of them, as it now does for a list of 128-bit UUIDs whose
+    length is not a whole number of them either. Nothing else the dump writes
+    to standard output changes.
   * A capture file in pcapng format is created in a few milliseconds rather
     than a few hundred. The file reserves a page for its section header block
     and another for its interface description, and it filled both by writing

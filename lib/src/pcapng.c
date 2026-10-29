@@ -78,10 +78,11 @@ static void write_padding_options( void * block,
 
 /* Write the whole of a buffer, however many calls that takes.
 
-   A write that stopped short carries on from where it got to, as one
-   interrupted by a signal does; one that wrote nothing at all would never
-   finish, so it is a failure. Taking a short write for a whole one would
-   leave a block in the file that no reader can walk, with nothing to say so.
+   A write that stopped short carries on from where it got to. One that wrote
+   nothing at all would never finish, so it is a failure, which is also how a
+   write that returned an error is treated. Taking a short write for a whole
+   one would leave a block in the file that no reader can walk, with nothing
+   to say so.
 
    Returns the number of bytes written, or -1 for a write that failed, which
    is what the caller treats as an error. */
