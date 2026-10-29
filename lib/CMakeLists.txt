@@ -75,6 +75,14 @@ set(PC_PREFIX "\${pcfiledir}/${pc_prefix_up}")
 if(IS_ABSOLUTE "${BTBB_INSTALL_LIBDIR}")
 	set(PC_PREFIX "${CMAKE_INSTALL_PREFIX}")
 	set(PC_LIBDIR "${BTBB_INSTALL_LIBDIR}")
+	# Such an install cannot be staged somewhere else and still be found,
+	# which is worth saying while the directories are being chosen: the file
+	# lands outside the prefix, so it has no way to tell that the prefix has
+	# moved, and the header it names would be the one at the old place.
+	message(STATUS
+		"libbtbb.pc will name ${CMAKE_INSTALL_PREFIX} as the prefix, "
+		"because an absolute library directory has no relation to it: "
+		"an install staged elsewhere with --prefix needs its own configure")
 else()
 	set(PC_LIBDIR "\${prefix}/${BTBB_INSTALL_LIBDIR}")
 endif()
