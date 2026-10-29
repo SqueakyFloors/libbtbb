@@ -41,7 +41,9 @@
  * malloc()'s own declaration.
  */
 static void *counted_malloc(size_t size);
+static void *counted_calloc(size_t count, size_t size);
 #define malloc counted_malloc
+#define calloc counted_calloc
 
 /*
  * calloc() is rewritten separately, with a refusal flag of its own and no
@@ -607,6 +609,69 @@ static void test_a_uap_with_its_top_bit_set(void)
 	CHECK_EQ(same->e, pn->e);
 	btbb_piconet_unref(pn);
 	btbb_piconet_unref(same);
+}
+
+/*
+ * An allocation the library cannot make is reported, rather than written
+ * through: every one of these used to be a crash on a host out of memory.
+ *
+ * The access code error correction table is the one with a choice in it, and
+ * it is thrown away whole. Half a table has no sign on it, and the sync word
+ * search built on it would quietly stop putting right the error patterns the
+ * missing entries describe, so btbb_init() says it could not do what it was
+ * asked and leaves no table behind.
+ */
+static void test_a_failed_allocation_is_reported(void)
+{
+	btbb_packet *pkt = btbb_packet_new();
+	char block[15];
+	char out[4096], err[4096];
+
+	CHECK(pkt != NULL);
+	if (pkt == NULL)
+		return;
+	memset(block, 0, sizeof(block));
+
+	/* The streams are captured around btbb_init() alone, which is the
+	 * only one of these that says anything. A capture held across the
+	 * rest would swallow the report of whichever check failed. */
+	if (capture_or_fail() != 0) {
+		btbb_packet_unref(pkt);
+		return;
+	}
+	refuse_allocations = 1;
+	CHECK(syndrome_map == NULL);
+	CHECK_EQ(-1, btbb_init(2));
+	refuse_allocations = 0;
+	capture_stop(out, sizeof(out), err, sizeof(err));
+
+	/* the error correction table, with nothing of it left behind */
+	CHECK(syndrome_map == NULL);
+	CHECK(strstr(err, "no memory for the access code") != NULL);
+	CHECK_EQ(0, strlen(out));
+
+	refuse_allocations = 1;
+	refuse_callocs = 1;
+
+	/* a piconet, and a survey piconet made on demand */
+	CHECK(btbb_piconet_new() == NULL);
+	CHECK(get_piconet(TEST_LAP) == NULL);
+
+	/* the rate 2/3 FEC decoder, whose callers already report no payload
+	 * for a block they could not put right */
+	CHECK(unfec23(block, 10, NULL) == NULL);
+
+	/* the buffer the tun format is built in */
+	CHECK(tun_format(pkt) == NULL);
+
+	refuse_allocations = 0;
+	refuse_callocs = 0;
+
+	/* and the table is built once there is memory for it */
+	CHECK_EQ(0, btbb_init(2));
+	CHECK(syndrome_map != NULL);
+
+	btbb_packet_unref(pkt);
 }
 
 /*
@@ -2332,6 +2397,8 @@ static void test_a_survey_that_cannot_allocate_drops_the_packet(void)
 
 int main(void)
 {
+	/* first, while the error correction table has not been built yet */
+	test_a_failed_allocation_is_reported();
 	test_afh_candidates_fit_their_list();
 	test_first_hop_alone_does_not_look_like_afh();
 	test_two_hops_on_one_channel_look_like_afh();
