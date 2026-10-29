@@ -36,22 +36,48 @@ if(NOT MSVC)
 endif()
 
 # Where the library, the header and libbtbb.pc are installed, under
-# CMAKE_INSTALL_PREFIX. GNUInstallDirs works out the directory this system
-# keeps libraries in: lib on macOS and under /usr/local, lib64 on a 64-bit
-# Fedora, RHEL or SUSE, and lib/<triplet> where the prefix is /usr on a
-# multiarch Debian or Ubuntu. LIB_SUFFIX, the older way of asking for the
-# same thing, still decides where it is set, so a build command that passes
-# it installs where it always did; it names the library's directory only, and
-# the header follows CMAKE_INSTALL_INCLUDEDIR either way.
-if(DEFINED LIB_SUFFIX)
+# CMAKE_INSTALL_PREFIX unless one of them is an absolute path. GNUInstallDirs
+# works out the directory this system keeps libraries in: lib/<triplet> where
+# the prefix is /usr on a multiarch Debian or Ubuntu, lib64 on most other
+# 64-bit Linux systems, and lib on macOS, on Arch and Alpine, and for a conda
+# prefix. CMAKE_INSTALL_LIBDIR and CMAKE_INSTALL_INCLUDEDIR choose them.
+#
+# LIB_SUFFIX, the older way of asking for the same thing, still decides where
+# it is set to something, so a build command that passes it installs where it
+# always did. It names the library's directory only, and the header follows
+# CMAKE_INSTALL_INCLUDEDIR either way. An empty LIB_SUFFIX asks for no
+# suffix, which says nothing about which directory is wanted, and leaves
+# CMAKE_INSTALL_LIBDIR in charge rather than quietly turning it into lib.
+if(LIB_SUFFIX)
 	set(BTBB_INSTALL_LIBDIR lib${LIB_SUFFIX})
 else()
 	set(BTBB_INSTALL_LIBDIR ${CMAKE_INSTALL_LIBDIR})
 endif()
 set(BTBB_INSTALL_INCLUDEDIR ${CMAKE_INSTALL_INCLUDEDIR})
+# A trailing slash would be carried into libbtbb.pc and into the ".." walk
+# back out of the pkgconfig directory below, where it reads as a directory of
+# its own.
+string(REGEX REPLACE "/+$" "" BTBB_INSTALL_LIBDIR "${BTBB_INSTALL_LIBDIR}")
+string(REGEX REPLACE "/+$" "" BTBB_INSTALL_INCLUDEDIR "${BTBB_INSTALL_INCLUDEDIR}")
+
+# What this build will install where, said once: a packager who set one of
+# these reads it back, and a plain build on a lib64 system sees why the
+# library is not going where the last one did.
+set(btbb_under " under ${CMAKE_INSTALL_PREFIX}")
+if(IS_ABSOLUTE "${BTBB_INSTALL_LIBDIR}" OR IS_ABSOLUTE "${BTBB_INSTALL_INCLUDEDIR}")
+	set(btbb_under "")
+endif()
 message(STATUS
 	"Installing the library to ${BTBB_INSTALL_LIBDIR} and the header to "
-	"${BTBB_INSTALL_INCLUDEDIR}, under ${CMAKE_INSTALL_PREFIX}")
+	"${BTBB_INSTALL_INCLUDEDIR}${btbb_under}")
+# Where LIB_SUFFIX overrides a CMAKE_INSTALL_LIBDIR that asks for somewhere
+# else, which of the two was followed is worth saying: a build command can
+# carry both, one of them from the system rather than from its author.
+if(LIB_SUFFIX AND NOT "${CMAKE_INSTALL_LIBDIR}" STREQUAL "${BTBB_INSTALL_LIBDIR}")
+	message(STATUS
+		"LIB_SUFFIX asks for ${BTBB_INSTALL_LIBDIR}, which is used rather "
+		"than the ${CMAKE_INSTALL_LIBDIR} of CMAKE_INSTALL_LIBDIR")
+endif()
 
 add_subdirectory(src)
 

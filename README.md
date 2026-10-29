@@ -71,10 +71,17 @@ works out:
 
 | System | Library directory under the prefix |
 |---|---|
-| Debian or Ubuntu, prefix `/usr` | `lib/x86_64-linux-gnu`, or the triplet of the architecture being built |
-| Debian or Ubuntu, any other prefix | `lib` |
-| 64-bit Fedora, RHEL or SUSE | `lib64`, whatever the prefix |
-| macOS, Arch, everything else | `lib` |
+| Debian, Ubuntu and the like, prefix `/usr` | `lib/x86_64-linux-gnu`, or the triplet of the architecture being built |
+| Debian, Ubuntu and the like, any other prefix | `lib` |
+| Other 64-bit Linux: Fedora, RHEL, SUSE, Gentoo and the rest | `lib64`, whatever the prefix |
+| Arch, Alpine, a conda prefix, macOS, 32-bit Linux | `lib` |
+
+The rule is CMake's own and has changed a little between CMake versions, so
+the configure step prints the two directories it settled on:
+
+```
+-- Installing the library to lib64 and the header to include, under /usr/local
+```
 
 To choose the directory yourself, set it:
 ```
@@ -82,11 +89,14 @@ $ cmake -DCMAKE_INSTALL_LIBDIR=lib64 ..
 $ cmake -DCMAKE_INSTALL_INCLUDEDIR=include/libbtbb ..
 ```
 
-`-DLIB_SUFFIX=` is the older way of asking for the same thing, and still
-decides where it is given: `-DLIB_SUFFIX=64` installs the library to `lib64`
-and `-DLIB_SUFFIX=/x86_64-linux-gnu` to `lib/x86_64-linux-gnu`, whatever
-`CMAKE_INSTALL_LIBDIR` says. It names the library's directory only; the
-header follows `CMAKE_INSTALL_INCLUDEDIR` either way.
+`LIB_SUFFIX` is the older way of asking for the same thing, and still decides
+where it is set to something: `-DLIB_SUFFIX=64` installs the library to
+`lib64` and `-DLIB_SUFFIX=/x86_64-linux-gnu` to `lib/x86_64-linux-gnu`,
+whatever `CMAKE_INSTALL_LIBDIR` says, and the configure step says which of
+the two it followed. It names the library's directory only; the header
+follows `CMAKE_INSTALL_INCLUDEDIR` either way. An empty `-DLIB_SUFFIX=` asks
+for no suffix, which says nothing about which directory is wanted, so
+`CMAKE_INSTALL_LIBDIR` stays in charge there.
 
 The configure step reports the two directories it will use, and `libbtbb.pc`
 names them, so `pkg-config --libs libbtbb` and `pkg-config --cflags libbtbb`

@@ -312,6 +312,23 @@ if(installed)
 	endif()
 endif()
 
+# An empty LIB_SUFFIX asks for no suffix, which says nothing about which
+# directory is wanted: the standard setting stays in charge rather than being
+# turned into lib, so a build command carrying both still installs where
+# CMAKE_INSTALL_LIBDIR says.
+set(empty_build ${BINARY_DIR}/empty-suffix-build)
+set(empty_install ${BINARY_DIR}/empty-suffix-install)
+build_and_install("an empty LIB_SUFFIX with CMAKE_INSTALL_LIBDIR"
+	${empty_build} ${empty_install}
+	-DLIB_SUFFIX=
+	-DCMAKE_INSTALL_LIBDIR=libdir-chosen)
+if(installed)
+	check_layout(${empty_install} libdir-chosen include
+		"installed with an empty LIB_SUFFIX and CMAKE_INSTALL_LIBDIR set")
+	check_installed_pc(${empty_install}
+		"installed with an empty LIB_SUFFIX and CMAKE_INSTALL_LIBDIR set")
+endif()
+
 # A libdir given as an absolute path, which GNUInstallDirs allows and a
 # packager can hand to any CMake project: the library goes exactly there
 # rather than under the prefix, and libbtbb.pc cannot name it relative to a

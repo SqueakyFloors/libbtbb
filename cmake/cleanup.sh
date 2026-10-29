@@ -30,17 +30,24 @@ else
 fi
 
 # A library can be in lib, in lib64, or a directory deeper than that in a
-# multiarch lib/<triplet>, so all three are searched. A directory that does
-# not exist is skipped rather than reported by find as missing.
+# multiarch lib/<triplet>, so all three are searched. The pkg-config file
+# goes with it: one left behind from an install in another directory hands a
+# build a -L for a directory with no library in it. A directory that does not
+# exist is skipped rather than reported by find as missing.
 for dir in $INSTALL_DIRS; do
 	for libdir in ${dir}/lib ${dir}/lib64; do
 		[ -d "$libdir" ] || continue
 		for lib in $LIBS; do
-			$FIND ${libdir} -maxdepth 2 -name "lib$lib.so*" $EXEC
+			$FIND ${libdir} -maxdepth 2 \
+				\( -name "lib$lib.so*" -o -name "lib$lib.a" \
+				   -o -name "lib$lib*.dylib" \) $EXEC
+			$FIND ${libdir} -maxdepth 3 -path "*/pkgconfig/lib$lib.pc" $EXEC
 		done
 	done
+	# Two directories deep for the header as well: an install can be given
+	# a directory of its own for it, as include/libbtbb.
 	for header in $HEADERS; do
-		$FIND ${dir}/include -maxdepth 1 -name "$header" $EXEC
+		$FIND ${dir}/include -maxdepth 2 -name "$header" $EXEC
 	done
 	$FIND ${dir}/bin -maxdepth 1 -name "ubertooth-*" $EXEC
 done
