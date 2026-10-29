@@ -1,4 +1,21 @@
 libbtbb (2020-12-R1+fork5) unstable; urgency=low
+  * The library is installed to the directory the system keeps libraries in.
+    It went to lib under the prefix unless a build command asked for
+    somewhere else with LIB_SUFFIX, so a 64-bit build on most Linux systems
+    other than Debian and Ubuntu put it in lib while everything else on the
+    machine looks in lib64, and a Debian or Ubuntu build into /usr put it in
+    /usr/lib rather than the multiarch /usr/lib/<triplet>; a program then
+    linked it only where the compiler's own search path covered for it. The
+    library's directory and the header's now come from GNUInstallDirs, and
+    CMAKE_INSTALL_LIBDIR and CMAKE_INSTALL_INCLUDEDIR choose them. LIB_SUFFIX
+    still decides where it is set to something, so a build command that
+    passes it installs where it always did, and the configure step says which
+    of the two it followed. libbtbb.pc names the directories used. The
+    cleanup script looks in lib64 and in a multiarch directory as well as in
+    lib, and takes the pkg-config file away with the library it names; it
+    also finds a static archive and a macOS .dylib, where it used to look for
+    a .so and nothing else, and knows about btbb.h, the header this library
+    installs, which it did not name.
   * The packaging files are gone. The RPM spec, the MacPorts Portfile and the
     Homebrew formula in packaging/ described earlier releases: the spec listed
     libbtbb.so.0 and two headers where the build produces libbtbb.so.1 and

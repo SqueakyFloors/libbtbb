@@ -27,6 +27,10 @@ else (LIBBTBB_INCLUDE_DIR AND LIBBTBB_LIBRARIES)
     PATHS /usr/include /usr/local/include
     /opt/local/include
     ${CMAKE_SOURCE_DIR}/../libbtbb/src
+    # What pkg-config says -I would be, which is a libbtbb installed in a
+    # prefix of its own. Last, so it adds that without changing which
+    # libbtbb is found where one of the directories above has one.
+    ${PC_LIBBTBB_INCLUDE_DIRS}
     ${LIBBTBB_INCLUDE_DIR}
   )
 

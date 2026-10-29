@@ -56,17 +56,56 @@ $ make
 $ sudo make install
 ```
 
-This will install the library to /usr/local/lib and the headers to
-/usr/local/include. To install somewhere else, give the prefix both go under:
+This installs under /usr/local. To install somewhere else, give the prefix
+everything goes under:
 ```
 $ cmake -DCMAKE_INSTALL_PREFIX=/path/to/install ..
 ```
 
-The library goes in `lib` under that prefix. `-DLIB_SUFFIX=64` puts it in
-`lib64`, as 64-bit builds of some distributions expect, and `LIB_SUFFIX` may
-carry a path: `-DLIB_SUFFIX=/x86_64-linux-gnu` gives
-`lib/x86_64-linux-gnu`. `libbtbb.pc` follows whichever is chosen, so
-`pkg-config --libs libbtbb` names the directory the library is really in.
+Where it installs
+-----------------
+
+The header goes in `include` under the prefix, and the library in the
+directory the system keeps libraries in, which CMake's `GNUInstallDirs`
+works out:
+
+| System | Library directory under the prefix |
+|---|---|
+| Debian, Ubuntu and the like, prefix `/usr` | `lib/x86_64-linux-gnu`, or the triplet of the architecture being built |
+| Debian, Ubuntu and the like, any other prefix | `lib` |
+| Other 64-bit Linux: Fedora, RHEL, SUSE, Gentoo and the rest | `lib64`, whatever the prefix |
+| Arch, Alpine, a conda prefix, macOS, 32-bit Linux, a cross build | `lib` |
+
+The rule is CMake's own and has changed a little between CMake versions, so
+the configure step prints the two directories it settled on:
+
+```
+-- Installing the library to /usr/local/lib64 and the header to /usr/local/include
+```
+
+To choose the directory yourself, set it:
+```
+$ cmake -DCMAKE_INSTALL_LIBDIR=lib64 ..
+$ cmake -DCMAKE_INSTALL_INCLUDEDIR=include/libbtbb ..
+```
+
+`LIB_SUFFIX` is the older way of asking for the same thing, and still decides
+where it is set to something: `-DLIB_SUFFIX=64` installs the library to
+`lib64` and `-DLIB_SUFFIX=/x86_64-linux-gnu` to `lib/x86_64-linux-gnu`,
+whatever `CMAKE_INSTALL_LIBDIR` says, and the configure step says which of
+the two it followed. It names the library's directory only; the header
+follows `CMAKE_INSTALL_INCLUDEDIR` either way. An empty `-DLIB_SUFFIX=` asks
+for no suffix, which says nothing about which directory is wanted, so
+`CMAKE_INSTALL_LIBDIR` stays in charge there.
+
+The configure step reports the two directories it will use, and `libbtbb.pc`
+names them, so `pkg-config --libs libbtbb` and `pkg-config --cflags libbtbb`
+point a program at the files that were really installed.
+
+Either directory may be an absolute path, which is installed to exactly that
+wherever the prefix is. One that leads out of the prefix, as `../elsewhere`,
+is refused while configuring: `libbtbb.pc` could not then say where the files
+had gone.
 
 If you have previous versions of libbtbb, libubertooth or the Ubertooth tools
 installed, you can use the cleanup script to remove them:
