@@ -92,6 +92,20 @@ $ ASAN_OPTIONS=log_path=/tmp/fuzz-asan UBSAN_OPTIONS=print_stacktrace=1:log_path
 A run that finds something writes the input it stopped on to a file, which the
 target replays if it is given that file instead of a directory.
 
+The first long run, 50 minutes for each of the five targets on 2026-10-29
+(4 hours 10 minutes in all, from the seed corpus, Debug with
+AddressSanitizer and UndefinedBehaviorSanitizer and
+`-fno-sanitize-recover=all`, macOS 15 arm64), executed 87.3 million inputs:
+19.3 million through the access code search, 12.3 million through the BR/EDR
+decoders, 49.8 million through the LE decoder, 3.3 million through the PCAP
+writers and 2.6 million through the PCAPNG writers. Nothing crashed, and
+neither sanitizer reported anything.
+
+Before that run, `fuzz_pcapng` stopped within seconds on the unterminated
+interface-description option list of #23, which PR #71 fixes. That is why the
+target caps the description it fuzzes; the cap, and the seed for it, go once
+the fix is in.
+
 The seed corpus in `tests/fuzz/corpus/` is the sample data the rest of the
 suite uses - the specification's DH1 packet, the frames of the LE print test,
 and a data channel PDU claiming all 255 octets - each with the parameter bytes
@@ -258,6 +272,7 @@ Rows are ordered by severity, most severe first.
 | 🟠 | Python and build | `libbtbb.pc` took its `libdir` and `includedir` from GNUInstallDirs, while the install writes the library to `lib${LIB_SUFFIX}` and the header to `include`, and its prefix was the one the build was configured with rather than where the files ended up | `pkg-config --libs libbtbb` gave a `-L` for a directory holding no library - `/usr/lib/x86_64-linux-gnu` where the prefix is `/usr` on a multiarch distribution, `lib64` on some others, and the configure-time prefix for any install staged with `cmake --install --prefix`, which is what this repository's CI does - so a program linked by luck where the compiler's own search path covered for it and not at all where it did not | `library_config`, an install whose libdir and includedir are set to names the install does not use, and the same build installed into a second prefix with the first one taken away | #80 | #73 |
 | 🟠 | Python and build | The install wrote the library to `lib${LIB_SUFFIX}` under the prefix and the header to `include`, so the only way to install into the directory a system keeps its libraries in was to pass `-DLIB_SUFFIX=<suffix>` for it; `CMAKE_INSTALL_LIBDIR` and `CMAKE_INSTALL_INCLUDEDIR`, the standard settings, were read for `libbtbb.pc` and then not used | a plain build on a 64-bit Fedora, RHEL or SUSE put the library in `lib` where the rest of the machine looks in `lib64`, and one into `/usr` on a multiarch Debian or Ubuntu put it in `/usr/lib` rather than `/usr/lib/x86_64-linux-gnu`, so a program linked it where the compiler's own search path covered for it and not at all where it did not, and a packager's `-DCMAKE_INSTALL_LIBDIR=` was ignored. Installed with it, `install.sh` in the Ubertooth fork then built tools that would not start | `library_config`, eight installs into prefixes of their own: the directories left to the system, the two settings given names of their own, `LIB_SUFFIX` carrying a path, `LIB_SUFFIX` set alongside a `CMAKE_INSTALL_LIBDIR` asking for somewhere else, an empty `LIB_SUFFIX` beside the same, both settings empty so that the prefix itself is asked for, a libdir with a `.` in it beside an absolute includedir, and a libdir given as an absolute path. Each checks where the library, the header and `libbtbb.pc` landed and what `libbtbb.pc` says, and two of them install a second time into another prefix. Two more cases need no build: a suffix CMake reads as false is still a suffix, and a directory leading out of the prefix is refused | #94 | #88 |
 | 🟠 | Python and build | The library exported 32 helpers of its own that no installed header declares - `single_hop()`, `precalc`, `pcapng_create()`, `crc_check()` and the rest. One of them, `bt_compidtostr()`, is also a function in BlueZ's `libbluetooth`, declared there taking an `int` where libbtbb defines it taking a `uint16_t` | a program linking both libraries - which `ubertooth-scan` and `ubertooth-follow` do - called whichever the link order chose, so the manufacturer name it printed came from either library's table without saying which. The other 31 each read as part of the interface to anyone looking at the symbol table, and become names the library cannot change once a program has taken them up | `abi_surface`, the exported names against the 96 functions `btbb.h` declares, on Linux and on macOS | #92 | #79 |
+| 🟠 | Capture files | A new pcapng file was grown to the room its first two blocks are given by writing a single zero byte per `write()` call: about 65,000 system calls to create one file on a host with 16 kB pages | a tool starting a capture stalled before it recorded anything: 300 ms a file on an Apple laptop, where the same file now takes 7 ms | `capture` and `capture_internal`, which read every block and option back out of the file, pin the bytes; `fuzz_pcapng`, which managed 3 runs a second before the fix and about 1,300 after, is what exposed the cost | #93 | #74 |
 | 🟡 | Decoders | `btbb_find_ac()`'s documented bound said it reads `search_length + 72` symbols where it reads `search_length + 63` | a caller sizing its buffer from the header over-allocated, and could not tell what was really required | `spec_bredr`, several offsets with the match at the last of them | #28 | #32 |
 | 🟡 | Hop and clock | `fill_hop_pattern()` and `get_hop_pattern()` wrote "Calculating complete hopping sequence.", "Hopping sequence calculated." and "Found hopping sequence in cache." to stdout | a tool streaming its capture to stdout had them mixed into the stream, where a script cannot tell them from capture data | `hop`, both streams captured, on a cache miss and a cache hit | #30 | #14 |
 | 🟡 | Output streams | `lell_print()` complained about malformed packets with `printf` | the six diagnostic messages landed on stdout in the middle of the packet dump, so a tool writing its capture to stdout had them mixed in and a script could not tell them from packet fields | `le_print`, seven malformed packets, one per message, each comparing the whole of stderr and checking stdout carries none of it | #8 | #4 |
@@ -300,6 +315,8 @@ issue that recorded them, with the source named.
 | Peak resident memory of `test_hop`, which reached the sequence twice | 270,336,000 bytes (258 MiB) | 2,113,536 bytes (2.0 MiB) | **re-measured** |
 | `test_hop` wall time | 5.76 s | 0.05 s | **re-measured** |
 | Whole `ctest` suite | 16.9 s and 18.9 s, 12/12 | 7.5 s and 6.5 s, 12/12 | **re-measured**, two runs each |
+| Creating and closing one pcapng capture file | 299.3 ms and 301.2 ms | 6.6 ms and 6.3 ms | **measured for PR #93**, a program that creates and closes 100 files, timed with `CLOCK_MONOTONIC`, Apple clang `-O2`, two runs each, on a host with 16 kB pages. The 65,000 one-byte writes a file took are now 16 writes of 4 kB |
+| `fuzz_pcapng` runs a second, over the same corpus | 3 | about 1,300 | **measured for PR #93**, the same 50 inputs replayed: 31 s before, under 1 s after, of which 13.7 s and 0.09 s were system time |
 | Largest single allocation `btbb_piconet_set_afh_map()` requests | 134,217,728 bytes | 0 | `tests/test_piconet.c`, which replaces the library's `malloc` and asserts the call allocates nothing at all |
 
 The 128 MB is `SEQUENCE_LENGTH`, 2^27 bytes: one entry per CLK1-27 value. It
