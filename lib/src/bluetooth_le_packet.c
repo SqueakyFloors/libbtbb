@@ -42,7 +42,7 @@ typedef char le_symbol_buffer_is_the_longest_frame[
 /* company identifier lookup */
 const char *bt_compidtostr(uint16_t compid);
 
-/* How many malformed payloads of each kind the decoder has met. Malformed
+/* How many malformed payloads of each kind lell_print() has met. Malformed
  * advertising data arrives by the hundred in a ten-second capture, so the
  * count is what a caller reads at the end of a run; see btbb.h. */
 static uint64_t malformed_counts[LELL_MALFORMED_KINDS];
@@ -50,7 +50,7 @@ static uint64_t malformed_counts[LELL_MALFORMED_KINDS];
 /* Whether the caller has asked for the detail of each malformed payload. */
 static int malformed_detail_wanted = 0;
 
-int lell_set_verbose(int verbose)
+int lell_set_malformed_verbose(int verbose)
 {
 	int was = malformed_detail_wanted;
 
@@ -93,8 +93,7 @@ static void _malformed(lell_malformed_kind kind, const char *fmt, ...)
 {
 	va_list ap;
 
-	if ((unsigned) kind < (unsigned) LELL_MALFORMED_KINDS)
-		malformed_counts[kind]++;
+	malformed_counts[kind]++;
 
 	if (!malformed_detail_wanted)
 		return;
@@ -647,6 +646,12 @@ print16:
 							 buf[pos+1+i]);
 						printf("           %04x\n", uuid);
 					}
+				}
+				else {
+					_malformed(LELL_MALFORMED_AD_FIELD_LENGTH,
+						   "note: wrong length (%d,"
+						   " must be divisible by"
+						   " 2)\n", sublen-1);
 				}
 				break;
 			case 0x06:

@@ -344,6 +344,16 @@ static const uint8_t BAD_MANUFACTURER_PACKET[MAX_LE_SYMBOLS] = {
 	0xde, 0xad, 0xbe,			/* CRC, unchecked */
 };
 
+/* A 16-bit Service UUID list that is not a whole number of UUIDs. */
+static const uint8_t BAD_UUID16_PACKET[MAX_LE_SYMBOLS] = {
+	0xd6, 0xbe, 0x89, 0x8e,
+	0x00,					/* ADV_IND */
+	11,					/* 6 + 5 bytes */
+	0x66, 0x55, 0x44, 0x33, 0x22, 0x11,	/* AdvA */
+	0x04, 0x03, 0x0d, 0x18, 0x0f,		/* 16-bit UUIDs, 3 bytes */
+	0xde, 0xad, 0xbe,			/* CRC, unchecked */
+};
+
 static const uint8_t BAD_UUID128_PACKET[MAX_LE_SYMBOLS] = {
 	0xd6, 0xbe, 0x89, 0x8e,
 	0x00,					/* ADV_IND */
@@ -373,6 +383,9 @@ static const struct {
 	{ BAD_MANUFACTURER_PACKET, "note: wrong length (1, should be >= 2)\n",
 	  "Type ff (Manufacturer Specific Data)",
 	  LELL_MALFORMED_AD_FIELD_LENGTH },
+	{ BAD_UUID16_PACKET,
+	  "note: wrong length (3, must be divisible by 2)\n",
+	  "Type 03 (16-bit Service UUIDs)", LELL_MALFORMED_AD_FIELD_LENGTH },
 	{ BAD_UUID128_PACKET,
 	  "note: wrong length (2, must be divisible by 16)\n",
 	  "Type 07 (128-bit Service UUIDs)", LELL_MALFORMED_AD_FIELD_LENGTH },
@@ -447,7 +460,7 @@ static void test_verbose_prints_the_detail(void)
 {
 	char out[8192], err[1024];
 	size_t i;
-	int was = lell_set_verbose(1);
+	int was = lell_set_malformed_verbose(1);
 
 	for (i = 0; i < MALFORMED_CASE_COUNT; ++i) {
 		reset_malformed_counts();
@@ -467,8 +480,8 @@ static void test_verbose_prints_the_detail(void)
 	}
 
 	/* the setting is given back, and says what it was */
-	if (lell_set_verbose(was) != 1) {
-		printf("FAIL: lell_set_verbose() did not report the setting\n");
+	if (lell_set_malformed_verbose(was) != 1) {
+		printf("FAIL: lell_set_malformed_verbose() did not report the setting\n");
 		++failures;
 	}
 	reset_malformed_counts();
@@ -670,12 +683,12 @@ static void test_a_payload_too_short_for_its_type(void)
 	/* the bytes that did arrive are still dumped */
 	CHECK_CONTAINS(out, "\n    Data:  66 55 44 33 22 11 01 02 03 04\n");
 
-	was = lell_set_verbose(1);
+	was = lell_set_malformed_verbose(1);
 	if (decode_and_capture(SHORT_CONNECT_REQ, out, sizeof(out),
 			       err, sizeof(err)) == 0)
 		CHECK_EQUALS(err, "note: CONNECT_REQ needs 34 payload bytes,"
 				  " 10 received\n");
-	lell_set_verbose(was);
+	lell_set_malformed_verbose(was);
 }
 
 /*
@@ -708,13 +721,13 @@ static void test_a_truncated_capture(void)
 	CHECK_CONTAINS(out, "\n    Data:  66 55 44\n");
 	CHECK_CONTAINS(out, "\n    CRC:   de ad be\n");
 
-	was = lell_set_verbose(1);
+	was = lell_set_malformed_verbose(1);
 	if (decode_n_and_capture(TRUNCATED_ADV_IND, sizeof(TRUNCATED_ADV_IND),
 				 2402, out, sizeof(out), err,
 				 sizeof(err)) == 0)
 		CHECK_EQUALS(err, "note: ADV_IND needs 6 payload bytes,"
 				  " 3 received\n");
-	lell_set_verbose(was);
+	lell_set_malformed_verbose(was);
 }
 
 /* An LL Control PDU carries its opcode in the first payload byte, so one
@@ -743,13 +756,13 @@ static void test_an_empty_ll_control_pdu(void)
 	CHECK_LACKS(out, "Opcode");
 	CHECK_CONTAINS(out, "\n    CRC:   de ad be\n");
 
-	was = lell_set_verbose(1);
+	was = lell_set_malformed_verbose(1);
 	if (decode_n_and_capture(EMPTY_CONTROL_PDU, sizeof(EMPTY_CONTROL_PDU),
 				 2404, out, sizeof(out), err,
 				 sizeof(err)) == 0)
 		CHECK_EQUALS(err, "note: an LL Control PDU needs 1 payload"
 				  " byte, 0 received\n");
-	lell_set_verbose(was);
+	lell_set_malformed_verbose(was);
 }
 
 /* A flags element with no flags in it: its one byte is not there to read. */
@@ -776,11 +789,11 @@ static void test_an_empty_flags_element(void)
 	CHECK_EQUALS(err, "");
 	check_count(LELL_MALFORMED_AD_FIELD_LENGTH, 1, "an empty flags element");
 
-	was = lell_set_verbose(1);
+	was = lell_set_malformed_verbose(1);
 	if (decode_and_capture(EMPTY_FLAGS_PACKET, out, sizeof(out),
 			       err, sizeof(err)) == 0)
 		CHECK_EQUALS(err, "note: wrong length (0, should be >= 1)\n");
-	lell_set_verbose(was);
+	lell_set_malformed_verbose(was);
 }
 
 int main(void)
