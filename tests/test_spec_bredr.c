@@ -1476,6 +1476,25 @@ static void test_header_needs_its_symbols(void)
 		CHECK(try_clock(clock, pkt) == 0);
 		btbb_packet_unref(pkt);
 	}
+
+	/* The other side of the same bound: a capture of exactly those 122
+	 * symbols holds the whole header and nothing of a payload, and the
+	 * header reads out of it.  The check refuses a capture that is short
+	 * of the symbols the header takes up, and no more than that. */
+	{
+		btbb_packet *pkt = packet_for(stream, 122, 0x47, clock, 1);
+
+		CHECK(pkt != NULL);
+		if (pkt == NULL)
+			return;
+		CHECK(btbb_header_present(pkt) != 0);
+		CHECK(btbb_decode_header(pkt) == 1);
+		CHECK(btbb_packet_get_flag(pkt, BTBB_HEC_VALID) != 0);
+		CHECK(btbb_packet_get_lt_addr(pkt) == 1);
+		CHECK(btbb_packet_get_type(pkt) == PACKET_TYPE_DM1);
+		CHECK(try_clock(clock, pkt) == 0x47);
+		btbb_packet_unref(pkt);
+	}
 }
 
 /*

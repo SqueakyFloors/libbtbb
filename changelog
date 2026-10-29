@@ -25,7 +25,22 @@ libbtbb (2020-12-R1+fork5) unstable; urgency=low
     step with every release, and nothing in the tree describes a library the
     build does not produce. README has a "Packaging" section pointing at the
     build and install instructions.
-
+  * The record of the packet that settles a piconet's address part carries
+    that packet's own header again. Dewhitening a header takes the piconet's
+    CLK1-6 rather than the clock the receiving board read the packet at, and
+    the offset between the two is what the address-part search recovers
+    alongside the address part. The library had stopped reporting that offset
+    until the whole CLK1-27 was known, so a capture tool asking for it got 0
+    and read the header at its own board's clock: the same symbols dewhitened
+    to 18 bits of a header nobody sent, whose check bits did not come out and
+    whose type field read as a packet that was never sent. The record of the
+    one packet a reader most needs - the first evidence the address part was
+    derived from - carried those bits. btbb_piconet_get_clk_offset() now
+    reports the offset from the moment CLK1-6 is known, in the 625 us slots
+    that clock counts, and btbb.h says which clock, and so which unit, each
+    stage of recovery reports. The library's own hop arithmetic keeps working
+    from the separate slot field it has used since the two were told apart,
+    so nothing internal reads one unit for the other.
   * A survey piconet can be read while the survey is still running. The only
     way into a survey's results was btbb_next_survey_result(), which takes
     each piconet out of the survey, so a tool could not read the UAP the

@@ -920,6 +920,142 @@ static void test_every_candidate_agrees_on_clk1_6(void)
 	btbb_piconet_unref(pn);
 }
 
+/* ------------------ the clock offset the search recovers ----------------- */
+
+/*
+ * The Bluetooth Core specification's own DH1, Vol 2, Part G, Section 6.1:
+ * header data 0x123 with the HEC 0x06 that goes with a UAP of 0x47, which is
+ * LT_ADDR 3 and TYPE DH1, and a payload of five data bytes whose CRC comes
+ * out under that same UAP.  The payload is the symbols that go on air, least
+ * significant bit first, before whitening.
+ */
+#define SPEC_DH1_LAP 0x9e8b33
+#define SPEC_DH1_UAP 0x47
+#define SPEC_DH1_HEADER_DATA 0x123
+#define SPEC_DH1_HEC 0x06
+static const char SPEC_DH1_PAYLOAD[] =
+	"01110100"
+	"10000000" "01000000" "11000000" "00100000" "10100000"
+	"1110110000110110";
+
+/*
+ * That packet as it reaches a receiver that is listening at a given clock:
+ * the access code, the 18 header bits each sent three times, and the payload,
+ * with the header and the payload whitened as one run of the sequence the
+ * clock picks out (Vol 2, Part B, Section 7.2), so the payload starts 18 bits
+ * along.  Whitening is an exclusive or, so the same table builds the packet
+ * here and takes it apart in the library.  Returns the number of symbols.
+ */
+static int spec_dh1_symbols(char *stream, int clock)
+{
+	uint64_t syncword = btbb_gen_syncword(SPEC_DH1_LAP);
+	uint32_t header = SPEC_DH1_HEADER_DATA |
+			  ((uint32_t) SPEC_DH1_HEC << 10);
+	int index = INDICES[clock & 0x3f];
+	int i;
+
+	memset(stream, 0, MAX_SYMBOLS);
+	for (i = 0; i < 64; i++)
+		stream[i] = (char) ((syncword >> i) & 1);
+	for (i = 0; i < 4; i++)
+		stream[64 + i] = (char) (((syncword >> 63) ^ (i + 1)) & 1);
+	for (i = 0; i < 18; i++) {
+		char bit = (char) (((header >> i) & 1) ^
+				   WHITENING_DATA[(index + i) % 127]);
+
+		stream[68 + i * 3] = bit;
+		stream[69 + i * 3] = bit;
+		stream[70 + i * 3] = bit;
+	}
+	for (i = 0; SPEC_DH1_PAYLOAD[i] != '\0'; i++)
+		stream[122 + i] = (char) ((SPEC_DH1_PAYLOAD[i] - '0') ^
+					  WHITENING_DATA[(index + 18 + i) % 127]);
+	return 122 + i;
+}
+
+/* That packet handed to the decoder at the clock a board read it at. */
+static btbb_packet *spec_dh1_packet(char *stream, int length, uint32_t clkn)
+{
+	btbb_packet *pkt = NULL;
+
+	/* finding the access code is what gives the packet its LAP */
+	if (btbb_find_ac(stream, 1, SPEC_DH1_LAP, 0, &pkt) != 0)
+		return NULL;
+	if (pkt == NULL)
+		return NULL;
+	btbb_packet_set_data(pkt, stream, length, 0, clkn);
+	btbb_packet_set_flag(pkt, BTBB_WHITENED, 1);
+	return pkt;
+}
+
+/*
+ * The packet whose CRC settles the address part is the one a reader most
+ * needs, because it is the first evidence that address part was derived from,
+ * and a capture tool records its header by reading it again at the piconet's
+ * clock.  That clock is the one the search settled on, which the caller gets
+ * as the offset from the clock its board read the packet at: at the board's
+ * own clock the same symbols dewhiten to a different header, so the record
+ * would carry 18 bits of a header nobody sent, failing their own check.
+ */
+static void test_the_settled_offset_reads_the_packets_own_header(void)
+{
+	/* The piconet's CLK1-6, and a board whose own clock reads 5: four
+	 * slots is the ordinary gap between a board and a piconet it has not
+	 * been told to close up with yet. */
+	const int piconet_clk6 = 0x25;
+	const uint32_t board_clkn = 10;
+	char stream[MAX_SYMBOLS];
+	btbb_piconet *pn = btbb_piconet_new();
+	btbb_packet *pkt;
+	int length, offset;
+
+	CHECK(pn != NULL);
+	if (pn == NULL)
+		return;
+	btbb_init_piconet(pn, SPEC_DH1_LAP);
+	length = spec_dh1_symbols(stream, piconet_clk6);
+	pkt = spec_dh1_packet(stream, length, board_clkn);
+	CHECK(pkt != NULL);
+	if (pkt == NULL) {
+		btbb_piconet_unref(pn);
+		return;
+	}
+
+	/* The CRC comes out at one trial clock, which settles both the
+	 * address part and CLK1-6. */
+	CHECK_EQ(1, btbb_uap_from_header(pkt, pn));
+	CHECK_EQ(SPEC_DH1_UAP, btbb_piconet_get_uap(pn));
+	CHECK(btbb_piconet_get_flag(pn, BTBB_CLK6_VALID));
+	CHECK(!btbb_piconet_get_flag(pn, BTBB_CLK27_VALID));
+
+	/* The offset is reported from here on, in the 625 us slots CLK1-6
+	 * counts, because that is the clock the search has. */
+	offset = btbb_piconet_get_clk_offset(pn);
+	CHECK_EQ((piconet_clk6 - (int) ((board_clkn >> 1) & 0x3f)) & 0x3f,
+		 offset);
+
+	/* What a capture tool does with it: the packet is handed back its own
+	 * symbols at the piconet's clock, CLKN counting half-slots, and the
+	 * header read again. */
+	btbb_packet_set_uap(pkt, btbb_piconet_get_uap(pn));
+	btbb_packet_set_flag(pkt, BTBB_CLK6_VALID, 1);
+	btbb_packet_set_data(pkt, stream, length, 0,
+			     board_clkn + 2 * (uint32_t) offset);
+	CHECK_EQ(piconet_clk6, pkt->clkn & 0x3f);
+	CHECK_EQ(1, btbb_decode_header(pkt));
+	CHECK(btbb_packet_get_flag(pkt, BTBB_HEC_CHECKED));
+	CHECK(btbb_packet_get_flag(pkt, BTBB_HEC_VALID));
+
+	/* and the header it read is the packet's own, check bits and all */
+	CHECK_EQ(SPEC_DH1_HEADER_DATA, air_to_host16(pkt->packet_header, 10));
+	CHECK_EQ(SPEC_DH1_HEC, pkt->packet_hec);
+	CHECK_EQ(3, pkt->packet_lt_addr);
+	CHECK_EQ(PACKET_TYPE_DH1, pkt->packet_type);
+
+	btbb_packet_unref(pkt);
+	btbb_piconet_unref(pn);
+}
+
 /* ------------------- giving up a clock that does not work ---------------- */
 
 /*
@@ -2429,6 +2565,7 @@ int main(void)
 	test_aliased_hop_reversal_is_refused();
 	test_the_clocks_of_the_device_and_the_observer_differ();
 	test_every_candidate_agrees_on_clk1_6();
+	test_the_settled_offset_reads_the_packets_own_header();
 	test_a_run_of_header_failures_gives_up_the_clock();
 	test_a_lost_lock_leaves_the_piconet_ready_to_search();
 	test_a_header_that_checks_out_ends_the_run();

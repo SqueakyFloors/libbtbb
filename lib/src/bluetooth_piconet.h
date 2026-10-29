@@ -256,9 +256,12 @@ struct btbb_piconet {
 	int pattern_indices[MAX_PATTERN_LENGTH];
 	uint8_t pattern_channels[MAX_PATTERN_LENGTH];
 
-	/* Offset between CLKN (local) and CLK of piconet, in 312.5 us CLKN
-	 * ticks.  Valid once BTBB_CLK27_VALID is set, and what
-	 * btbb_piconet_get_clk_offset() returns. */
+	/* Offset between CLKN (local) and CLK of piconet, as
+	 * btbb_piconet_get_clk_offset() reports it: 312.5 us CLKN ticks once
+	 * BTBB_CLK27_VALID is set, and until then the 625 us slots of
+	 * clk6_offset below, which is all the search has recovered.  Nothing
+	 * in the library reads it in the first form; everything internal
+	 * works from clk6_offset and the candidate clocks. */
 	int clk_offset;
 
 	/* Offset between the local and the piconet clock in 625 us CLK1-6

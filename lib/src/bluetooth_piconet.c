@@ -875,6 +875,28 @@ int btbb_winnow(btbb_piconet *pn)
 	return new_count;
 }
 
+/*
+ * Keep the CLK1-6 the search has settled on, as the offset between the
+ * observer's clock and the piconet's in 625 us slots, and report it to the
+ * caller.
+ *
+ * Reading a packet's header needs the piconet's clock rather than the
+ * observer's: the header is whitened at the sender's CLK1-6, so the same
+ * symbols dewhiten to a different header, failing their check bits, at the
+ * clock the receiving board read.  A capture tool that records the header of
+ * the packet which settled the address part - the first evidence a reader has
+ * for that address part - therefore asks for this offset and applies it
+ * before calling btbb_decode_header().  It is the only clock the search has
+ * at this point; channel_winnow() replaces it with the whole CLK1-27 offset,
+ * in CLKN ticks, once hop reversal has one.
+ */
+static void settle_clk6_offset(btbb_piconet *pn, int first_packet_clock)
+{
+	pn->clk6_offset = (first_packet_clock -
+			   (int) (pn->first_pkt_time & 0x3f)) & 0x3f;
+	pn->clk_offset = pn->clk6_offset;
+}
+
 /* use packet headers to determine UAP */
 int btbb_uap_from_header(btbb_packet *pkt, btbb_piconet *pn)
 {
@@ -949,7 +971,7 @@ int btbb_uap_from_header(btbb_packet *pkt, btbb_piconet *pn)
 				break;
 
 			default: /* CRC success */
-				pn->clk6_offset = (count - (pn->first_pkt_time & 0x3f)) & 0x3f;
+				settle_clk6_offset(pn, count);
 				if (!btbb_piconet_get_flag(pn, BTBB_UAP_VALID))
 					piconet_note("Correct CRC! UAP = 0x%x found after %d total packets.\n",
 						     UAP, pn->total_packets_observed);
@@ -968,7 +990,7 @@ int btbb_uap_from_header(btbb_packet *pkt, btbb_piconet *pn)
 	btbb_piconet_set_flag(pn, BTBB_GOT_FIRST_PACKET, 1);
 
 	if (remaining == 1) {
-		pn->clk6_offset = (first_clock - (pn->first_pkt_time & 0x3f)) & 0x3f;
+		settle_clk6_offset(pn, first_clock);
 		if (!btbb_piconet_get_flag(pn, BTBB_UAP_VALID))
 			piconet_note("UAP = 0x%x found after %d total packets.\n",
 				     pn->clock6_candidates[first_clock],

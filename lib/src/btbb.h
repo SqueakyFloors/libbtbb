@@ -285,10 +285,19 @@ BTBB_API uint32_t btbb_piconet_get_lap(const btbb_piconet *pn);
 BTBB_API uint16_t btbb_piconet_get_nap(const btbb_piconet *pn);
 BTBB_API uint64_t btbb_piconet_get_bdaddr(const btbb_piconet *pn);
 
-/* The offset between the local clock and the piconet's, in 312.5 us CLKN
-   ticks, which is what a receiver is told to hop on. It means something only
-   while BTBB_CLK27_VALID is set: before a clock is recovered, and again after
-   one is given up, it reads 0. */
+/* The offset between the local clock and the piconet's, as far as it has been
+   recovered. The flags say which clock that is, and so which unit the offset
+   is in:
+
+   - BTBB_CLK27_VALID set: the whole clock, in 312.5 us CLKN ticks, which is
+     what a receiver is told to hop on.
+   - BTBB_CLK6_VALID set and BTBB_CLK27_VALID not: CLK1-6 only, in 625 us
+     slots. Dewhitening a header takes CLK1-6, so this is what a caller adds
+     to the clock it read a packet at - doubled, CLKN counting half-slots -
+     before calling btbb_decode_header(), to read the header at the piconet's
+     clock rather than its own.
+   - neither set: 0, before a clock is recovered and again after one is given
+     up. */
 BTBB_API int btbb_piconet_get_clk_offset(const btbb_piconet *pn);
 BTBB_API void btbb_piconet_set_clk_offset(btbb_piconet *pn, int clk_offset);
 
