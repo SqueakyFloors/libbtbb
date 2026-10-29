@@ -1337,10 +1337,10 @@ static void test_bredr_payload_survives_a_successful_uap_search(void)
 	}
 	btbb_init_piconet(pn, SPEC_DH1_LAP);
 	/* A real search reaches the clock that works after trying others, and
-	   each one it rejects clears this flag. These symbols are not
+	   a trial whose CRC failed clears this flag. These symbols are not
 	   whitened, so every candidate clock decodes the same and the first
 	   one tried is the one that works; clearing the flag here puts the
-	   packet in the state the rejections would have left it in, so what
+	   packet in the state those failures would have left it in, so what
 	   the record carries below comes from the trial that settled the
 	   address part rather than from the decode above. */
 	btbb_packet_set_flag(pkt, BTBB_HAS_PAYLOAD, 0);

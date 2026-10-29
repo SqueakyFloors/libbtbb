@@ -1260,6 +1260,11 @@ int DH(int clock, btbb_packet* pkt)
 		default: /* not a DH1/3/5 */
 			return 0;
 	}
+	/* These types carry their payload with no forward error correction,
+	 * so nothing in it is corrected. The other decoders report the count
+	 * they made; this one reports none, rather than leaving behind a
+	 * count from whatever decoded this packet before. */
+	pkt->corrected_payload_bits = 0;
 	if(!decode_payload_header(stream, clock, header_bytes, size, 0,
 				  HEADER_WHITENING_BITS, pkt))
 		return 0;
