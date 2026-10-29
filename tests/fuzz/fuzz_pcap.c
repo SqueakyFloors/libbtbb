@@ -5,7 +5,8 @@
  *
  * Input layout:
  *   byte 0      options: bit 0 whitens the BR/EDR symbols, bit 1 chooses
- *               the PPI version, bits 2-3 how many records to write
+ *               the PPI version, bits 2-3 how many records to write,
+ *               bits 4-5 which of the three writers to write with
  *   byte 1      the channel
  *   byte 2      the UAP the BR/EDR decoder checks the header against
  *   byte 3      the signal level in dBm
@@ -62,7 +63,7 @@ int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size)
 	int8_t sigdbm, noisedbm;
 	uint32_t refaddress;
 	uint64_t ns;
-	int symbol_count, records, i;
+	int symbol_count, records, writer, i;
 
 	fz_start(&in, data, size);
 	options = fz_u8(&in);
@@ -89,7 +90,12 @@ int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size)
 
 	le_pkt = fz_le_packet(rest, rest_len, 2402, (uint32_t) ns);
 
-	if (btbb_pcap_create_file(fz_capture_file_path(), &bredr_capture) == 0 &&
+	/* One writer a run: creating a file costs more than a decode, so a run
+	 * that wrote all three would spend its time in the file system. */
+	writer = ((options >> 4) & 3) % 3;
+
+	if (writer == 0 &&
+	    btbb_pcap_create_file(fz_capture_file_path(), &bredr_capture) == 0 &&
 	    bredr_capture != NULL) {
 		for (i = 0; i < records; i++)
 			(void) btbb_pcap_append_packet(bredr_capture, ns,
@@ -99,7 +105,7 @@ int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size)
 		(void) btbb_pcap_close(bredr_capture);
 	}
 
-	if (le_pkt != NULL &&
+	if (writer == 1 && le_pkt != NULL &&
 	    lell_pcap_create_file(fz_capture_file_path(), &le_capture) == 0 &&
 	    le_capture != NULL) {
 		for (i = 0; i < records; i++)
@@ -110,7 +116,7 @@ int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size)
 	}
 
 	le_capture = NULL;
-	if (le_pkt != NULL &&
+	if (writer == 2 && le_pkt != NULL &&
 	    lell_pcap_ppi_create_file(fz_capture_file_path(),
 				      (options >> 1) & 1, &le_capture) == 0 &&
 	    le_capture != NULL) {

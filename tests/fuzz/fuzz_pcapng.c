@@ -6,7 +6,8 @@
  *
  * Input layout:
  *   byte 0      options: bit 0 whitens the BR/EDR symbols, bits 2-3 how
- *               many records to write
+ *               many records to write, bit 4 writes the LE capture instead
+ *               of the BR/EDR one
  *   byte 1      the channel
  *   byte 2      the UAP the BR/EDR decoder checks the header against
  *   byte 3      the signal level in dBm
@@ -113,7 +114,10 @@ int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size)
 
 	le_pkt = fz_le_packet(rest, rest_len, 2402, (uint32_t) ns);
 
-	if (btbb_pcapng_create_file(fz_capture_file_path(), description,
+	/* One capture a run: creating a file costs more than a decode, so a
+	 * run that wrote both would spend its time in the file system. */
+	if ((options & 0x10) == 0 &&
+	    btbb_pcapng_create_file(fz_capture_file_path(), description,
 				    &bredr_capture) == 0 &&
 	    bredr_capture != NULL) {
 		for (record = 0; record < records; record++) {
@@ -131,7 +135,7 @@ int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size)
 		(void) btbb_pcapng_close(bredr_capture);
 	}
 
-	if (le_pkt != NULL &&
+	if ((options & 0x10) != 0 && le_pkt != NULL &&
 	    lell_pcapng_create_file(fz_capture_file_path(), description,
 				    &le_capture) == 0 &&
 	    le_capture != NULL) {
