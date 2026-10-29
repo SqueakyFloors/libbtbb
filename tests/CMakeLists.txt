@@ -130,6 +130,20 @@ if(BUILD_TESTING)
     # a second. The limit is for a case where the library does not exit.
     set_tests_properties(uthash_oom PROPERTIES TIMEOUT 30)
 
+    # The tables in the library's C source against the scripts in
+    # python/utils that produced them. The scripts need an interpreter; where
+    # the machine has none, the tables go unchecked rather than the
+    # configuration failing.
+    find_package(Python3 COMPONENTS Interpreter)
+    if(Python3_Interpreter_FOUND)
+        add_test(NAME py_generators COMMAND ${Python3_EXECUTABLE}
+                 ${CMAKE_CURRENT_SOURCE_DIR}/test_py_generators.py)
+        # A second, most of it starting the interpreter once per generator run.
+        set_tests_properties(py_generators PROPERTIES TIMEOUT 60)
+    else()
+        message(STATUS "no Python 3 interpreter was found: leaving out the py_generators test")
+    endif()
+
     add_test(NAME release_version COMMAND ${CMAKE_COMMAND}
              -DSET_RELEASE_CMAKE=${PROJECT_SOURCE_DIR}/cmake/set_release.cmake
              -P ${CMAKE_CURRENT_SOURCE_DIR}/test_release_version.cmake)
