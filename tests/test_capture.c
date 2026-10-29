@@ -1393,6 +1393,10 @@ static void test_bredr_payload_survives_a_successful_uap_search(void)
 	CHECK(rd32(blk + 20) == 22 + sizeof(SPEC_DH1_BYTES));
 	for (i = 0; i < (int) sizeof(SPEC_DH1_BYTES); i++)
 		CHECK(capture[data + 22 + i] == SPEC_DH1_BYTES[i]);
+	/* the count of corrected payload bits describes the payload in the
+	   record, and a DH1 carries no forward error correction, so anything
+	   but zero here is a count left over from something else */
+	CHECK(rd16(data + 6) == 0);
 
 	if (ph == NULL)
 		return;
@@ -1518,8 +1522,90 @@ static void test_bredr_uap_search_replay(void)
 			CHECK((rd16(data + 20) & BREDR_PAYLOAD_PRESENT) == 0);
 			CHECK(rd32(blk + 20) == 22);
 		}
+		/* a DH1 carries no forward error correction, so the count of
+		   corrected payload bits is zero on every one of these
+		   records, whether it holds a payload or not */
+		CHECK(rd16(data + 6) == 0);
 		blk += rd32(blk + 4);
 	}
+}
+
+/*
+ * A trial the search rules out on the piconet's own address part records
+ * nothing either. Once a piconet's address part is known, the search is
+ * looking for its clock, and a clock that reads a different address part out
+ * of the header is not this piconet's: the packet is not its traffic,
+ * whatever a trial at that clock decodes. This is the state `ubertooth-rx -l
+ * <lap> -u <uap>` runs in, and the LAP is the only thing the two piconets
+ * there have in common.
+ */
+static void test_bredr_vetoed_trial_records_nothing(void)
+{
+	const char *filename = "test_capture_search_veto.pcapng";
+	char header_symbols[55];
+	char stream[1024];
+	btbb_pcapng_handle *h = NULL;
+	btbb_piconet *pn;
+	btbb_packet *pkt = NULL;
+	size_t blk, data;
+	int length;
+
+	/* the specification's DH1, whose CRC comes out for its own address
+	   part of 0x47 */
+	strcpy(header_symbols, SPEC_DH1_HEADER);
+	length = build_bredr_stream(stream, SPEC_DH1_LAP, header_symbols,
+				    SPEC_DH1_PAYLOAD);
+	CHECK(btbb_find_ac(stream, 1, SPEC_DH1_LAP, 0, &pkt) == 0);
+	CHECK(pkt != NULL);
+	if (pkt == NULL)
+		return;
+	btbb_packet_set_data(pkt, stream, length, 0, 0);
+	btbb_packet_set_flag(pkt, BTBB_WHITENED, 0);
+
+	pn = btbb_piconet_new();
+	CHECK(pn != NULL);
+	if (pn == NULL) {
+		btbb_packet_unref(pkt);
+		return;
+	}
+	btbb_init_piconet(pn, SPEC_DH1_LAP);
+	/* a piconet on the same LAP whose address part is already known, and
+	   is not this packet's */
+	btbb_piconet_set_uap(pn, (uint8_t) (SPEC_DH1_UAP ^ 0xff));
+	CHECK(btbb_piconet_get_flag(pn, BTBB_UAP_VALID) == 1);
+
+	CHECK(btbb_uap_from_header(pkt, pn) == 0);
+	CHECK(btbb_packet_get_flag(pkt, BTBB_HAS_PAYLOAD) == 0);
+	CHECK(btbb_packet_get_payload_length(pkt) == 0);
+	CHECK(btbb_packet_get_flag(pkt, BTBB_CRC_CHECKED) == 0);
+	CHECK(btbb_packet_get_flag(pkt, BTBB_CRC_CORRECT) == 0);
+
+	unlink_quietly(filename);
+	CHECK(btbb_pcapng_create_file(filename, "test", &h) == 0);
+	if (h == NULL) {
+		btbb_packet_unref(pkt);
+		btbb_piconet_unref(pn);
+		return;
+	}
+	CHECK(btbb_pcapng_append_packet(h, 37ull, -20, -80, SPEC_DH1_LAP,
+					SPEC_DH1_UAP, pkt) == 0);
+	(void) btbb_pcapng_close(h);
+	btbb_packet_unref(pkt);
+	btbb_piconet_unref(pn);
+
+	CHECK(read_capture(filename));
+	unlink_quietly(filename);
+	if (capture_len == 0)
+		return;
+	blk = find_block(BLOCK_TYPE_ENHANCED_PACKET, 0);
+	CHECK(blk < capture_len);
+	if (blk >= capture_len)
+		return;
+	data = blk + 28;
+	CHECK((rd16(data + 20) & BREDR_PAYLOAD_PRESENT) == 0);
+	CHECK((rd16(data + 20) &
+	       (BREDR_CRC_CHECKED | BREDR_CRC_VALID)) == 0);
+	CHECK(rd32(blk + 20) == 22);
 }
 
 /*
@@ -2594,6 +2680,7 @@ int main(void)
 	test_bredr_payload_does_not_survive_the_uap_search();
 	test_bredr_payload_survives_a_successful_uap_search();
 	test_bredr_uap_search_replay();
+	test_bredr_vetoed_trial_records_nothing();
 	test_bredr_corrected_bits();
 	test_bredr_interface_options();
 	test_bredr_pcap_record();

@@ -909,15 +909,22 @@ int btbb_uap_from_header(btbb_packet *pkt, btbb_piconet *pn)
 			UAP = try_clock(clock, pkt);
 			crc_chk = -1;
 
+			/* The address part this clock reads out of the header
+			 * is not the one this piconet is known to have, so
+			 * this clock is not the piconet's and the packet is
+			 * not its traffic. Rule the candidate out without
+			 * decoding it: a trial run here would be thrown away
+			 * whatever it found, and its payload and CRC answer
+			 * would be left on the packet for a capture file to
+			 * report. */
+			if (btbb_piconet_get_flag(pn, BTBB_UAP_VALID)
+				&& UAP != pn->UAP)
+				crc_chk = -1;
 			/* if this is the first packet: populate the candidate list */
 			/* if not: check CRCs if UAPs match */
-			if (!btbb_piconet_get_flag(pn, BTBB_GOT_FIRST_PACKET)
+			else if (!btbb_piconet_get_flag(pn, BTBB_GOT_FIRST_PACKET)
 				|| UAP == pn->clock6_candidates[count])
 				crc_chk = crc_check(clock, pkt);
-
-			if (btbb_piconet_get_flag(pn, BTBB_UAP_VALID) &&
-			    (UAP != pn->UAP))
-				crc_chk = -1;
 
 			switch(crc_chk) {
 			case -1: /* UAP mismatch */

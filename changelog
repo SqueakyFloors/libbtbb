@@ -373,9 +373,11 @@ libbtbb (2020-12-R1+fork5) unstable; urgency=low
     was derived from, and its record carried a correct-CRC result over a
     payload a reader could not see: the trial clock whose CRC came out is the
     packet's own decode, so the payload it produced now reaches the capture
-    file and the dump. Records written for a candidate clock the search
-    rejected still carry no payload, because those bytes are the trial's
-    rather than the packet's.
+    file. Records written for a candidate clock the search rejected still
+    carry no payload, because those bytes are the trial's rather than the
+    packet's, and a clock ruled out by the piconet's own address part - which
+    is what a known UAP does to another piconet on the same LAP - is no
+    longer decoded at all, so nothing of it reaches a record either.
 
   * Manufacturer-specific advertising data decodes the company name for
     identifiers assigned since 2020. The table came from BlueZ and ended at
