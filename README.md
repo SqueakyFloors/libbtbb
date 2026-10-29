@@ -30,7 +30,7 @@ Part B. CI builds and runs them on Linux with gcc and macOS with clang under
 `-Wall -Wextra -Werror`, and again under AddressSanitizer and
 UndefinedBehaviorSanitizer.
 
-The tests have helped find and fix 72 issues, many in packet types and capture
+The tests have helped find and fix 74 issues, many in packet types and capture
 paths that are rarely seen on the air. [TESTING.md](TESTING.md) describes what
 each test covers and where its vectors come from, lists each fix with what a
 user would notice, and gives before and after measurements.

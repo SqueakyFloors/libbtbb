@@ -11,7 +11,7 @@ request on Linux and macOS, plain and under AddressSanitizer and
 UndefinedBehaviorSanitizer. The vectors of the original test programs were
 kept and ported (see #9).
 
-The tests have helped find and fix 72 issues, many of them in packet types and
+The tests have helped find and fix 74 issues, many of them in packet types and
 capture paths that are rarely seen on the air.
 
 - [How to run them](#how-to-run-them)
