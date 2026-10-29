@@ -24,8 +24,10 @@ endif()
 
 set(failures 0)
 
-function(fail message)
-	message(SEND_ERROR "${message}")
+# message() joins its arguments, so a report written as several strings
+# arrives whole.
+function(fail)
+	message(SEND_ERROR ${ARGV})
 	math(EXPR failures "${failures} + 1")
 	set(failures ${failures} PARENT_SCOPE)
 endfunction()
@@ -77,6 +79,59 @@ else()
 	endif()
 endif()
 
+# Read an installed libbtbb.pc the way pkg-config reads it - pcfiledir is the
+# directory the file is in, and the other variables are built from it - and
+# check that the two directories it hands a program hold the library that
+# `Libs: -lbtbb` asks the linker for and the header `Cflags` points at.
+function(check_installed_pc where what)
+	file(GLOB pc_files ${where}/*/pkgconfig/libbtbb.pc)
+	if(NOT pc_files)
+		fail("${what}: no libbtbb.pc was installed under ${where}")
+		set(failures ${failures} PARENT_SCOPE)
+		return()
+	endif()
+	list(GET pc_files 0 pc_file)
+	get_filename_component(pcfiledir ${pc_file} DIRECTORY)
+
+	set(pc_prefix "")
+	set(pc_libdir "")
+	set(pc_includedir "")
+	file(STRINGS ${pc_file} pc_lines)
+	foreach(line IN LISTS pc_lines)
+		if(line MATCHES "^prefix=(.*)$")
+			set(pc_prefix "${CMAKE_MATCH_1}")
+		elseif(line MATCHES "^libdir=(.*)$")
+			set(pc_libdir "${CMAKE_MATCH_1}")
+		elseif(line MATCHES "^includedir=(.*)$")
+			set(pc_includedir "${CMAKE_MATCH_1}")
+		endif()
+	endforeach()
+
+	if(NOT pc_libdir OR NOT pc_includedir)
+		fail("${what}: libbtbb.pc has no libdir or includedir line:\n${pc_lines}")
+		set(failures ${failures} PARENT_SCOPE)
+		return()
+	endif()
+
+	# prefix first, since the other two are written relative to it. ABSOLUTE
+	# collapses the "../.." that leads back out of the pkgconfig directory.
+	string(REPLACE "\${pcfiledir}" "${pcfiledir}" pc_prefix "${pc_prefix}")
+	foreach(var pc_libdir pc_includedir)
+		string(REPLACE "\${prefix}" "${pc_prefix}" ${var} "${${var}}")
+		get_filename_component(${var} "${${var}}" ABSOLUTE)
+	endforeach()
+
+	if(NOT EXISTS ${pc_libdir}/libbtbb${SHARED_SUFFIX})
+		fail("${what}: libbtbb.pc names libdir ${pc_libdir}, which holds no "
+		     "libbtbb${SHARED_SUFFIX} for -lbtbb to find")
+	endif()
+	if(NOT EXISTS ${pc_includedir}/btbb.h)
+		fail("${what}: libbtbb.pc names includedir ${pc_includedir}, which "
+		     "holds no btbb.h")
+	endif()
+	set(failures ${failures} PARENT_SCOPE)
+endfunction()
+
 # What pkg-config tells a program that links the installed library. The
 # install writes the library to lib${LIB_SUFFIX} and the header to include,
 # and libbtbb.pc has to name those two directories; a -L or -I for a
@@ -114,40 +169,23 @@ else()
 	endif()
 endif()
 
-file(GLOB pc_files ${pc_install}/*/pkgconfig/libbtbb.pc)
-if(NOT pc_files)
-	fail("the install wrote no libbtbb.pc under ${pc_install}")
+check_installed_pc(${pc_install} "installed to the prefix it was configured with")
+
+# The same build installed somewhere else, which is what
+# `cmake --install build --prefix <dir>` does and what this repository's own
+# CI does with it. The prefix the configure knew is not the one the files end
+# up under, so libbtbb.pc has to work its own out from where it lands. The
+# first install is taken away first, so that a libbtbb.pc still naming the
+# configure-time prefix points at nothing rather than at those files.
+set(pc_elsewhere ${BINARY_DIR}/pkgconfig-install-elsewhere)
+file(REMOVE_RECURSE ${pc_elsewhere} ${pc_install})
+execute_process(
+	COMMAND ${CMAKE_COMMAND} --install ${pc_build} --prefix ${pc_elsewhere}
+	RESULT_VARIABLE result OUTPUT_VARIABLE output ERROR_VARIABLE error)
+if(NOT result EQUAL 0)
+	fail("the install into a second prefix failed:\n${output}${error}")
 else()
-	list(GET pc_files 0 pc_file)
-	set(pc_libdir)
-	set(pc_includedir)
-	file(STRINGS ${pc_file} pc_lines)
-	foreach(line IN LISTS pc_lines)
-		if(line MATCHES "^libdir=(.+)$")
-			set(pc_libdir "${CMAKE_MATCH_1}")
-		elseif(line MATCHES "^includedir=(.+)$")
-			set(pc_includedir "${CMAKE_MATCH_1}")
-		endif()
-	endforeach()
-	# Both are written relative to the prefix, which is where this case
-	# installed.
-	string(REPLACE "\${prefix}" "${pc_install}" pc_libdir "${pc_libdir}")
-	string(REPLACE "\${prefix}" "${pc_install}" pc_includedir "${pc_includedir}")
-
-	if(NOT pc_libdir)
-		fail("libbtbb.pc has no libdir line:\n${pc_lines}")
-	else()
-		file(GLOB pc_libs ${pc_libdir}/libbtbb.*)
-		if(NOT pc_libs)
-			fail("libbtbb.pc names libdir ${pc_libdir}, which holds no library")
-		endif()
-	endif()
-
-	if(NOT pc_includedir)
-		fail("libbtbb.pc has no includedir line:\n${pc_lines}")
-	elseif(NOT EXISTS ${pc_includedir}/btbb.h)
-		fail("libbtbb.pc names includedir ${pc_includedir}, which holds no btbb.h")
-	endif()
+	check_installed_pc(${pc_elsewhere} "installed with --prefix into another directory")
 endif()
 
 if(failures GREATER 0)

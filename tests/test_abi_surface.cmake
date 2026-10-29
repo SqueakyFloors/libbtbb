@@ -56,16 +56,25 @@ if(declared_count LESS 50)
 endif()
 
 # What the library exports: "<address> <type> <name>" per line, with no
-# address where the symbol has none. U and u are the symbols the library
+# address where the symbol has none. U, u, w and v are the symbols the library
 # imports rather than defines. A Mach-O name carries a leading underscore,
 # which the caller asks to be taken off.
+#
+# The dynamic symbol table is what a program resolves against at run time, and
+# -D reads it, so the answer holds for a stripped library too. Mach-O keeps
+# one table and its nm has no -D, so there -g is the whole of it.
+if(DYNAMIC_SYMBOLS)
+	set(nm_args -D --defined-only)
+else()
+	set(nm_args -g)
+endif()
 execute_process(
-	COMMAND "${NM}" -g "${LIBRARY}"
+	COMMAND "${NM}" ${nm_args} "${LIBRARY}"
 	OUTPUT_VARIABLE nm_output
 	ERROR_VARIABLE nm_error
 	RESULT_VARIABLE result)
 if(NOT result EQUAL 0)
-	message(FATAL_ERROR "${NM} -g ${LIBRARY} failed: ${nm_error}")
+	message(FATAL_ERROR "${NM} ${nm_args} ${LIBRARY} failed: ${nm_error}")
 endif()
 
 set(exported)
@@ -74,7 +83,7 @@ foreach(line IN LISTS nm_lines)
 	if(line MATCHES "^[0-9a-fA-F]* +([A-Za-z]) +([A-Za-z_][A-Za-z0-9_]*)$")
 		set(type "${CMAKE_MATCH_1}")
 		set(name "${CMAKE_MATCH_2}")
-		if(type STREQUAL "U" OR type STREQUAL "u")
+		if(type MATCHES "^[Uuwv]$")
 			continue()
 		endif()
 		if(STRIP_UNDERSCORE)

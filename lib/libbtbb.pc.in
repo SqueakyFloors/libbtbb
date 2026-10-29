@@ -1,4 +1,10 @@
-prefix=@CMAKE_INSTALL_PREFIX@
+# The prefix is worked out from where this file is, so that the library can be
+# found wherever it is installed: a prefix given at install time
+# (cmake --install --prefix) is not the one that was known when this file was
+# written, and a staged or relocated install moves again afterwards.
+# pkgconf and pkg-config 0.29 and later define pcfiledir; this file sits in
+# <prefix>/@PC_LIBDIR@/pkgconfig, two directories down.
+prefix=${pcfiledir}/../..
 exec_prefix=${prefix}
 libdir=${prefix}/@PC_LIBDIR@
 includedir=${prefix}/@PC_INCLUDEDIR@

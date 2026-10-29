@@ -45,6 +45,20 @@ add_subdirectory(src)
 set(PC_LIBDIR lib${LIB_SUFFIX})
 set(PC_INCLUDEDIR include)
 
+# Where the install puts a library is LIB_SUFFIX's business here, not
+# GNUInstallDirs': changing that is a packaging decision rather than a fix,
+# and #88 is where it is being decided.
+# A build whose CMAKE_INSTALL_LIBDIR says somewhere else is told, because
+# otherwise the setting looks as though it worked. A 64-bit Fedora or SUSE
+# build sets it to lib64 of its own accord, and -DLIB_SUFFIX=64 is the way to
+# ask for that here.
+if(NOT "${CMAKE_INSTALL_LIBDIR}" STREQUAL "${PC_LIBDIR}")
+	message(WARNING
+		"the library is installed to ${PC_LIBDIR}, not the "
+		"${CMAKE_INSTALL_LIBDIR} of CMAKE_INSTALL_LIBDIR; "
+		"use -DLIB_SUFFIX= to choose the directory")
+endif()
+
 CONFIGURE_FILE(
     ${CMAKE_CURRENT_SOURCE_DIR}/libbtbb.pc.in
     ${CMAKE_CURRENT_BINARY_DIR}/libbtbb.pc

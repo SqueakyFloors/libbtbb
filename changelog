@@ -403,8 +403,11 @@ libbtbb (2020-12-R1+fork5) unstable; urgency=low
     longer decoded at all, so nothing of it reaches a record either.
   * The interface was compared with 2020-12-R1 before the release, by reading
     the debug information of both shared libraries with abidiff. The soname
-    stays libbtbb.so.1, so a program built against an earlier fork build goes
-    on working. btbb.h, the only header the install offers, has gained six
+    stays libbtbb.so.1: a program that uses the library through btbb.h goes
+    on working, and a program that declared one of the library's internal
+    symbols for itself is the one case that does not, as the entry about
+    hop() in this release already describes. btbb.h, the only header the
+    install offers, has gained six
     functions - btbb_find_ac_n(), btbb_packet_set_esco_length(),
     btbb_packet_get_esco_length(), btbb_piconet_drop_clock(),
     lell_allocate_and_decode_n() and lell_get_payload_length() - and five
@@ -434,20 +437,28 @@ libbtbb (2020-12-R1+fork5) unstable; urgency=low
     a sequence for it, and lell_print()'s complaints about a malformed packet
     go to standard error rather than into the packet dump on standard output.
   * btbb_pcap_open() is no longer exported. It carries the library's public
-    prefix but no installed header declares it, so nothing outside the
-    library's own sources could call it; its companion btbb_pcap_dump()
+    prefix but no installed header declares it, so nothing following the
+    header could call it; its companion btbb_pcap_dump()
     stopped being exported when the PCAP writer was rewritten. A new
     abi_surface test holds the exported names to what btbb.h declares, so a
     public function cannot go missing unnoticed and an internal one cannot
     join the interface unnoticed.
-  * libbtbb.pc names the directories the install writes to. It took its
-    libdir and includedir from GNUInstallDirs, which answers
-    lib/x86_64-linux-gnu where the prefix is /usr on a multiarch
-    distribution and lib64 on others, while the library is installed to
-    lib${LIB_SUFFIX} and the header to include. A program linked with
-    `pkg-config --libs libbtbb` was given a -L for a directory holding no
-    library, and linked by luck where the compiler's own search path covered
-    for it, or not at all where it did not.
+  * libbtbb.pc names the directories the library and the header are really
+    in. A program linked with `pkg-config --libs libbtbb` was given a -L for
+    a directory holding no library, and linked by luck where the compiler's
+    own search path covered for it, or not at all where it did not. Two
+    things were wrong. The libdir and includedir came from GNUInstallDirs,
+    which answers lib/x86_64-linux-gnu where the prefix is /usr on a
+    multiarch distribution and lib64 on others, while the library is
+    installed to lib${LIB_SUFFIX} and the header to include. And the prefix
+    was the one given when the build was configured, so installing the same
+    build somewhere else - `cmake --install build --prefix somewhere`, which
+    is how a package is staged - left a file pointing back at a directory the
+    files are not in. The prefix is now worked out from where libbtbb.pc
+    itself is, so it follows the files wherever they are installed or moved
+    to. A build whose CMAKE_INSTALL_LIBDIR asks for a directory the install
+    does not use now says so while configuring, and names -DLIB_SUFFIX= as
+    the way to choose one.
 
   * Manufacturer-specific advertising data decodes the company name for
     identifiers assigned since 2020. The table came from BlueZ and ended at
