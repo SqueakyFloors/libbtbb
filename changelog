@@ -368,6 +368,14 @@ libbtbb (2020-12-R1+fork5) unstable; urgency=low
     and says so, and reports success - when the same version is already
     installed where the interpreter itself looks, so the second prefix came
     out with btaptap in it and no module.
+  * A capture records the payload of the packet that settles a piconet's
+    upper address part. That packet is the first evidence the address part
+    was derived from, and its record carried a correct-CRC result over a
+    payload a reader could not see: the trial clock whose CRC came out is the
+    packet's own decode, so the payload it produced now reaches the capture
+    file and the dump. Records written for a candidate clock the search
+    rejected still carry no payload, because those bytes are the trial's
+    rather than the packet's.
 
   * Manufacturer-specific advertising data decodes the company name for
     identifiers assigned since 2020. The table came from BlueZ and ended at
