@@ -35,36 +35,53 @@ if(NOT MSVC)
 	set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -std=gnu90")
 endif()
 
+# Where the library, the header and libbtbb.pc are installed, under
+# CMAKE_INSTALL_PREFIX. GNUInstallDirs works out the directory this system
+# keeps libraries in: lib on macOS and under /usr/local, lib64 on a 64-bit
+# Fedora, RHEL or SUSE, and lib/<triplet> where the prefix is /usr on a
+# multiarch Debian or Ubuntu. LIB_SUFFIX, the older way of asking for the
+# same thing, still decides where it is set, so a build command that passes
+# it installs where it always did; it names the library's directory only, and
+# the header follows CMAKE_INSTALL_INCLUDEDIR either way.
+if(DEFINED LIB_SUFFIX)
+	set(BTBB_INSTALL_LIBDIR lib${LIB_SUFFIX})
+else()
+	set(BTBB_INSTALL_LIBDIR ${CMAKE_INSTALL_LIBDIR})
+endif()
+set(BTBB_INSTALL_INCLUDEDIR ${CMAKE_INSTALL_INCLUDEDIR})
+message(STATUS
+	"Installing the library to ${BTBB_INSTALL_LIBDIR} and the header to "
+	"${BTBB_INSTALL_INCLUDEDIR}, under ${CMAKE_INSTALL_PREFIX}")
+
 add_subdirectory(src)
 
-# The directories libbtbb.pc names have to be the ones the install writes to,
-# which are lib${LIB_SUFFIX} and include. GNUInstallDirs answers something
-# else on some systems - lib/x86_64-linux-gnu where the prefix is /usr on a
-# multiarch distribution, lib64 on others - and a consumer whose pkg-config
-# -L names a directory holding no library links by luck or not at all.
-set(PC_LIBDIR lib${LIB_SUFFIX})
-set(PC_INCLUDEDIR include)
-
-# The way back out of the pkgconfig directory to the prefix, one ".." per
-# directory, because LIB_SUFFIX can carry a path rather than a suffix: the
-# Debian package builds with -DLIB_SUFFIX=/x86_64-linux-gnu, which installs
-# into lib/x86_64-linux-gnu/pkgconfig, three directories down.
-string(REGEX REPLACE "[^/]+" ".." PC_PREFIX_UP "${PC_LIBDIR}/pkgconfig")
-
-# Where the install puts a library is LIB_SUFFIX's business here, not
-# GNUInstallDirs': changing that is a packaging decision rather than a fix,
-# and #88 is where it is being decided.
-# A build whose CMAKE_INSTALL_LIBDIR says somewhere else is told, because
-# otherwise the setting looks as though it worked. It is a note rather than a
-# warning: a 64-bit Fedora, RHEL or SUSE build sets that variable to lib64 of
-# its own accord, so a plain build there would be answered with what reads as
-# a fault when nothing is wrong.
-if(NOT "${CMAKE_INSTALL_LIBDIR}" STREQUAL "${PC_LIBDIR}")
-	message(STATUS
-		"Installing the library to ${PC_LIBDIR}, not the "
-		"${CMAKE_INSTALL_LIBDIR} of CMAKE_INSTALL_LIBDIR: "
-		"-DLIB_SUFFIX=64 asks for lib64, and -DLIB_SUFFIX=/<triplet> "
-		"for a multiarch directory")
+# The directories libbtbb.pc names have to be the ones the install writes to:
+# a consumer whose pkg-config -L names a directory holding no library links
+# by luck or not at all.
+#
+# A directory under the prefix is named relative to it, so that the file
+# works wherever the install ends up: the prefix is read back out of this
+# file's own location at the top of libbtbb.pc.in. The way back out of the
+# pkgconfig directory is one ".." per directory, because the libdir can be a
+# path of its own - lib/x86_64-linux-gnu, which is how the Debian package
+# builds this library - rather than a single name.
+#
+# A libdir or includedir given as an absolute path is installed to exactly
+# that, wherever the prefix is, so libbtbb.pc names it as it stands and takes
+# the configured prefix for the rest.
+string(REGEX REPLACE "[^/]+" ".." pc_prefix_up
+	"${BTBB_INSTALL_LIBDIR}/pkgconfig")
+set(PC_PREFIX "\${pcfiledir}/${pc_prefix_up}")
+if(IS_ABSOLUTE "${BTBB_INSTALL_LIBDIR}")
+	set(PC_PREFIX "${CMAKE_INSTALL_PREFIX}")
+	set(PC_LIBDIR "${BTBB_INSTALL_LIBDIR}")
+else()
+	set(PC_LIBDIR "\${prefix}/${BTBB_INSTALL_LIBDIR}")
+endif()
+if(IS_ABSOLUTE "${BTBB_INSTALL_INCLUDEDIR}")
+	set(PC_INCLUDEDIR "${BTBB_INSTALL_INCLUDEDIR}")
+else()
+	set(PC_INCLUDEDIR "\${prefix}/${BTBB_INSTALL_INCLUDEDIR}")
 endif()
 
 CONFIGURE_FILE(
@@ -74,5 +91,5 @@ CONFIGURE_FILE(
 
 INSTALL(
     FILES ${CMAKE_CURRENT_BINARY_DIR}/libbtbb.pc
-    DESTINATION lib${LIB_SUFFIX}/pkgconfig
+    DESTINATION ${BTBB_INSTALL_LIBDIR}/pkgconfig
 )

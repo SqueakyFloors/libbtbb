@@ -170,11 +170,10 @@ if(BUILD_TESTING)
              -DTOOLCHAIN_FILE=${CMAKE_TOOLCHAIN_FILE}
              -DSHARED_SUFFIX=${CMAKE_SHARED_LIBRARY_SUFFIX}
              -P ${CMAKE_CURRENT_SOURCE_DIR}/test_library_config.cmake)
-    # Four configures, three compiles and five installs: 11 s on an idle
-    # arm64 Mac, 30 s on one running other builds at the same time, and under
-    # 20 s on the CI runners. The limit is for a case that hangs rather than
-    # for a slow machine.
-    set_tests_properties(library_config PROPERTIES TIMEOUT 120)
+    # Six configures, five compiles and seven installs: 32 s on an arm64 Mac
+    # running other builds at the same time. The limit is for a case that
+    # hangs rather than for a slow machine.
+    set_tests_properties(library_config PROPERTIES TIMEOUT 240)
 
     # The exported names against the header the install offers. It reads the
     # built library with nm, so it needs the shared one: a static archive's

@@ -68,7 +68,7 @@ if( BUILD_SHARED_LIB )
     set_target_properties(btbb PROPERTIES VERSION ${MAJOR_VERSION}.${MINOR_VERSION} SOVERSION 1)
     set_target_properties(btbb PROPERTIES CLEAN_DIRECT_OUTPUT 1)
     install(TARGETS btbb
-            LIBRARY DESTINATION lib${LIB_SUFFIX}
+            LIBRARY DESTINATION ${BTBB_INSTALL_LIBDIR}
             COMPONENT sharedlibs)
 endif()
 
@@ -87,11 +87,11 @@ if( BUILD_STATIC_LIB )
     set_target_properties(btbb-static PROPERTIES OUTPUT_NAME "btbb")
     set_target_properties(btbb-static PROPERTIES CLEAN_DIRECT_OUTPUT 1)
     install(TARGETS btbb-static
-            DESTINATION lib${LIB_SUFFIX}
+            DESTINATION ${BTBB_INSTALL_LIBDIR}
             COMPONENT staticlibs)
 endif()
 
 install(FILES ${c_headers}
-        DESTINATION include
+        DESTINATION ${BTBB_INSTALL_INCLUDEDIR}
         COMPONENT headers
         )

@@ -11,7 +11,8 @@ INSTALL_DIRS="/usr /usr/local"
 
 LIBS="btbb ubertooth"
 
-HEADERS="bluetooth_packet.h \
+HEADERS="btbb.h \
+         bluetooth_packet.h \
          bluetooth_piconet.h \
          bluetooth_le_packet.h \
          ubertooth_interface.h \
@@ -28,9 +29,15 @@ else
 	echo 'Installed files, use "sudo cleanup.sh -d" to delete these files'
 fi
 
+# A library can be in lib, in lib64, or a directory deeper than that in a
+# multiarch lib/<triplet>, so all three are searched. A directory that does
+# not exist is skipped rather than reported by find as missing.
 for dir in $INSTALL_DIRS; do
-	for lib in $LIBS; do
-		$FIND ${dir}/lib -maxdepth 1 -name "lib$lib.so*" $EXEC
+	for libdir in ${dir}/lib ${dir}/lib64; do
+		[ -d "$libdir" ] || continue
+		for lib in $LIBS; do
+			$FIND ${libdir} -maxdepth 2 -name "lib$lib.so*" $EXEC
+		done
 	done
 	for header in $HEADERS; do
 		$FIND ${dir}/include -maxdepth 1 -name "$header" $EXEC
