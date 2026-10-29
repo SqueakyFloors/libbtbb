@@ -13,7 +13,7 @@ Rows are ordered by severity, most severe first.
 - 🟠 a feature that did not work, a visible failure, or a large performance cost.
 - 🟡 cosmetic, wording, which stream a message went to, or a latent defect.
 
-| Sev | Area | What was wrong | User impact | Pinned by | PR | Issue |
+| Sev | Area | What the test found | User impact | Pinned by | PR | Issue |
 |---|---|---|---|---|---|---|
 | 🔴 | Decoders | An LE data PDU's length was read from 5 of the 8 bits of the field, and only 64 bytes of a packet were kept | a Bluetooth 4.2 Data Length Extension packet came out short and misdecoded; on air, 46 bytes where the whole packet had arrived | `le_long`, `spec_le` | #2 | — |
 | 🔴 | Decoders | `lell_print()` and the PCAP writer read fixed offsets past the 64-byte buffer on a long or noisy packet | a read past the end of the packet's storage | `le_long`, `le_print` | #2, #49 | #35 |
@@ -203,9 +203,9 @@ thousands of real records.
 
 If you fix a defect in this library, add its row to the table in
 [What the tests found](#what-the-tests-found) in the same PR: a severity glyph,
-the area, what was wrong, what a user saw, the test that holds it down, your PR
+the area, what the test found, what a user saw, the test that holds it down, your PR
 and the issue. Pick the glyph from the legend above that table, judging the row
-by what was wrong and what a user saw, and take the higher of two when you are
+by what the test found and what a user saw, and take the higher of two when you are
 unsure. Put the row with the others of its severity, 🔴 first, then 🟠, then 🟡,
 and within a severity next to the other rows of its area, in PR order. If your PR
 measured something — memory, time per call, a sweep of clock values, a count of
