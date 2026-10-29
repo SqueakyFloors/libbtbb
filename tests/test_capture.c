@@ -920,9 +920,26 @@ static void test_bredr_uap_search(void)
 		   that settled the address part */
 		CHECK(btbb_packet_get_flag(pkt, BTBB_CRC_CHECKED) == found);
 		CHECK(btbb_packet_get_flag(pkt, BTBB_CRC_CORRECT) == found);
-		/* the header is only decoded once the clock is known, so the
-		   HEC is not checked either way */
-		CHECK(btbb_packet_get_flag(pkt, BTBB_HEC_CHECKED) == 0);
+		/* The trial clock whose CRC came out read this packet's
+		   header on the way, so the packet carries that header and
+		   says its check bits held. A search that settled nothing
+		   read no header it can stand behind, and carries none. */
+		CHECK(btbb_packet_get_flag(pkt, BTBB_HEC_CHECKED) == found);
+		CHECK(btbb_packet_get_flag(pkt, BTBB_HEC_VALID) == found);
+		if (found) {
+			CHECK(btbb_packet_get_lt_addr(pkt) == 3);
+			CHECK(btbb_packet_get_type(pkt) == 4);	/* DH1 */
+			CHECK(btbb_packet_get_uap(pkt) == SPEC_DH1_UAP);
+		}
+		else {
+			/* and none of the up to 64 clocks it tried and gave
+			   up leaves its address part or its type behind: the
+			   trials need both on the packet to run, and a search
+			   that settles nothing puts back what the caller set,
+			   which here is nothing */
+			CHECK(btbb_packet_get_uap(pkt) == 0);
+			CHECK(btbb_packet_get_type(pkt) == 0);
+		}
 
 		CHECK(btbb_pcapng_create_file(filename, "test", &h) == 0);
 		if (h == NULL) {
@@ -950,11 +967,23 @@ static void test_bredr_uap_search(void)
 		if (blk >= capture_len)
 			return;
 		data = blk + 28;
-		CHECK((rd16(data + 20) &
-		       (BREDR_HEC_CHECKED | BREDR_HEC_VALID)) == 0);
 		if (found) {
 			int i;
 
+			/* The record of the packet that settled the address
+			   part describes the packet: the 18 header bits it
+			   sent, with their check bits holding under the
+			   reference UAP in the same record, over the payload
+			   that trial decoded. It used to carry the payload
+			   under 18 zero bits, which read as an LT_ADDR of 0
+			   and a NULL packet, a type that carries no payload
+			   at all. */
+			CHECK((rd16(data + 20) &
+			       (BREDR_HEC_CHECKED | BREDR_HEC_VALID)) ==
+			      (BREDR_HEC_CHECKED | BREDR_HEC_VALID));
+			CHECK(rd32(data + 16) ==
+			      (0x123u | ((uint32_t) 0x06 << 10)));
+			CHECK(capture[data + 5] == 0);	/* corrected header bits */
 			CHECK((rd16(data + 20) &
 			       (BREDR_CRC_CHECKED | BREDR_CRC_VALID)) ==
 			      (BREDR_CRC_CHECKED | BREDR_CRC_VALID));
@@ -970,8 +999,13 @@ static void test_bredr_uap_search(void)
 			CHECK((rd16(data + 20) &
 			       (BREDR_CRC_CHECKED | BREDR_CRC_VALID)) == 0);
 			/* no payload of the search's own, so none in the
-			   record */
+			   record, and no header either: every clock the
+			   search tried was ruled out, so none of the headers
+			   they read is the packet's */
 			CHECK((rd16(data + 20) & BREDR_PAYLOAD_PRESENT) == 0);
+			CHECK((rd16(data + 20) &
+			       (BREDR_HEC_CHECKED | BREDR_HEC_VALID)) == 0);
+			CHECK(rd32(data + 16) == 0);
 			CHECK(rd32(blk + 20) == 22);
 		}
 	}
@@ -1120,10 +1154,9 @@ static void test_bredr_undecoded_payload_is_not_reported(void)
 
 /*
  * A packet object reused for a second frame, where the second frame goes down
- * the search for the piconet's address part. That search reads the header
- * through try_clock(), which records nothing on the packet, so none of the
- * first frame's decoded header - the bits, the HEC answer, the count of
- * corrected header bits - may reach the second frame's record.
+ * the search for the piconet's address part. The record has to describe the
+ * second frame: none of the first frame's decoded header - the bits, the HEC
+ * answer, the count of corrected header bits - may reach it.
  */
 static void test_bredr_reused_packet_in_the_uap_search(void)
 {
@@ -1175,11 +1208,15 @@ static void test_bredr_reused_packet_in_the_uap_search(void)
 	CHECK(btbb_process_packet(pkt, pn) == 0);
 	CHECK(btbb_piconet_get_flag(pn, BTBB_UAP_VALID) == 1);
 
-	/* none of frame A's header survives on frame B */
+	/* The search settled the address part on frame B, so the header on
+	   the packet is frame B's own, read at the clock that settled it:
+	   frame B's clean header needed nothing corrected, where frame A's
+	   took three symbols put right, so none of frame A's is left. */
 	CHECK(pkt->corrected_header_bits == 0);
-	CHECK(btbb_packet_get_flag(pkt, BTBB_HEC_CHECKED) == 0);
-	CHECK(btbb_packet_get_flag(pkt, BTBB_HEC_VALID) == 0);
-	CHECK(btbb_packet_get_header_packed(pkt) == 0);
+	CHECK(btbb_packet_get_flag(pkt, BTBB_HEC_CHECKED) == 1);
+	CHECK(btbb_packet_get_flag(pkt, BTBB_HEC_VALID) == 1);
+	CHECK(btbb_packet_get_header_packed(pkt) ==
+	      (0x123u | ((uint32_t) 0x06 << 10)));
 
 	unlink_quietly(filename);
 	CHECK(btbb_pcapng_create_file(filename, "test", &h) == 0);
@@ -1205,9 +1242,11 @@ static void test_bredr_reused_packet_in_the_uap_search(void)
 	data = blk + 28;
 	CHECK(capture[data + 5] == 0);			/* corrected header bits */
 	CHECK(rd16(data + 6) == 0);			/* corrected payload bits */
-	CHECK(rd32(data + 16) == 0);			/* bt header */
+	CHECK(rd32(data + 16) ==			/* bt header */
+	      (0x123u | ((uint32_t) 0x06 << 10)));
 	CHECK((rd16(data + 20) &
-	       (BREDR_HEC_CHECKED | BREDR_HEC_VALID)) == 0);
+	       (BREDR_HEC_CHECKED | BREDR_HEC_VALID)) ==
+	      (BREDR_HEC_CHECKED | BREDR_HEC_VALID));
 }
 
 /*

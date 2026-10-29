@@ -1759,57 +1759,98 @@ uint8_t try_clock(int clock, btbb_packet* pkt)
 	return pkt->UAP;
 }
 
-/* decode the packet header */
-int btbb_decode_header(btbb_packet* pkt)
+/* Drop everything the packet says about its header, so that what is left
+ * describes no header rather than the last one read. */
+static void forget_header(btbb_packet* pkt)
+{
+	btbb_packet_set_flag(pkt, BTBB_HEC_CHECKED, 0);
+	btbb_packet_set_flag(pkt, BTBB_HEC_VALID, 0);
+	memset(pkt->packet_header, 0, sizeof(pkt->packet_header));
+	pkt->packet_lt_addr = 0;
+	/* The type goes too, so that btbb_packet_get_type() cannot name a
+	 * type the recorded header bits do not hold. */
+	pkt->packet_type = 0;
+	pkt->packet_flags = 0;
+	pkt->packet_hec = 0;
+	pkt->corrected_header_bits = 0;
+}
+
+/*
+ * Read the 18 header bits at this CLK1-6 and record them on the packet: the
+ * bits as they went on air, how many of them the error correction had to
+ * mend, whether the check bits were checked and whether they passed, and the
+ * fields a passing header gives.  Returns 1 when they passed.
+ *
+ * Only the header is touched, so a caller that has already decoded this
+ * packet's payload keeps it.  That is the address-part search: the trial
+ * clock whose CRC came out decoded the payload on the way, and the same
+ * trial read this header, so one record holds both.
+ */
+int record_header_at_clock(btbb_packet* pkt, int clock)
 {
 	/* skip 72 bit access code */
 	char *stream = pkt->symbols + 68;
 	/* 18 bit packet header */
 	char header[18];
-	uint8_t UAP;
+	uint16_t hdr_data;
+	uint8_t hec, UAP;
 	int header_corrections = 0;
 
-	/* Nothing is known about this packet until it decodes, and a packet
-	 * can be handed new symbols without its decoded state being reset, so
-	 * drop every answer and the payload before the first return below.
-	 * Without this a short capture after a decoded one is recorded with
-	 * the earlier packet's payload and the checks that passed on it. */
-	btbb_packet_set_flag(pkt, BTBB_HEC_CHECKED, 0);
-	btbb_packet_set_flag(pkt, BTBB_HEC_VALID, 0);
-	btbb_packet_set_flag(pkt, BTBB_CRC_CHECKED, 0);
-	btbb_packet_set_flag(pkt, BTBB_CRC_CORRECT, 0);
-	pkt->payload_length = 0;
-	pkt->payload_header_length = 0;
-	pkt->corrected_header_bits = 0;
-	pkt->corrected_payload_bits = 0;
+	/* Nothing is known about the header until it decodes, so drop every
+	 * answer about the last one before the first return below. */
+	forget_header(pkt);
 
 	/* check that we have enough symbols */
 	if (pkt->length < 122)
 		return 0;
 
-	if (btbb_packet_get_flag(pkt, BTBB_CLK6_VALID) &&
-	    unfec13(stream, header, 18, &header_corrections)) {
-		pkt->corrected_header_bits = (uint8_t) header_corrections;
-		unwhiten(header, pkt->packet_header, pkt->clkn, 18, 0, pkt);
-		uint16_t hdr_data = air_to_host16(pkt->packet_header, 10);
-		uint8_t hec = air_to_host8(&pkt->packet_header[10], 8);
-		UAP = uap_from_hec(hdr_data, hec);
+	if (!unfec13(stream, header, 18, &header_corrections))
+		return 0;
 
-		/* Record the answer on the packet, so a capture file can say
-		   whether the HEC was checked and whether it passed. */
-		btbb_packet_set_flag(pkt, BTBB_HEC_CHECKED, 1);
-		btbb_packet_set_flag(pkt, BTBB_HEC_VALID, UAP == pkt->UAP);
+	pkt->corrected_header_bits = (uint8_t) header_corrections;
+	unwhiten(header, pkt->packet_header, clock, 18, 0, pkt);
+	hdr_data = air_to_host16(pkt->packet_header, 10);
+	hec = air_to_host8(&pkt->packet_header[10], 8);
+	UAP = uap_from_hec(hdr_data, hec);
 
-		if (UAP == pkt->UAP) {
-			pkt->packet_lt_addr = air_to_host8(&pkt->packet_header[0], 3);
-			pkt->packet_type = air_to_host8(&pkt->packet_header[3], 4);
-			pkt->packet_flags = air_to_host8(&pkt->packet_header[7], 3);
-			pkt->packet_hec = hec;
-			return 1;
-		}
+	/* Record the answer on the packet, so a capture file can say
+	   whether the HEC was checked and whether it passed. */
+	btbb_packet_set_flag(pkt, BTBB_HEC_CHECKED, 1);
+	btbb_packet_set_flag(pkt, BTBB_HEC_VALID, UAP == pkt->UAP);
+
+	if (UAP != pkt->UAP)
+		return 0;
+
+	pkt->packet_lt_addr = air_to_host8(&pkt->packet_header[0], 3);
+	pkt->packet_type = air_to_host8(&pkt->packet_header[3], 4);
+	pkt->packet_flags = air_to_host8(&pkt->packet_header[7], 3);
+	pkt->packet_hec = hec;
+	return 1;
+}
+
+/* decode the packet header */
+int btbb_decode_header(btbb_packet* pkt)
+{
+	/* Nothing is known about this packet until it decodes, and a packet
+	 * can be handed new symbols without its decoded state being reset, so
+	 * drop the payload and what was checked of it too.  Without this a
+	 * short capture after a decoded one is recorded with the earlier
+	 * packet's payload and the checks that passed on it. */
+	btbb_packet_set_flag(pkt, BTBB_CRC_CHECKED, 0);
+	btbb_packet_set_flag(pkt, BTBB_CRC_CORRECT, 0);
+	pkt->payload_length = 0;
+	pkt->payload_header_length = 0;
+	pkt->corrected_payload_bits = 0;
+
+	/* The header is whitened at the sender's CLK1-6, so reading it needs
+	 * the packet to have been given the piconet's clock rather than the
+	 * receiving board's.  BTBB_CLK6_VALID is the caller saying it has. */
+	if (!btbb_packet_get_flag(pkt, BTBB_CLK6_VALID)) {
+		forget_header(pkt);
+		return 0;
 	}
 
-	return 0;
+	return record_header_at_clock(pkt, (int) pkt->clkn);
 }
 
 int btbb_decode_payload(btbb_packet* pkt)

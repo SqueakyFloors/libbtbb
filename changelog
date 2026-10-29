@@ -50,6 +50,28 @@ libbtbb (2020-12-R1+fork5) unstable; urgency=low
     stage of recovery reports. The library's own hop arithmetic keeps working
     from the separate slot field it has used since the two were told apart,
     so nothing internal reads one unit for the other.
+  * The packet that settles a piconet's address part keeps the header its own
+    decode read, so one record holds the header and the payload together. The
+    search tries a packet at up to 64 candidate clocks, and the trial whose
+    CRC comes out is the packet's own decode: its payload has been reported
+    since the last release, but the header it was unwhitened with was read
+    into a scratch buffer and thrown away, leaving nothing on the packet - no
+    header bits, no HEC answer, no count of corrected header bits. The record
+    of the one packet a reader most needs therefore carried eight bytes of
+    payload under 18 zero bits, which read as LT_ADDR 0 and a NULL packet, a
+    type that carries no payload at all. A capture tool could get the header
+    by handing the packet its symbols again at the piconet's clock, but that
+    is a new frame as far as the library is concerned and the payload goes
+    with it, so a record could hold one half or the other and never both. The
+    trial that settles the address part now records its header on the packet
+    the way it already records its payload: the bits as they went on air, the
+    fields they give, and BTBB_HEC_CHECKED with BTBB_HEC_VALID, which hold
+    under the same address part the record carries. The same goes for the
+    other way a search settles, candidate clocks ruled out until one is left:
+    an idle link carries NULL and POLL packets, which have no payload and so
+    no CRC to settle anything, and the clock that is left reads the packet's
+    header. A search that settles nothing still records no header, since every
+    clock it tried was ruled out.
   * A survey piconet can be read while the survey is still running. The only
     way into a survey's results was btbb_next_survey_result(), which takes
     each piconet out of the survey, so a tool could not read the UAP the

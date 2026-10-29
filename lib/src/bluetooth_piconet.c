@@ -915,6 +915,16 @@ int btbb_uap_from_header(btbb_packet *pkt, btbb_piconet *pn)
 	uint8_t UAP;
 	int count, crc_chk, first_clock = 0;
 
+	/* The trials below put their own address part and type on the packet,
+	 * because that is how crc_check() knows which payload decoder to run.
+	 * A search that does not settle has found out nothing about this
+	 * packet, so what the caller set is put back on the way out: nothing
+	 * else would say which of up to 64 abandoned guesses the two came
+	 * from, and btbb_packet_get_uap() and btbb_packet_get_type() are
+	 * public. */
+	const uint8_t caller_uap = pkt->UAP;
+	const uint8_t caller_type = pkt->packet_type;
+
 	int remaining = 0;
 	/* The packet's clock as CLK1-27, the 625 us slot count. Its name on
 	 * the packet is clkn, but btbb_packet_set_data() shifts the 312.5 us
@@ -984,6 +994,18 @@ int btbb_uap_from_header(btbb_packet *pkt, btbb_piconet *pn)
 
 			default: /* CRC success */
 				settle_clk6_offset(pn, count);
+				/* This trial is the packet's own decode - its
+				 * CRC is what settled the address part - so
+				 * the header it read at this clock is the
+				 * packet's own header, and the packet carries
+				 * it the way it already carries the payload
+				 * this trial decoded. Without it the record of
+				 * the packet a reader most needs, the first
+				 * evidence the address part came from, holds a
+				 * payload under 18 zero bits that read as an
+				 * LT_ADDR of 0 and a NULL packet, which
+				 * carries no payload at all. */
+				record_header_at_clock(pkt, clock);
 				if (!btbb_piconet_get_flag(pn, BTBB_UAP_VALID))
 					piconet_note("Correct CRC! UAP = 0x%x found after %d total packets.\n",
 						     UAP, pn->total_packets_observed);
@@ -1002,6 +1024,11 @@ int btbb_uap_from_header(btbb_packet *pkt, btbb_piconet *pn)
 	btbb_piconet_set_flag(pn, BTBB_GOT_FIRST_PACKET, 1);
 
 	if (remaining == 1) {
+		/* this packet's clock under the one candidate left, as the
+		 * loop above worked it out for every candidate it tried */
+		int clock = (int) ((first_clock + clk1_27 -
+				    pn->first_pkt_time) % 64);
+
 		settle_clk6_offset(pn, first_clock);
 		if (!btbb_piconet_get_flag(pn, BTBB_UAP_VALID))
 			piconet_note("UAP = 0x%x found after %d total packets.\n",
@@ -1014,6 +1041,16 @@ int btbb_uap_from_header(btbb_packet *pkt, btbb_piconet *pn)
 		pn->UAP = pn->clock6_candidates[first_clock];
 		btbb_piconet_set_flag(pn, BTBB_CLK6_VALID, 1);
 		btbb_piconet_set_flag(pn, BTBB_UAP_VALID, 1);
+		/* The clock is settled here too - the candidates ran out
+		 * until one was left - so the header this packet sent is the
+		 * one that clock reads, and the packet carries it as it does
+		 * on the CRC above. The clocks tried after the surviving
+		 * candidate left their own address part and type behind, so
+		 * the piconet's address part goes on the packet first: it is
+		 * what this header's check bits came out against, and what a
+		 * reader checks the recorded header against. */
+		btbb_packet_set_uap(pkt, pn->UAP);
+		record_header_at_clock(pkt, clock);
 		pn->total_packets_observed = 0;
 		return 1;
 	}
@@ -1022,6 +1059,8 @@ int btbb_uap_from_header(btbb_packet *pkt, btbb_piconet *pn)
 		reset(pn);
 	}
 
+	pkt->UAP = caller_uap;
+	pkt->packet_type = caller_type;
 	return 0;
 }
 
