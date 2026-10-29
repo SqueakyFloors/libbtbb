@@ -2,8 +2,9 @@
  * What lell_print() writes, and on which stream: packets whose decode
  * involves byte assembly (a CONNECT_REQ, whose connection access address has
  * its top bit set, and advertising data carrying 16-bit service UUIDs), and
- * packets whose advertising data is malformed, where the complaint belongs on
- * stderr and the dump on stdout.
+ * packets the decode cannot read as what they claim to be, which are counted
+ * by kind and say nothing until a caller asks for the detail - and then on
+ * stderr, with the dump on stdout either way.
  *
  * This file is part of libbtbb
  *
@@ -344,6 +345,16 @@ static const uint8_t BAD_MANUFACTURER_PACKET[MAX_LE_SYMBOLS] = {
 	0xde, 0xad, 0xbe,			/* CRC, unchecked */
 };
 
+/* A 16-bit Service UUID list that is not a whole number of UUIDs. */
+static const uint8_t BAD_UUID16_PACKET[MAX_LE_SYMBOLS] = {
+	0xd6, 0xbe, 0x89, 0x8e,
+	0x00,					/* ADV_IND */
+	11,					/* 6 + 5 bytes */
+	0x66, 0x55, 0x44, 0x33, 0x22, 0x11,	/* AdvA */
+	0x04, 0x03, 0x0d, 0x18, 0x0f,		/* 16-bit UUIDs, 3 bytes */
+	0xde, 0xad, 0xbe,			/* CRC, unchecked */
+};
+
 static const uint8_t BAD_UUID128_PACKET[MAX_LE_SYMBOLS] = {
 	0xd6, 0xbe, 0x89, 0x8e,
 	0x00,					/* ADV_IND */
@@ -353,49 +364,191 @@ static const uint8_t BAD_UUID128_PACKET[MAX_LE_SYMBOLS] = {
 	0xde, 0xad, 0xbe,			/* CRC, unchecked */
 };
 
-/* The complaints go to stderr, and the dump on stdout stays a dump. */
-static void test_diagnostics_go_to_stderr(void)
+/*
+ * One case per kind of malformed payload the decoder counts, with the detail
+ * it writes for that payload when a caller has asked for it.
+ */
+static const struct {
+	const uint8_t *packet;
+	const char *message;
+	const char *dump_line;
+	lell_malformed_kind kind;
+} MALFORMED_CASES[] = {
+	{ BAD_TX_POWER_PACKET, "note: wrong length (2, should be 1)\n",
+	  "Type 0a (Tx Power Level)", LELL_MALFORMED_AD_FIELD_LENGTH },
+	{ BAD_INTERVAL_PACKET, "note: wrong length (2, should be 4)\n",
+	  "Type 12 (Slave Connection Interval Range)",
+	  LELL_MALFORMED_AD_FIELD_LENGTH },
+	{ BAD_SERVICE_DATA_PACKET, "note: wrong length (1, should be >= 2)\n",
+	  "Type 16 (Service Data)", LELL_MALFORMED_AD_FIELD_LENGTH },
+	{ BAD_MANUFACTURER_PACKET, "note: wrong length (1, should be >= 2)\n",
+	  "Type ff (Manufacturer Specific Data)",
+	  LELL_MALFORMED_AD_FIELD_LENGTH },
+	{ BAD_UUID16_PACKET,
+	  "note: wrong length (3, must be divisible by 2)\n",
+	  "Type 03 (16-bit Service UUIDs)", LELL_MALFORMED_AD_FIELD_LENGTH },
+	{ BAD_UUID128_PACKET,
+	  "note: wrong length (2, must be divisible by 16)\n",
+	  "Type 07 (128-bit Service UUIDs)", LELL_MALFORMED_AD_FIELD_LENGTH },
+	{ PAST_END_PACKET,
+	  "note: advertising data element claims bytes 1 to 5 of a"
+	  " 4-byte payload\n",
+	  "Type:  ADV_IND", LELL_MALFORMED_AD_PAST_END },
+	{ ZERO_LENGTH_PACKET,
+	  "note: advertising data element claims a length of 0\n",
+	  "Type:  ADV_IND", LELL_MALFORMED_AD_ZERO_LENGTH },
+};
+
+#define MALFORMED_CASE_COUNT \
+	(sizeof(MALFORMED_CASES) / sizeof(MALFORMED_CASES[0]))
+
+/* Start every kind's count again, so one case's count is its own. */
+static void reset_malformed_counts(void)
+{
+	lell_malformed_count(LELL_MALFORMED_ANY, 1);
+}
+
+static void check_count(lell_malformed_kind kind, uint64_t want,
+			const char *what)
+{
+	uint64_t got = lell_malformed_count(kind, 0);
+
+	if (got != want) {
+		printf("FAIL: %s counted %llu, wanted %llu\n", what,
+		       (unsigned long long) got, (unsigned long long) want);
+		++failures;
+	}
+}
+
+/*
+ * Malformed advertising data is ordinary on the air - a ten-second capture
+ * on a busy bench holds hundreds of these - so the decode counts them and
+ * says nothing per payload. The dump on stdout is unchanged.
+ */
+static void test_malformed_payloads_are_counted_not_printed(void)
 {
 	char out[8192], err[1024];
-
-	static const struct {
-		const uint8_t *packet;
-		const char *message;
-		const char *dump_line;
-	} CASES[] = {
-		{ BAD_TX_POWER_PACKET, "Wrong length (2, should be 1)\n",
-		  "Type 0a (Tx Power Level)" },
-		{ BAD_INTERVAL_PACKET, "Wrong length (2, should be 4)\n",
-		  "Type 12 (Slave Connection Interval Range)" },
-		{ BAD_SERVICE_DATA_PACKET, "Wrong length (1, should be >= 2)\n",
-		  "Type 16 (Service Data)" },
-		{ BAD_MANUFACTURER_PACKET, "Wrong length (1, should be >= 2)\n",
-		  "Type ff (Manufacturer Specific Data)" },
-		{ BAD_UUID128_PACKET,
-		  "Wrong length (2, must be divisible by 16)\n",
-		  "Type 07 (128-bit Service UUIDs)" },
-		{ PAST_END_PACKET,
-		  "Error: attempt to read past end of buffer (1 + 5 > 4)\n",
-		  "Type:  ADV_IND" },
-		{ ZERO_LENGTH_PACKET, "Early return due to 0 length\n",
-		  "Type:  ADV_IND" },
-	};
 	size_t i;
 
-	for (i = 0; i < sizeof(CASES) / sizeof(CASES[0]); ++i) {
-		if (decode_and_capture(CASES[i].packet, out, sizeof(out),
+	for (i = 0; i < MALFORMED_CASE_COUNT; ++i) {
+		reset_malformed_counts();
+
+		if (decode_and_capture(MALFORMED_CASES[i].packet,
+				       out, sizeof(out),
 				       err, sizeof(err)) != 0)
 			continue;
 
-		/* the message, and nothing else, on stderr */
-		CHECK_EQUALS(err, CASES[i].message);
-		CHECK_LACKS(out, "Wrong length");
+		/* nothing on either stream about the payload */
+		CHECK_EQUALS(err, "");
+		CHECK_LACKS(out, "note:");
+		CHECK_LACKS(out, "wrong length");
 		CHECK_LACKS(out, "Error:");
-		CHECK_LACKS(out, "Early return");
+		/* counted once, under its own kind and nothing else */
+		check_count(MALFORMED_CASES[i].kind, 1, "the payload's kind");
+		check_count(LELL_MALFORMED_ANY, 1, "every kind together");
 		/* the dump itself is still there, and still a dump */
 		CHECK_CONTAINS(out, "Type:  ADV_IND");
-		CHECK_CONTAINS(out, CASES[i].dump_line);
+		CHECK_CONTAINS(out, MALFORMED_CASES[i].dump_line);
 	}
+}
+
+/*
+ * A caller that asks for verbose output gets the detail of each payload, on
+ * stderr so that a dump on stdout holds nothing but the dump. No line calls
+ * a malformed packet off the air an error.
+ */
+static void test_verbose_prints_the_detail(void)
+{
+	char out[8192], err[1024];
+	size_t i;
+	int was = lell_set_malformed_verbose(1);
+
+	for (i = 0; i < MALFORMED_CASE_COUNT; ++i) {
+		reset_malformed_counts();
+
+		if (decode_and_capture(MALFORMED_CASES[i].packet,
+				       out, sizeof(out),
+				       err, sizeof(err)) != 0)
+			continue;
+
+		/* the detail, and nothing else, on stderr */
+		CHECK_EQUALS(err, MALFORMED_CASES[i].message);
+		CHECK_LACKS(out, "note:");
+		CHECK_LACKS(err, "Error:");
+		/* counting does not depend on the setting */
+		check_count(MALFORMED_CASES[i].kind, 1, "the payload's kind");
+		CHECK_CONTAINS(out, MALFORMED_CASES[i].dump_line);
+	}
+
+	/* the setting is given back, and says what it was */
+	if (lell_set_malformed_verbose(was) != 1) {
+		printf("FAIL: lell_set_malformed_verbose() did not report the setting\n");
+		++failures;
+	}
+	reset_malformed_counts();
+}
+
+/*
+ * The counts are per element rather than per packet, they add up over a run,
+ * and reading them with a reset starts the run again. A kind this library
+ * does not know counts nothing.
+ */
+static void test_counts_add_up_and_reset(void)
+{
+	/* two elements of the wrong length in one payload */
+	static const uint8_t TWO_BAD_FIELDS_PACKET[MAX_LE_SYMBOLS] = {
+		0xd6, 0xbe, 0x89, 0x8e,
+		0x00,					/* ADV_IND */
+		14,					/* 6 + 8 bytes */
+		0x66, 0x55, 0x44, 0x33, 0x22, 0x11,	/* AdvA */
+		0x03, 0x0a, 0x01, 0x02,			/* Tx Power, 2 bytes */
+		0x02, 0x16, 0x0d,			/* service data, 1 byte */
+		0x00,					/* a zero-length element */
+		0xde, 0xad, 0xbe,			/* CRC, unchecked */
+	};
+	char out[8192], err[1024];
+
+	reset_malformed_counts();
+
+	if (decode_and_capture(TWO_BAD_FIELDS_PACKET, out, sizeof(out),
+			       err, sizeof(err)) != 0)
+		return;
+	if (decode_and_capture(PAST_END_PACKET, out, sizeof(out),
+			       err, sizeof(err)) != 0)
+		return;
+
+	check_count(LELL_MALFORMED_AD_FIELD_LENGTH, 2, "two bad lengths");
+	check_count(LELL_MALFORMED_AD_ZERO_LENGTH, 1, "a zero-length element");
+	check_count(LELL_MALFORMED_AD_PAST_END, 1, "an element past the end");
+	check_count(LELL_MALFORMED_PDU_TOO_SHORT, 0, "a short PDU");
+	check_count(LELL_MALFORMED_ANY, 4, "every kind together");
+
+	/* A kind this library does not know, and the count of the kinds,
+	 * which is not a kind either. Reading one with a reset must leave
+	 * every real count, and the setting that follows the array in
+	 * memory, exactly where they were. */
+	check_count((lell_malformed_kind) 99, 0, "an unknown kind");
+	check_count(LELL_MALFORMED_KINDS, 0, "the count of the kinds");
+	lell_set_malformed_verbose(1);
+	lell_malformed_count((lell_malformed_kind) 99, 1);
+	lell_malformed_count(LELL_MALFORMED_KINDS, 1);
+	check_count(LELL_MALFORMED_ANY, 4, "every kind after an unknown reset");
+	if (lell_set_malformed_verbose(0) != 1) {
+		printf("FAIL: an unknown kind's reset moved the setting\n");
+		++failures;
+	}
+
+	/* one kind read with a reset leaves the others where they were */
+	if (lell_malformed_count(LELL_MALFORMED_AD_FIELD_LENGTH, 1) != 2) {
+		printf("FAIL: a reset did not report the count it cleared\n");
+		++failures;
+	}
+	check_count(LELL_MALFORMED_AD_FIELD_LENGTH, 0, "the kind just reset");
+	check_count(LELL_MALFORMED_ANY, 2, "the kinds left");
+
+	/* and resetting every kind leaves nothing */
+	lell_malformed_count(LELL_MALFORMED_ANY, 1);
+	check_count(LELL_MALFORMED_ANY, 0, "every kind after a reset");
 }
 
 /*
@@ -523,12 +676,17 @@ static void test_a_payload_too_short_for_its_type(void)
 		0xde, 0xad, 0xbe,		/* CRC, unchecked */
 	};
 	char out[8192], err[1024];
+	int was;
+
+	reset_malformed_counts();
 
 	if (decode_and_capture(SHORT_CONNECT_REQ, out, sizeof(out),
 			       err, sizeof(err)) != 0)
 		return;
 
-	CHECK_EQUALS(err, "Error: CONNECT_REQ needs 34 payload bytes, 10 received\n");
+	/* counted, and silent until a caller asks for the detail */
+	CHECK_EQUALS(err, "");
+	check_count(LELL_MALFORMED_PDU_TOO_SHORT, 1, "a short CONNECT_REQ");
 	CHECK_CONTAINS(out, "Type:  CONNECT_REQ");
 	CHECK_LACKS(out, "InitA:");
 	CHECK_LACKS(out, "AA:    ");
@@ -536,6 +694,13 @@ static void test_a_payload_too_short_for_its_type(void)
 	CHECK_LACKS(out, "SCA:");
 	/* the bytes that did arrive are still dumped */
 	CHECK_CONTAINS(out, "\n    Data:  66 55 44 33 22 11 01 02 03 04\n");
+
+	was = lell_set_malformed_verbose(1);
+	if (decode_and_capture(SHORT_CONNECT_REQ, out, sizeof(out),
+			       err, sizeof(err)) == 0)
+		CHECK_EQUALS(err, "note: CONNECT_REQ needs 34 payload bytes,"
+				  " 10 received\n");
+	lell_set_malformed_verbose(was);
 }
 
 /*
@@ -553,16 +718,28 @@ static void test_a_truncated_capture(void)
 		0xde, 0xad, 0xbe,		/* CRC, unchecked */
 	};
 	char out[8192], err[1024];
+	int was;
+
+	reset_malformed_counts();
 
 	if (decode_n_and_capture(TRUNCATED_ADV_IND, sizeof(TRUNCATED_ADV_IND),
 				 2402, out, sizeof(out), err, sizeof(err)) != 0)
 		return;
 
 	CHECK_CONTAINS(out, "Advertising / AA 8e89bed6 (valid)/  3 bytes");
-	CHECK_EQUALS(err, "Error: ADV_IND needs 6 payload bytes, 3 received\n");
+	CHECK_EQUALS(err, "");
+	check_count(LELL_MALFORMED_PDU_TOO_SHORT, 1, "a truncated ADV_IND");
 	CHECK_LACKS(out, "AdvA:");
 	CHECK_CONTAINS(out, "\n    Data:  66 55 44\n");
 	CHECK_CONTAINS(out, "\n    CRC:   de ad be\n");
+
+	was = lell_set_malformed_verbose(1);
+	if (decode_n_and_capture(TRUNCATED_ADV_IND, sizeof(TRUNCATED_ADV_IND),
+				 2402, out, sizeof(out), err,
+				 sizeof(err)) == 0)
+		CHECK_EQUALS(err, "note: ADV_IND needs 6 payload bytes,"
+				  " 3 received\n");
+	lell_set_malformed_verbose(was);
 }
 
 /* An LL Control PDU carries its opcode in the first payload byte, so one
@@ -576,6 +753,9 @@ static void test_an_empty_ll_control_pdu(void)
 		0xde, 0xad, 0xbe,		/* CRC, unchecked */
 	};
 	char out[8192], err[1024];
+	int was;
+
+	reset_malformed_counts();
 
 	/* 2404 MHz is data channel 0 */
 	if (decode_n_and_capture(EMPTY_CONTROL_PDU, sizeof(EMPTY_CONTROL_PDU),
@@ -583,9 +763,18 @@ static void test_an_empty_ll_control_pdu(void)
 		return;
 
 	CHECK_CONTAINS(out, "LLID: 3 / LL Control PDU");
-	CHECK_EQUALS(err, "Error: an LL Control PDU needs 1 payload byte, 0 received\n");
+	CHECK_EQUALS(err, "");
+	check_count(LELL_MALFORMED_PDU_TOO_SHORT, 1, "an empty control PDU");
 	CHECK_LACKS(out, "Opcode");
 	CHECK_CONTAINS(out, "\n    CRC:   de ad be\n");
+
+	was = lell_set_malformed_verbose(1);
+	if (decode_n_and_capture(EMPTY_CONTROL_PDU, sizeof(EMPTY_CONTROL_PDU),
+				 2404, out, sizeof(out), err,
+				 sizeof(err)) == 0)
+		CHECK_EQUALS(err, "note: an LL Control PDU needs 1 payload"
+				  " byte, 0 received\n");
+	lell_set_malformed_verbose(was);
 }
 
 /* A flags element with no flags in it: its one byte is not there to read. */
@@ -600,13 +789,23 @@ static void test_an_empty_flags_element(void)
 		0xde, 0xad, 0xbe,		/* CRC, unchecked */
 	};
 	char out[8192], err[1024];
+	int was;
+
+	reset_malformed_counts();
 
 	if (decode_and_capture(EMPTY_FLAGS_PACKET, out, sizeof(out),
 			       err, sizeof(err)) != 0)
 		return;
 
 	CHECK_CONTAINS(out, "Type 01 (Flags)");
-	CHECK_EQUALS(err, "Wrong length (0, should be >= 1)\n");
+	CHECK_EQUALS(err, "");
+	check_count(LELL_MALFORMED_AD_FIELD_LENGTH, 1, "an empty flags element");
+
+	was = lell_set_malformed_verbose(1);
+	if (decode_and_capture(EMPTY_FLAGS_PACKET, out, sizeof(out),
+			       err, sizeof(err)) == 0)
+		CHECK_EQUALS(err, "note: wrong length (0, should be >= 1)\n");
+	lell_set_malformed_verbose(was);
 }
 
 int main(void)
@@ -614,7 +813,9 @@ int main(void)
 	test_connect_req();
 	test_tx_power_level_is_signed();
 	test_uuid16_advertising_data();
-	test_diagnostics_go_to_stderr();
+	test_malformed_payloads_are_counted_not_printed();
+	test_verbose_prints_the_detail();
+	test_counts_add_up_and_reset();
 	test_well_formed_values_keep_their_indent();
 	test_an_over_claimed_advertising_length();
 	test_an_extended_advertising_length();

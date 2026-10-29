@@ -25,7 +25,7 @@ include(GNUInstallDirs)
 
 project(libbtbb C)
 set(MAJOR_VERSION 1)
-set(MINOR_VERSION 2)
+set(MINOR_VERSION 3)
 set(PACKAGE libbtbb)
 set(VERSION ${MAJOR_VERSION}.${MINOR_VERSION})
 add_definitions( -DVERSION="${VERSION}" )
