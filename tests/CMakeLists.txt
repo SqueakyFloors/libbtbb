@@ -47,6 +47,15 @@ if(BUILD_TESTING)
     # sanitizer build takes twice as long over.
     set_tests_properties(esco PROPERTIES TIMEOUT 60)
 
+    # The company identifier table. Its one function is internal, so this
+    # compiles the translation unit it lives in.
+    add_executable(test_companies test_companies.c)
+    target_include_directories(test_companies PRIVATE ${PROJECT_SOURCE_DIR}/lib/src)
+    target_compile_options(test_companies PRIVATE -std=gnu90)
+    add_test(NAME companies COMMAND test_companies)
+    # One walk over all 65,536 identifiers.
+    set_tests_properties(companies PROPERTIES TIMEOUT 30)
+
     add_executable(test_spec_hop test_spec_hop.c)
     target_include_directories(test_spec_hop PRIVATE ${PROJECT_SOURCE_DIR}/lib/src)
     target_link_libraries(test_spec_hop ${btbb_library})

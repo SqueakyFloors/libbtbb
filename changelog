@@ -356,6 +356,16 @@ libbtbb (2020-12-R1+fork5) unstable; urgency=low
     installed where the interpreter itself looks, so the second prefix came
     out with btaptap in it and no module.
 
+  * Manufacturer-specific advertising data decodes the company name for
+    identifiers assigned since 2020. The table came from BlueZ and ended at
+    identifier 1037, so a packet from any company registered after that showed
+    "not assigned", and 125 of the names it did carry had since been renamed or
+    changed hands. It is regenerated from the Bluetooth SIG's published Assigned
+    Numbers: 4133 identifiers named where 1038 were, and every one of the 4060 in
+    the SIG's current list by the name the SIG gives it. The 73 identifiers the
+    earlier table named that the SIG no longer lists are kept, so a capture of an
+    older device still decodes by name.
+
  -- Russell Wagner <152923636+SqueakyFloors@users.noreply.github.com>  27 Oct 2026 22:30:00 -0700
 
 libbtbb (2020-12-R1+fork4) unstable; urgency=low
