@@ -1,13 +1,15 @@
 Wireshark Plugins
 -----------------
 
-This directory contains two sets of Wireshark plugins:
-plugins:	for Wireshark 2.0+
-plugins-legacy	for Wireshark 1.x
+This directory holds two sets of Wireshark plugins:
 
-You can determine which version of wireshar you have by running:
-wireshark -v
+- `plugins`: the btbb and btbredr dissectors, for Wireshark 2.0 and later.
+- `plugins-legacy`: the same two for Wireshark 1.x, and the btatt, btle and
+  btsm dissectors, which Wireshark has carried itself since 1.12. On
+  Wireshark 1.12 or later only btbb and btbredr are needed.
 
-Within the plugins-legacy directory there are BLE plugins which have been
-included in Wireshark since v1.12.  If you are running Wireshark 1.12+ you only
-need to build the btbb and btbredr plugins.
+To see which version you have, run `wireshark -v`.
+
+Each plugin builds on its own, with its own CMake project; the libbtbb build
+does not build them. The README beside each one has its build and install
+instructions.

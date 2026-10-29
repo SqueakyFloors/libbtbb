@@ -6,14 +6,15 @@ and 2015; that is typical for a volunteer project of this size and scope. This
 fork adds to that foundation with a test suite in the normal build.
 
 There are now 23 tests, and five more where the compiler can build a fuzz
-target, driven in large part by the Bluetooth Core
-Specification's own published sample data, and they run on every push and pull
-request on Linux and macOS, plain and under AddressSanitizer and
-UndefinedBehaviorSanitizer. The vectors of the original test programs were
-kept and ported (see #9). Malformed radio packets are this library's normal
-input, so the decoders and the capture writers are fuzzed as well.
+target, driven in large part by the Bluetooth Core Specification's own
+published sample data. They run on every push and pull request: on Linux with
+gcc and macOS with clang, and once more on Linux with clang under
+AddressSanitizer and UndefinedBehaviorSanitizer. The vectors of the original
+test programs were kept and ported (see #9). Malformed radio packets are this
+library's normal input, so the decoders and the capture writers are fuzzed as
+well.
 
-The tests have helped find and fix 78 issues, many of them in packet types and
+The tests have helped find and fix 90 defects, many of them in packet types and
 capture paths that are rarely seen on the air.
 
 - [How to run them](#how-to-run-them)

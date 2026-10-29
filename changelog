@@ -1,4 +1,10 @@
 libbtbb (2020-12-R1+fork5) unstable; urgency=low
+  * The documentation describes the library as it is now. README says what
+    libbtbb decodes and who uses it, where to report a problem with this fork,
+    and what a program links: btbb.h is the whole interface, and the library's
+    version and soname. The Wireshark plugin notes say how to install into the
+    directory Wireshark 4 reads, and libbtbb.pc describes the library rather
+    than calling it a C utility library.
   * A malformed advertising payload is counted rather than reported line by
     line. Advertising data whose length fields describe more than the payload
     holds is ordinary on the air - a real packet with a corrupted byte
