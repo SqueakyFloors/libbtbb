@@ -9,11 +9,11 @@
 # received pattern is corrected to whichever of the two it is closer to, and
 # the distance to it says how many bits were wrong.
 #
-# The barker codes below are written as the encoder sees them, with the LAP's
-# most significant bit last. The library reads these bits off the air the
-# other way round, so both tables are indexed, and the correction written back,
-# in that reversed order, and the correction sits in the top 7 bits of the
-# 64-bit sync word.
+# The two codes below are written in transmission order, first bit transmitted
+# first, as the specification writes them. The library reads those 7 bits off
+# the air through air_to_host8(), which puts the first symbol in bit 0, so the
+# index of both tables is the same 7 bits the other way round. The correction
+# goes back into the top 7 bits of the 64-bit sync word.
 barkers = (0x0d, 0x72)
 distances = [0] * 128
 corrections = [0] * 128

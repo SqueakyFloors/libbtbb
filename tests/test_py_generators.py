@@ -56,7 +56,8 @@ def read(path):
 def run(script, *args):
     """Run a generator and return its standard output."""
     result = subprocess.run([sys.executable, os.path.join(UTILS, script)] + list(args),
-                            capture_output=True, text=True)
+                            stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                            universal_newlines=True)
     if result.returncode != 0:
         sys.exit("%s exited %d:\n%s" % (script, result.returncode, result.stderr))
     return result.stdout
@@ -106,6 +107,14 @@ def check_syndrome_tables():
     check("gen_check_tables.py prints 8 lines", len(lines) == 8, str(len(lines)))
     if len(lines) != 8:
         return
+    # gen_syndrome() in the library reads the low four bytes of a sync word
+    # straight into the syndrome, with no table, because the check matrix
+    # leaves those 32 bits alone. That is what the first four lines say, and
+    # the shortcut is wrong if they ever stop saying it.
+    identity = all(hex_values(lines[byte]) == [i << (8 * byte) for i in range(256)]
+                   for byte in range(4))
+    check("the low four bytes are their own syndrome", identity)
+
     header = read(os.path.join(SRC, "sw_check_tables.h"))
     for byte in range(4, 8):
         name = "sw_check_table%d" % byte
@@ -178,12 +187,22 @@ def check_syncword():
 # BR/EDR WHITENING_DATA[] the library does carry, which Vol 2, Part B,
 # Section 7.2 generates with the same polynomial.
 # ---------------------------------------------------------------------------
+def le_whitening_register(channel):
+    """Vol 6, Part B, Section 3.2: a 7-bit register with position 0 set and
+    positions 1 to 6 loaded with the channel index, most significant bit
+    first. The section's own worked example is channel index 23, which loads
+    as 1 0 1 0 1 1 1, and SPEC_EXAMPLE below holds the loading to it."""
+    return [1] + [(channel >> (5 - i)) & 1 for i in range(6)]
+
+
+SPEC_EXAMPLE_CHANNEL = 23
+SPEC_EXAMPLE_REGISTER = [1, 0, 1, 0, 1, 1, 1]
+
+
 def le_whitening_sequence(channel, length):
-    """Vol 6, Part B, Section 3.2: a 7-bit register with x^7 + x^4 + 1,
-    position 0 set and positions 1 to 6 loaded with the channel index, most
-    significant bit first. Position 6 is the output, and it is fed back into
-    position 0 and added to position 4."""
-    positions = [1] + [(channel >> (5 - i)) & 1 for i in range(6)]
+    """What that register puts out, with x^7 + x^4 + 1: position 6 is the
+    output, and it is fed back into position 0 and added to position 4."""
+    positions = le_whitening_register(channel)
     out = []
     for _ in range(length):
         bit = positions[6]
@@ -194,6 +213,9 @@ def le_whitening_sequence(channel, length):
 
 
 def check_le_whitening():
+    check("the register loads as the specification's example does",
+          le_whitening_register(SPEC_EXAMPLE_CHANNEL) == SPEC_EXAMPLE_REGISTER)
+
     out = run("le_whitening.py")
     sequence_text, offsets_text = out.split("Array index:")
     sequence = decimals(sequence_text)

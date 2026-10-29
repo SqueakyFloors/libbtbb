@@ -61,5 +61,5 @@ def gen_syndrome(c):
 # optimized check table generation (sw_check_tables.h)
 for shift in range(8):
 	for i in range(256):
-			print("0x%09x, " % gen_syndrome(i<<(shift*8)), end=' ')
+			print("0x%09xULL, " % gen_syndrome(i<<(shift*8)), end=' ')
 	print()
