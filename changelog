@@ -277,11 +277,12 @@ libbtbb (2020-12-R1+fork5) unstable; urgency=low
     after 1000 packets.
   * A piconet released while its clock was still being recovered no longer
     leaks its candidate list.
-  * btbb_piconet_get_clk_offset() now carries 312.5 us CLKN ticks and nothing
-    else. It used to hold a 6-bit count of 625 us slots between CLK1-6 being
-    found and CLK1-27 being found, so a caller reading it in that window got a
-    number in the wrong unit; it reads 0 there now. No tool reads it before
-    following a piconet.
+  * The 625 us slot offset found with the address part and the 312.5 us CLKN
+    tick offset found with CLK1-27 are separate fields inside the library, so
+    its own hop arithmetic can no longer read one for the other: one field
+    used to carry both, written in one unit and read in the other. btbb.h says
+    which of the two btbb_piconet_get_clk_offset() reports at each stage of
+    recovery.
   * AUX1 payloads decode. The payload header's length was being thrown away
     for this packet type, so every AUX1 packet reported a payload of 0 bytes.
   * EV3, EV4 and EV5 payloads decode. The eSCO types carry no length in the
