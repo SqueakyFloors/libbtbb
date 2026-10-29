@@ -43,10 +43,20 @@
 static void *counted_malloc(size_t size);
 #define malloc counted_malloc
 
+/*
+ * calloc() is rewritten separately, with a refusal flag of its own and no
+ * counting, so that a test can fail the one calloc() in this code -
+ * btbb_piconet_new()'s - without disturbing the malloc() counts the tests
+ * below assert on.
+ */
+static void *refusable_calloc(size_t count, size_t size);
+#define calloc refusable_calloc
+
 #include "bluetooth_packet.c"
 #include "bluetooth_piconet.c"
 
 #undef malloc
+#undef calloc
 
 #include "stream_capture.h"
 
@@ -54,6 +64,7 @@ static size_t largest_request;	/* bytes, since it was last reset */
 static int allocation_calls;	/* calls, since it was last reset */
 static int refuse_allocations;
 static int refuse_from;		/* refuse this call onward, 0 to refuse none */
+static int refuse_callocs;
 
 /*
  * The size each live allocation was asked for, so a test can ask how long the
@@ -102,6 +113,13 @@ static void *counted_malloc(size_t size)
 			REMEMBERED_ALLOCATIONS;
 	}
 	return block;
+}
+
+static void *refusable_calloc(size_t count, size_t size)
+{
+	if (refuse_callocs)
+		return NULL;
+	return calloc(count, size);
 }
 
 static int failures = 0;
@@ -2027,6 +2045,11 @@ static void test_a_survey_piconet_is_read_without_being_removed(void)
 
 	/* reading it leaves it in the survey: the same piconet comes back */
 	CHECK(btbb_survey_piconet(SURVEY_LAP_A) == a);
+	/* the reference stays the survey's, which is what lets a caller read
+	 * a piconet and drop it without releasing the survey's copy */
+	CHECK_EQ(1, a->refcount);
+	CHECK(btbb_survey_piconet(SURVEY_LAP_A) == a);
+	CHECK_EQ(1, a->refcount);
 	/* and it is still the piconet the survey updates */
 	survey_hears(SURVEY_LAP_A, 30);
 	CHECK(btbb_survey_piconet(SURVEY_LAP_A) == a);
@@ -2049,6 +2072,8 @@ static void test_a_survey_piconet_is_read_without_being_removed(void)
  * before a survey starts or after its results have been read. */
 static void test_a_lap_the_survey_has_not_heard_has_no_piconet(void)
 {
+	/* whatever ran before this, the survey starts out empty here */
+	survey_end();
 	CHECK(btbb_survey_piconet(SURVEY_LAP_A) == NULL);
 
 	btbb_init_survey();
@@ -2112,25 +2137,36 @@ static void test_a_piconet_taken_out_of_the_survey_is_gone_from_it(void)
 	survey_end();
 }
 
-/* A survey that cannot make room for a piconet drops the packet, where the
- * entry it failed to allocate used to be written through. */
+/*
+ * A survey that cannot make room for a piconet drops the packet. Both
+ * allocations it takes are failed in turn: the survey's own entry for the LAP,
+ * and the piconet itself, which is the larger of the two and so the one a
+ * process short of memory fails first. Either used to be written through.
+ */
 static void test_a_survey_that_cannot_allocate_drops_the_packet(void)
 {
 	/* built before allocations are refused, since finding the access
 	 * code allocates the packet */
 	btbb_packet *pkt = packet_of(SURVEY_LAP_A, 10, FOLLOWED_HEADER,
 				     hec_for(FOLLOWED_HEADER, TEST_UAP), 122);
+	int round;
 
 	CHECK(pkt != NULL);
 	if (pkt == NULL)
 		return;
 	btbb_init_survey();
-	refuse_allocations = 1;
-	CHECK_EQ(0, btbb_process_packet(pkt, NULL));
-	refuse_allocations = 0;
+	for (round = 0; round < 2; round++) {
+		if (round == 0)
+			refuse_allocations = 1;	/* the survey's entry */
+		else
+			refuse_callocs = 1;	/* the piconet */
+		CHECK_EQ(0, btbb_process_packet(pkt, NULL));
+		refuse_allocations = 0;
+		refuse_callocs = 0;
+		CHECK(btbb_survey_piconet(SURVEY_LAP_A) == NULL);
+		CHECK_EQ(0, HASH_COUNT(piconet_survey));
+	}
 	btbb_packet_unref(pkt);
-	CHECK(btbb_survey_piconet(SURVEY_LAP_A) == NULL);
-	CHECK_EQ(0, HASH_COUNT(piconet_survey));
 
 	/* and the next packet, with room again, is surveyed */
 	survey_hears(SURVEY_LAP_A, 10);

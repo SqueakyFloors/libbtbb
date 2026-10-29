@@ -13,8 +13,10 @@ libbtbb (2020-12-R1+fork5) unstable; urgency=low
     pointed at it, so a survey carrying on after some of its results had been
     read looked that LAP up again for every further packet of that piconet and
     wrote through a piconet that had been released. A survey that cannot
-    allocate room for a piconet now drops the packet, where it used to write
-    through the entry it had failed to allocate and crash.
+    allocate room for a piconet now drops the packet: neither the survey's
+    entry for the LAP nor the piconet itself was checked, so whichever had
+    failed was written through and the tool died with it. btbb_piconet_new()
+    returns NULL where it cannot allocate a piconet, for the same reason.
   * A clock the library gave up is not chosen again. Discovery starting over
     had no memory of the clock that had just failed, so a piconet could lock
     the same wrong clock, decode nothing, give it up, and go round that loop

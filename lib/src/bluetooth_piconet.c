@@ -57,6 +57,9 @@ btbb_piconet *
 btbb_piconet_new(void)
 {
 	btbb_piconet *pn = (btbb_piconet *)calloc(1, sizeof(btbb_piconet));
+
+	if (pn == NULL)
+		return NULL;
 	pn->refcount = 1;
 	return pn;
 }
@@ -1059,6 +1062,13 @@ btbb_piconet *get_piconet(uint32_t lap)
 		if (s == NULL)
 			return NULL;
 		pn = btbb_piconet_new();
+		if (pn == NULL) {
+			/* nothing goes into the survey without a piconet: an
+			 * entry holding none would answer for that LAP from
+			 * then on */
+			free(s);
+			return NULL;
+		}
 		btbb_init_piconet(pn, lap);
 
 		s->key = lap;
