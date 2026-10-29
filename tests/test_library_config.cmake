@@ -1,5 +1,6 @@
 # The library configurations the build offers. Run as:
-#   cmake -DSOURCE_DIR=<source> -DBINARY_DIR=<scratch> -P test_library_config.cmake
+#   cmake -DSOURCE_DIR=<source> -DBINARY_DIR=<scratch>
+#         -DSHARED_SUFFIX=<.so or .dylib> -P test_library_config.cmake
 #
 # These cases configure, and in one case build, a tree of their own, because
 # which library a build produces is decided at configure time: the build
@@ -84,7 +85,11 @@ endif()
 # check that the two directories it hands a program hold the library that
 # `Libs: -lbtbb` asks the linker for and the header `Cflags` points at.
 function(check_installed_pc where what)
-	file(GLOB pc_files ${where}/*/pkgconfig/libbtbb.pc)
+	# LIB_SUFFIX can carry a path, so the file is one or two directories under
+	# the prefix.
+	file(GLOB pc_files
+		${where}/*/pkgconfig/libbtbb.pc
+		${where}/*/*/pkgconfig/libbtbb.pc)
 	if(NOT pc_files)
 		fail("${what}: no libbtbb.pc was installed under ${where}")
 		set(failures ${failures} PARENT_SCOPE)
@@ -186,6 +191,53 @@ if(NOT result EQUAL 0)
 	fail("the install into a second prefix failed:\n${output}${error}")
 else()
 	check_installed_pc(${pc_elsewhere} "installed with --prefix into another directory")
+endif()
+
+# LIB_SUFFIX carrying a path rather than a suffix, which is how the Debian
+# package builds this library (-DLIB_SUFFIX=/x86_64-linux-gnu): the library,
+# and libbtbb.pc with it, go one directory deeper than usual.
+set(ma_build ${BINARY_DIR}/multiarch-build)
+set(ma_install ${BINARY_DIR}/multiarch-install)
+set(ma_elsewhere ${BINARY_DIR}/multiarch-install-elsewhere)
+file(REMOVE_RECURSE ${ma_build} ${ma_install} ${ma_elsewhere})
+execute_process(
+	COMMAND ${CMAKE_COMMAND} -S ${SOURCE_DIR} -B ${ma_build}
+	        ${like_this_build}
+	        -DCMAKE_INSTALL_PREFIX=${ma_install}
+	        -DLIB_SUFFIX=/multiarch
+	        -DBUILD_STATIC_LIB=OFF
+	        -DENABLE_PYTHON=OFF -DBUILD_TESTING=OFF
+	RESULT_VARIABLE result
+	OUTPUT_VARIABLE output
+	ERROR_VARIABLE error)
+if(NOT result EQUAL 0)
+	fail("the tree for the LIB_SUFFIX path case was refused:\n${output}${error}")
+else()
+	execute_process(COMMAND ${CMAKE_COMMAND} --build ${ma_build}
+		RESULT_VARIABLE result OUTPUT_VARIABLE output ERROR_VARIABLE error)
+	if(NOT result EQUAL 0)
+		fail("the tree for the LIB_SUFFIX path case does not build:\n${output}${error}")
+	else()
+		execute_process(COMMAND ${CMAKE_COMMAND} --install ${ma_build}
+			RESULT_VARIABLE result OUTPUT_VARIABLE output ERROR_VARIABLE error)
+		if(NOT result EQUAL 0)
+			fail("the install for the LIB_SUFFIX path case failed:\n${output}${error}")
+		else()
+			check_installed_pc(${ma_install} "installed with LIB_SUFFIX=/multiarch")
+			# And the same install staged somewhere else, the two together:
+			# a deeper libdir and a prefix that is not the configured one.
+			file(REMOVE_RECURSE ${ma_install})
+			execute_process(
+				COMMAND ${CMAKE_COMMAND} --install ${ma_build} --prefix ${ma_elsewhere}
+				RESULT_VARIABLE result OUTPUT_VARIABLE output ERROR_VARIABLE error)
+			if(NOT result EQUAL 0)
+				fail("the LIB_SUFFIX path install into a second prefix failed:\n${output}${error}")
+			else()
+				check_installed_pc(${ma_elsewhere}
+					"installed with LIB_SUFFIX=/multiarch and --prefix into another directory")
+			endif()
+		endif()
+	endif()
 endif()
 
 if(failures GREATER 0)

@@ -2,9 +2,11 @@
 # found wherever it is installed: a prefix given at install time
 # (cmake --install --prefix) is not the one that was known when this file was
 # written, and a staged or relocated install moves again afterwards.
-# pkgconf and pkg-config 0.29 and later define pcfiledir; this file sits in
-# <prefix>/@PC_LIBDIR@/pkgconfig, two directories down.
-prefix=${pcfiledir}/../..
+# pcfiledir is the directory this file is in; pkgconf and pkg-config both set
+# it, documented from pkg-config 0.29 and present in it well before that. This
+# file sits in <prefix>/@PC_LIBDIR@/pkgconfig, and the walk back out is
+# written for that depth.
+prefix=${pcfiledir}/@PC_PREFIX_UP@
 exec_prefix=${prefix}
 libdir=${prefix}/@PC_LIBDIR@
 includedir=${prefix}/@PC_INCLUDEDIR@

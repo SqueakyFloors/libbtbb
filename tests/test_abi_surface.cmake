@@ -1,7 +1,7 @@
 # What the shared library exports, against the header the install offers.
 # Run as:
 #   cmake -DLIBRARY=<libbtbb.so> -DHEADER=<btbb.h> -DNM=<nm>
-#         [-DSTRIP_UNDERSCORE=ON] -P test_abi_surface.cmake
+#         [-DSTRIP_UNDERSCORE=ON] [-DDYNAMIC_SYMBOLS=ON] -P test_abi_surface.cmake
 #
 # btbb.h is the only header the install puts in include/, so it is the whole
 # of what a program linking this library can call. Two things have to agree
@@ -12,10 +12,11 @@
 # the exported names, and once a program calls it, withdrawing it breaks that
 # program.
 #
-# The library also exports internal symbols under no prefix at all ("hop",
-# "precalc", "DH"). Hiding those is a change to the build and to the tests
-# that call them, so they are left out here rather than listed as exceptions;
-# issue #79 covers them.
+# The library also exports internal symbols under other names: no prefix at
+# all ("hop", "precalc", "DH") or one of its own ("bt_compidtostr",
+# "pcapng_append_packet"). Hiding those is a change to the build and to the
+# tests that call them, so they are left out here rather than listed as
+# exceptions; issue #79 covers them.
 
 if(NOT DEFINED LIBRARY OR NOT DEFINED HEADER OR NOT DEFINED NM)
 	message(FATAL_ERROR "LIBRARY, HEADER and NM must be set")

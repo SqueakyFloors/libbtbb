@@ -45,6 +45,12 @@ add_subdirectory(src)
 set(PC_LIBDIR lib${LIB_SUFFIX})
 set(PC_INCLUDEDIR include)
 
+# The way back out of the pkgconfig directory to the prefix, one ".." per
+# directory, because LIB_SUFFIX can carry a path rather than a suffix: the
+# Debian package builds with -DLIB_SUFFIX=/x86_64-linux-gnu, which installs
+# into lib/x86_64-linux-gnu/pkgconfig, three directories down.
+string(REGEX REPLACE "[^/]+" ".." PC_PREFIX_UP "${PC_LIBDIR}/pkgconfig")
+
 # Where the install puts a library is LIB_SUFFIX's business here, not
 # GNUInstallDirs': changing that is a packaging decision rather than a fix,
 # and #88 is where it is being decided.

@@ -21,7 +21,7 @@ served Ubertooth and other projects well for more than a decade. Like many
 volunteer projects of its scope, it carried only a few tests, from 2012 and
 2015. This fork builds on that work by adding a test suite to the normal build.
 
-There are now 18 tests: 870 assertions in their source, 176,054 assertion
+There are now 19 tests: 870 assertions in their source, 176,054 assertion
 executions per run, driven in large part by the Bluetooth Core Specification
 v5.4's own sample data: all 7680 hop frequencies of Vol 2, Part G, Section 2,
 the access code, HEC, CRC, FEC and whitening vectors and the complete DH1 and
@@ -56,11 +56,17 @@ $ make
 $ sudo make install
 ```
 
-This will install the library to /usr/local/lib and the headers to 
-/usr/local/include, to install to different locations use:
+This will install the library to /usr/local/lib and the headers to
+/usr/local/include. To install somewhere else, give the prefix both go under:
 ```
-$ cmake -DINSTALL_DIR=/path/to/install -DINCLUDE_DIR=/path/to/include ..
+$ cmake -DCMAKE_INSTALL_PREFIX=/path/to/install ..
 ```
+
+The library goes in `lib` under that prefix. `-DLIB_SUFFIX=64` puts it in
+`lib64`, as 64-bit builds of some distributions expect, and `LIB_SUFFIX` may
+carry a path: `-DLIB_SUFFIX=/x86_64-linux-gnu` gives
+`lib/x86_64-linux-gnu`. `libbtbb.pc` follows whichever is chosen, so
+`pkg-config --libs libbtbb` names the directory the library is really in.
 
 If you have previous versions of libbtbb, libubertooth or the Ubertooth tools
 installed, you can use the cleanup script to remove them:
