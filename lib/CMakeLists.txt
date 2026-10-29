@@ -55,14 +55,16 @@ string(REGEX REPLACE "[^/]+" ".." PC_PREFIX_UP "${PC_LIBDIR}/pkgconfig")
 # GNUInstallDirs': changing that is a packaging decision rather than a fix,
 # and #88 is where it is being decided.
 # A build whose CMAKE_INSTALL_LIBDIR says somewhere else is told, because
-# otherwise the setting looks as though it worked. A 64-bit Fedora or SUSE
-# build sets it to lib64 of its own accord, and -DLIB_SUFFIX=64 is the way to
-# ask for that here.
+# otherwise the setting looks as though it worked. It is a note rather than a
+# warning: a 64-bit Fedora, RHEL or SUSE build sets that variable to lib64 of
+# its own accord, so a plain build there would be answered with what reads as
+# a fault when nothing is wrong.
 if(NOT "${CMAKE_INSTALL_LIBDIR}" STREQUAL "${PC_LIBDIR}")
-	message(WARNING
-		"the library is installed to ${PC_LIBDIR}, not the "
-		"${CMAKE_INSTALL_LIBDIR} of CMAKE_INSTALL_LIBDIR; "
-		"use -DLIB_SUFFIX= to choose the directory")
+	message(STATUS
+		"Installing the library to ${PC_LIBDIR}, not the "
+		"${CMAKE_INSTALL_LIBDIR} of CMAKE_INSTALL_LIBDIR: "
+		"-DLIB_SUFFIX=64 asks for lib64, and -DLIB_SUFFIX=/<triplet> "
+		"for a multiarch directory")
 endif()
 
 CONFIGURE_FILE(

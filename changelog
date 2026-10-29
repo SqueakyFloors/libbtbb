@@ -440,7 +440,7 @@ libbtbb (2020-12-R1+fork5) unstable; urgency=low
     prefix but no installed header declares it, so nothing following the
     header could call it. A new abi_surface test holds the exported names to
     what btbb.h declares, so a public function cannot go missing unnoticed
-    and an internal one cannot join the interface unnoticed. Four more
+    and an internal one cannot join the interface unnoticed. Six more
     internal symbols stopped being exported earlier in this release and are
     named here together for anyone tracking them: btbb_pcap_dump() and
     count_bits(), with the work they belonged to, libbtbb_section_options

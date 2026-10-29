@@ -13,7 +13,7 @@
 # program.
 #
 # The library also exports internal symbols under other names: no prefix at
-# all ("hop", "precalc", "DH") or one of its own ("bt_compidtostr",
+# all ("precalc", "DH", "fhs") or one of its own ("bt_compidtostr",
 # "pcapng_append_packet"). Hiding those is a change to the build and to the
 # tests that call them, so they are left out here rather than listed as
 # exceptions; issue #79 covers them.
@@ -74,6 +74,17 @@ execute_process(
 	OUTPUT_VARIABLE nm_output
 	ERROR_VARIABLE nm_error
 	RESULT_VARIABLE result)
+# An nm without -D is not an error to stop on: the symbol table it does read
+# answers the same question for a library the build has not stripped.
+if(NOT result EQUAL 0 AND DYNAMIC_SYMBOLS)
+	message(STATUS "${NM} has no -D; reading the symbol table instead")
+	set(nm_args -g)
+	execute_process(
+		COMMAND "${NM}" ${nm_args} "${LIBRARY}"
+		OUTPUT_VARIABLE nm_output
+		ERROR_VARIABLE nm_error
+		RESULT_VARIABLE result)
+endif()
 if(NOT result EQUAL 0)
 	message(FATAL_ERROR "${NM} ${nm_args} ${LIBRARY} failed: ${nm_error}")
 endif()

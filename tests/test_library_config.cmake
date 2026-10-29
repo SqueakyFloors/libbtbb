@@ -95,6 +95,13 @@ function(check_installed_pc where what)
 		set(failures ${failures} PARENT_SCOPE)
 		return()
 	endif()
+	list(LENGTH pc_files pc_count)
+	if(pc_count GREATER 1)
+		fail("${what}: ${pc_count} libbtbb.pc files were installed under "
+		     "${where}, where a program would have one: ${pc_files}")
+		set(failures ${failures} PARENT_SCOPE)
+		return()
+	endif()
 	list(GET pc_files 0 pc_file)
 	get_filename_component(pcfiledir ${pc_file} DIRECTORY)
 
