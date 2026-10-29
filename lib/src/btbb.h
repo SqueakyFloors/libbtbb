@@ -380,7 +380,15 @@ BTBB_API int btbb_winnow(btbb_piconet *pn);
  * sees, and recovers each one's UAP, ignoring the piconet it is
  * given. The mode belongs to the library rather than to a piconet or a
  * packet, so it is on for everything the process decodes from here on,
- * and there is no call that turns it off again. Always returns 0. */
+ * and there is no call that turns it off again. Always returns 0.
+ *
+ * A survey that runs out of memory can end the process. The survey
+ * keeps a hash table of the LAPs it has heard, and that table is
+ * grown inside macros with no error path, so a failed allocation
+ * there prints "error: libbtbb: out of memory" on standard error and
+ * exits with status 1. The allocations the survey makes itself for a
+ * LAP it has just heard - its entry for that LAP, and the piconet -
+ * are checked, and the packet is dropped instead. */
 BTBB_API int btbb_init_survey(void);
 
 /* Take the next piconet out of the survey, or NULL once none is left.

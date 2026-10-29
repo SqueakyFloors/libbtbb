@@ -22,7 +22,7 @@
 
 #include "bluetooth_packet.h"
 #include "bluetooth_piconet.h"
-#include "uthash.h"
+#include "btbb_uthash.h"
 #include <stdarg.h>
 #include <stdlib.h>
 #include <stdio.h>
