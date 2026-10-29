@@ -1210,10 +1210,11 @@ int btbb_piconet_drop_clock(btbb_piconet *pn)
 	 * is the loop this whole mechanism exists to break.
 	 *
 	 * What it costs is a piconet whose link went idle under a clock that
-	 * was right: that clock is ruled out too.  So the threshold is the
-	 * caller's to set long enough that giving the clock up is what its
-	 * user wants, and the list of rejections is short and oldest-first, so
-	 * a clock ruled out this way is a candidate again after eight more.
+	 * was right: that clock is ruled out too, and it is a candidate again
+	 * only once eight further clocks have been given up or the LAP
+	 * changes, since the list is eight entries and drops the oldest.  So
+	 * the threshold belongs to the caller, which should set it long enough
+	 * that giving the clock up is what its user wants.
 	 *
 	 * The caller asked for this and warns its own user, so nothing is
 	 * printed here beyond the note that several clocks have now been

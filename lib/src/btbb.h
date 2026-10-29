@@ -293,7 +293,9 @@ uint8_t *btbb_piconet_get_afh_map(btbb_piconet *pn);
    receiver off the old offset and warn once, as for BTBB_PROCESS_LOCK_LOST
    below; nothing is printed about the drop itself. A drop does count toward
    the clocks given up for this piconet, so once several have been it writes
-   the one note that says the piconet may have ended or left range. */
+   the one note that says the piconet may have ended or left range, and from
+   then on it stays quiet about losses it decides itself as well, until a
+   header decodes under some clock. */
 int btbb_piconet_drop_clock(btbb_piconet *pn);
 
 /* btbb_process_packet() returns this when the clock and UAP it recovered turn

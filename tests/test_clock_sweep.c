@@ -52,6 +52,7 @@
  * Boston, MA 02110-1301, USA.
  */
 
+#include <limits.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -272,7 +273,7 @@ struct totals {
 	 */
 	long wrong_heard_total;
 	int wrong_heard_most;
-	int true_heard_least;
+	int true_heard_least;	/* INT_MAX until a right lock is followed */
 	/* locks handed back with btbb_piconet_drop_clock(), by outcome, and
 	 * how many of them the library then had ruled out */
 	int caller_dropped[OUTCOMES];
@@ -412,6 +413,7 @@ static void sweep(const char *label, uint32_t apart, int trials, int step)
 	int i;
 
 	memset(&t, 0, sizeof(t));
+	t.true_heard_least = INT_MAX;
 	CHECK(pkt != NULL);
 	if (pkt == NULL || capture_start() != 0) {
 		btbb_piconet_unref(device);
@@ -444,17 +446,23 @@ static void sweep(const char *label, uint32_t apart, int trials, int step)
 					t.wrong_heard_most = heard;
 			}
 			if (result == TRUE_LOCK && !lost &&
-			    (t.true_heard_least == 0 ||
-			     heard < t.true_heard_least))
+			    heard < t.true_heard_least)
 				t.true_heard_least = heard;
 			/* Then the caller's turn.  Its own threshold is not
 			 * the library's business, so every lock the library
 			 * kept is handed back here and what is measured is
 			 * what the library does with it. */
-			if (!lost && btbb_piconet_drop_clock(pn)) {
-				t.caller_dropped[result]++;
-				if (pn->num_rejected == 1)
-					t.caller_dropped_ruled_out++;
+			if (!lost) {
+				/* the clock about to be handed back, in the
+				 * form a rejection is remembered in */
+				uint32_t gone = followed_offset(pn);
+
+				if (btbb_piconet_drop_clock(pn)) {
+					t.caller_dropped[result]++;
+					if (pn->num_rejected == 1 &&
+					    pn->rejected_offsets[0] == gone)
+						t.caller_dropped_ruled_out++;
+				}
 			}
 		}
 		btbb_piconet_unref(pn);

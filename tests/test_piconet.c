@@ -1754,6 +1754,67 @@ static void test_dropped_clocks_are_counted_and_reported_once(void)
 }
 
 /*
+ * Once the library has said a piconet may have ended or left range it stays
+ * quiet about every later loss, whoever decided it, until a clock decodes a
+ * header. Drops the caller made count toward that, so a capture whose tool
+ * has handed back three clocks hears nothing further from the library about a
+ * fourth that fails its headers - the tool is reporting each loss itself, and
+ * the library promised to stop. A clock that works restores both.
+ */
+static void test_the_quiet_after_the_note_covers_both_kinds(void)
+{
+	btbb_piconet *pn = discovered(NULL, 0);
+	btbb_packet *bad = failed_header_packet();
+	btbb_packet *good = decodable_packet();
+	char out[4096], err[4096];
+	int i;
+
+	CHECK(bad != NULL);
+	CHECK(good != NULL);
+	if (bad == NULL || good == NULL) {
+		btbb_piconet_unref(pn);
+		return;
+	}
+	for (i = 1; i <= LOCK_LOSS_TRIES; i++) {
+		follow_a_clock(pn, i * 2);
+		CHECK_EQ(1, btbb_piconet_drop_clock(pn));
+	}
+	CHECK_EQ(1, pn->lock_loss_reported);
+
+	/* a clock that fails its headers, with the library already quiet */
+	if (capture_or_fail() != 0) {
+		btbb_packet_unref(bad);
+		btbb_packet_unref(good);
+		btbb_piconet_unref(pn);
+		return;
+	}
+	follow_a_clock(pn, 100);
+	CHECK(headers_until_the_clock_is_given_up(pn, bad, 1) > 0);
+	capture_stop(out, sizeof(out), err, sizeof(err));
+	CHECK(strstr(err, "failed their HEC") == NULL);
+	CHECK_EQ(0, (int) strlen(out));
+
+	/* and a clock that decodes a header restores the reporting */
+	follow_a_clock(pn, 200);
+	CHECK_EQ(0, btbb_process_packet(good, pn));
+	CHECK_EQ(0, pn->lock_loss_reported);
+	if (capture_or_fail() != 0) {
+		btbb_packet_unref(bad);
+		btbb_packet_unref(good);
+		btbb_piconet_unref(pn);
+		return;
+	}
+	CHECK(headers_until_the_clock_is_given_up(pn, bad, 1) > 0);
+	capture_stop(out, sizeof(out), err, sizeof(err));
+	CHECK(strstr(err, "failed their HEC") != NULL);
+	if (failures != 0)
+		printf("stderr was: %s\n", err);
+	btbb_packet_unref(bad);
+	btbb_packet_unref(good);
+	btbb_piconet_unref(pn);
+}
+
+/*
  * Everything UAP and clock discovery has to say about its progress goes to
  * stderr. A tool that dumps its capture to stdout would otherwise have these
  * lines in the dump, with nothing to tell them from capture data.
@@ -1934,6 +1995,7 @@ int main(void)
 	test_dropping_a_clock_the_library_has_not_got_does_nothing();
 	test_a_dropped_clock_is_ruled_out_even_if_it_worked();
 	test_dropped_clocks_are_counted_and_reported_once();
+	test_the_quiet_after_the_note_covers_both_kinds();
 	test_a_refused_aliased_request_leaves_recovery_alone();
 
 	if (failures != 0) {
