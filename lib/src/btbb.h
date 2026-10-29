@@ -265,6 +265,35 @@ uint8_t btbb_piconet_get_channel_seen(btbb_piconet *pn, uint8_t channel);
 void btbb_piconet_set_afh_map(btbb_piconet *pn, uint8_t *afh_map);
 uint8_t *btbb_piconet_get_afh_map(btbb_piconet *pn);
 
+/* Give up the clock the piconet is following and start clock discovery again,
+   leaving the library as it is after a lock it gave up itself: the clock is
+   ruled out, so the next attempt does not return to it, and BTBB_FOLLOWING,
+   the clock and the UAP are gone.
+
+   This is for a caller that can tell a follow has gone quiet. The library
+   gives a clock up on headers that fail their HEC, which is evidence about
+   CLK1-6 and the UAP. A wrong CLK1-27 is a different fault: it dewhitens and
+   checks out every header it receives, and what it gets wrong is the channel
+   to listen on, so the symptom is silence rather than failure. The library is
+   called per packet and keeps no timer, so it cannot judge that; a capture
+   tool knows how long it has been following in wall-clock time and that the
+   receiver is hopping on the offset the library gave it.
+
+   The clock is ruled out whether or not it decoded a header, unlike one the
+   library gives up itself: the few packets a wrong CLK1-27 hears all check
+   out, so what a clock decoded says nothing about a follow that has gone
+   quiet. The cost is a piconet whose link went idle under a clock that was
+   right, so the caller's threshold should be long enough that giving the
+   clock up is what its user wants.
+
+   Returns 1 if a clock was given up, and 0 if there was none the library
+   could give up: the piconet has no clock yet, or the clock is one the caller
+   set itself, which the library leaves alone because it has nothing better to
+   fall back on. A null piconet reads as 0. The caller is expected to take its
+   receiver off the old offset and warn once, as for BTBB_PROCESS_LOCK_LOST
+   below; this prints nothing of its own. */
+int btbb_piconet_drop_clock(btbb_piconet *pn);
+
 /* btbb_process_packet() returns this when the clock and UAP it recovered turn
    out not to be the piconet's: header after header of this piconet arrived
    while following it and none of them passed its HEC. The piconet has started

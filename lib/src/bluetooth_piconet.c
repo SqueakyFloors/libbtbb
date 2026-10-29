@@ -1111,27 +1111,17 @@ static int follow_run_is_enough(const btbb_piconet *pn, uint32_t clkn)
 }
 
 /*
- * Give up the clock being followed and start discovery again, which is what
- * btbb_process_packet() does once the failures have said enough.
+ * Give up the clock being followed and start discovery again: rule the clock
+ * out where it never decoded anything, count the loss, and drop the UAP that
+ * went with it.  Both the library's own decision and the caller's end here,
+ * so a clock given up either way is remembered the same way, as the offset
+ * between the two clocks under the UAP it was followed with.  Whether this
+ * clock is one to rule out is the caller's to say, because it depends on what
+ * the evidence was.
  */
-static int give_up_clock(btbb_piconet *pn, uint32_t clkn)
+static void drop_followed_clock(btbb_piconet *pn, int rule_it_out)
 {
-	/* A slot is 625 us, so five eighths of a millisecond. */
-	unsigned int ms = (unsigned int) (failure_run_slots(pn, clkn) * 5 / 8);
-
-	if (!pn->lock_loss_reported)
-		piconet_note("note: %d packet headers in a row failed their HEC over %u ms; "
-			     "giving up this clock and UAP and starting discovery again\n",
-			     pn->follow_header_failures, ms);
-
-	/*
-	 * A clock that never decoded one header was never the piconet's, so
-	 * discovery is not to choose it again.  A clock that did work and
-	 * then stopped is given up but not ruled out: it may still be the
-	 * piconet's, on a link that has changed or gone quiet, and ruling it
-	 * out would keep the library from ever locking it again.
-	 */
-	if (!pn->lock_worked)
+	if (rule_it_out)
 		reject_clock(pn, followed_offset(pn));
 
 	pn->lock_losses++;
@@ -1151,7 +1141,86 @@ static int give_up_clock(btbb_piconet *pn, uint32_t clkn)
 	 * as the piconet has one. */
 	pn->UAP = 0;
 	reset(pn);
+}
+
+/*
+ * Give up the clock being followed because header after header has failed its
+ * HEC, which is what btbb_process_packet() does once the failures have said
+ * enough.
+ */
+static int give_up_clock(btbb_piconet *pn, uint32_t clkn)
+{
+	/* A slot is 625 us, so five eighths of a millisecond. */
+	unsigned int ms = (unsigned int) (failure_run_slots(pn, clkn) * 5 / 8);
+
+	if (!pn->lock_loss_reported)
+		piconet_note("note: %d packet headers in a row failed their HEC over %u ms; "
+			     "giving up this clock and UAP and starting discovery again\n",
+			     pn->follow_header_failures, ms);
+
+	/*
+	 * A clock that never decoded one header was never the piconet's, so
+	 * discovery is not to choose it again.  A clock that did work and
+	 * then stopped is given up but not ruled out: it may still be the
+	 * piconet's, on a link that has changed or gone quiet, and ruling it
+	 * out would keep the library from ever locking it again.
+	 */
+	drop_followed_clock(pn, !pn->lock_worked);
 	return BTBB_PROCESS_LOCK_LOST;
+}
+
+/*
+ * Give up the clock at the caller's request.  Failing headers are evidence
+ * about CLK1-6 and the UAP; a wrong CLK1-27 fails differently, because every
+ * candidate carries the CLK1-6 that discovery confirmed, so it dewhitens and
+ * checks out whatever it does receive.  What it gets wrong is the channel to
+ * listen on, and the symptom is silence: measured over a sweep of clock
+ * values, a receiver following a wrong one lands on the piconet's channel in
+ * about one slot pair in eighteen.
+ *
+ * The library cannot see that on its own.  It is called per packet and keeps
+ * no timer, so a clock that hears next to nothing leaves next to nothing to
+ * count, and the rate alone does not tell it apart from a quiet link.  The
+ * caller knows how long it has been following in wall-clock time and that it
+ * put its receiver on the offset the library gave it, so the caller is what
+ * judges the silence; this is how it hands the clock back.
+ */
+int btbb_piconet_drop_clock(btbb_piconet *pn)
+{
+	/*
+	 * Only a clock the library recovered is the library's to give up.  A
+	 * caller that set the clock itself, from an adapter say, owns it:
+	 * there is nothing better to fall back on, so the library neither
+	 * takes it away nor rules the offset out.  The same test answers for
+	 * a piconet that has no clock yet, where there is nothing to drop.
+	 */
+	if (pn == NULL || !pn->clock_recovered)
+		return 0;
+
+	/*
+	 * This clock is ruled out whether or not it decoded a header, which
+	 * is where the caller's evidence differs from the library's.  A clock
+	 * given up on failing headers may be the piconet's on a link that
+	 * went bad, so one that decoded something is kept available.  A clock
+	 * that goes quiet cannot be: the few packets a wrong CLK1-27 does
+	 * hear all dewhiten and check out, so having decoded a header says
+	 * nothing here, and silence over a stretch of time is evidence about
+	 * which channel the receiver sat on, which is what CLK1-27 decides.
+	 * Not ruling it out would leave discovery free to return to it, which
+	 * is the loop this whole mechanism exists to break.
+	 *
+	 * What it costs is a piconet whose link went idle under a clock that
+	 * was right: that clock is ruled out too.  So the threshold is the
+	 * caller's to set long enough that giving the clock up is what its
+	 * user wants, and the list of rejections is short and oldest-first, so
+	 * a clock ruled out this way is a candidate again after eight more.
+	 *
+	 * The caller asked for this and warns its own user, so nothing is
+	 * printed here beyond the note that several clocks have now been
+	 * given up for this piconet.
+	 */
+	drop_followed_clock(pn, 1);
+	return 1;
 }
 
 int btbb_process_packet(btbb_packet *pkt, btbb_piconet *pn) {

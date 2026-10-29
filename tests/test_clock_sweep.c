@@ -261,6 +261,22 @@ struct totals {
 	int wrong_recovered;
 	int wrong_stuck;
 	int false_drops;
+	/*
+	 * What a capture tool can see of a follow and the library cannot: the
+	 * packets it received over a known stretch of time.  A wrong CLK1-27
+	 * hears only the slot pairs where its channel happens to agree, and
+	 * every header it does hear still dewhitens and checks out, so this
+	 * is the one measurement that separates a wrong clock from a right
+	 * one.  The threshold itself belongs to the caller; what the sweep
+	 * reports is how far apart the two are.
+	 */
+	long wrong_heard_total;
+	int wrong_heard_most;
+	int true_heard_least;
+	/* locks handed back with btbb_piconet_drop_clock(), by outcome, and
+	 * how many of them the library then had ruled out */
+	int caller_dropped[OUTCOMES];
+	int caller_dropped_ruled_out;
 };
 
 /*
@@ -347,10 +363,12 @@ static enum outcome attempt(btbb_piconet *pn, btbb_piconet *device,
  * packets are whitened at the device's clock, as the air carries them, so
  * whether a header decodes is decided by the clock under test: a lock whose
  * CLK1-6 differed from the device's would dewhiten to another header and fail
- * its HEC.  Returns 1 if the library gave the clock up.
+ * its HEC.  Returns 1 if the library gave the clock up, and reports through
+ * *heard how many packets the follow received, which is what a capture tool
+ * can see of it.
  */
 static int follow_the_lock(btbb_piconet *pn, btbb_piconet *device,
-			   btbb_packet *pkt, uint32_t true_clock)
+			   btbb_packet *pkt, uint32_t true_clock, int *heard)
 {
 	uint32_t locked = (pn->first_pkt_time + followed_offset(pn)) &
 			  (SEQUENCE_LENGTH - 1);
@@ -358,6 +376,7 @@ static int follow_the_lock(btbb_piconet *pn, btbb_piconet *device,
 	int lost = 0;
 	int i;
 
+	*heard = 0;
 	btbb_piconet_set_flag(pn, BTBB_FOLLOWING, 1);
 	for (i = 0; i < FOLLOWED_SLOT_PAIRS && !lost; i++) {
 		uint32_t step = (uint32_t) (i * 2);
@@ -371,10 +390,12 @@ static int follow_the_lock(btbb_piconet *pn, btbb_piconet *device,
 		btbb_packet_set_data(pkt, stream, 122, 0,
 				     (locked + step) << 1);
 		btbb_packet_set_flag(pkt, BTBB_WHITENED, 1);
+		(*heard)++;
 		lost = btbb_process_packet(pkt, pn) == BTBB_PROCESS_LOCK_LOST;
 	}
 	return lost;
 }
+
 
 static void sweep(const char *label, uint32_t apart, int trials, int step)
 {
@@ -401,11 +422,12 @@ static void sweep(const char *label, uint32_t apart, int trials, int step)
 		btbb_piconet *pn = discovered(MAP_OBSERVER);
 		enum outcome result = attempt(pn, device, true_clock, apart,
 					      &t);
-		int lost;
+		int lost, heard;
 
 		t.counts[result]++;
 		if (result == TRUE_LOCK || result == WRONG_LOCK) {
-			lost = follow_the_lock(pn, device, pkt, true_clock);
+			lost = follow_the_lock(pn, device, pkt, true_clock,
+					       &heard);
 			if (result == TRUE_LOCK) {
 				if (lost)
 					t.false_drops++;
@@ -415,6 +437,24 @@ static void sweep(const char *label, uint32_t apart, int trials, int step)
 				t.wrong_recovered++;
 			} else {
 				t.wrong_stuck++;
+			}
+			if (result == WRONG_LOCK && !lost) {
+				t.wrong_heard_total += heard;
+				if (heard > t.wrong_heard_most)
+					t.wrong_heard_most = heard;
+			}
+			if (result == TRUE_LOCK && !lost &&
+			    (t.true_heard_least == 0 ||
+			     heard < t.true_heard_least))
+				t.true_heard_least = heard;
+			/* Then the caller's turn.  Its own threshold is not
+			 * the library's business, so every lock the library
+			 * kept is handed back here and what is measured is
+			 * what the library does with it. */
+			if (!lost && btbb_piconet_drop_clock(pn)) {
+				t.caller_dropped[result]++;
+				if (pn->num_rejected == 1)
+					t.caller_dropped_ruled_out++;
 			}
 		}
 		btbb_piconet_unref(pn);
@@ -430,6 +470,17 @@ static void sweep(const char *label, uint32_t apart, int trials, int step)
 		"wrong then recovered %d, false drops %d\n",
 		FOLLOWED_SLOT_PAIRS, t.correct, t.wrong_stuck,
 		t.wrong_recovered, t.false_drops);
+	if (t.wrong_stuck > 0 && t.correct > 0)
+		fprintf(stderr, "  packets heard over those slot pairs: wrong locks %.1f on average, "
+			"%d at most; a clock that was right, %d at least\n",
+			(double) t.wrong_heard_total / (double) t.wrong_stuck,
+			t.wrong_heard_most, t.true_heard_least);
+	fprintf(stderr, "  handed back by the caller: wrong %d of %d, true %d of %d, "
+		"ruled out %d of %d\n",
+		t.caller_dropped[WRONG_LOCK], t.wrong_stuck,
+		t.caller_dropped[TRUE_LOCK], t.correct,
+		t.caller_dropped_ruled_out,
+		t.caller_dropped[WRONG_LOCK] + t.caller_dropped[TRUE_LOCK]);
 	if (t.counts[WRONG_LOCK] > 0)
 		fprintf(stderr, "  wrong lock: %.2f%% of the next %d slot pairs on the device's channel\n",
 			100.0 * (double) t.wrong_lock_slots /
@@ -455,6 +506,18 @@ static void sweep(const char *label, uint32_t apart, int trials, int step)
 	CHECK(t.wrong_recovered == 0);
 	CHECK(t.correct == t.counts[TRUE_LOCK]);
 	CHECK(t.false_drops == 0);
+	/* So the caller is what rescues them, and what it has to go on is the
+	 * packets it heard: the quietest follow under a clock that was right
+	 * is still louder than the noisiest one under a wrong clock, so a
+	 * threshold between the two exists for a tool to pick. */
+	CHECK(t.wrong_heard_most < t.true_heard_least);
+	/* Every lock the library kept, the caller can hand back, and the
+	 * library rules each one out, so the next attempt does not return to
+	 * it. */
+	CHECK(t.caller_dropped[WRONG_LOCK] == t.wrong_stuck);
+	CHECK(t.caller_dropped[TRUE_LOCK] == t.correct);
+	CHECK(t.caller_dropped_ruled_out ==
+	      t.caller_dropped[WRONG_LOCK] + t.caller_dropped[TRUE_LOCK]);
 	btbb_packet_unref(pkt);
 	btbb_piconet_unref(device);
 }
@@ -473,7 +536,7 @@ static void the_follow_phase_can_fail(void)
 	btbb_piconet *pn = discovered(MAP_DEVICE);
 	btbb_packet *pkt = decodable_packet();
 	char swallowed[256];
-	int lost;
+	int lost, heard;
 
 	CHECK(pkt != NULL);
 	if (pkt == NULL || capture_start() != 0) {
@@ -485,7 +548,7 @@ static void the_follow_phase_can_fail(void)
 	/* the clock the receiver counts on: the device's, one slot out */
 	pn->first_pkt_time = FIRST_CLOCK;
 	btbb_piconet_set_clk_offset(pn, 2);	/* one 625 us slot */
-	lost = follow_the_lock(pn, device, pkt, FIRST_CLOCK);
+	lost = follow_the_lock(pn, device, pkt, FIRST_CLOCK, &heard);
 	capture_stop(swallowed, sizeof(swallowed), swallowed,
 		     sizeof(swallowed));
 

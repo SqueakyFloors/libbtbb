@@ -1578,6 +1578,182 @@ static void test_a_working_lock_restores_the_reporting(void)
 }
 
 /*
+ * A caller can hand a clock back. The library gives one up on headers that
+ * fail their HEC, which is evidence about CLK1-6 and the UAP; a wrong CLK1-27
+ * carries the CLK1-6 discovery confirmed, so it dewhitens and checks out
+ * whatever it receives and gets only the channel wrong. Its symptom is
+ * silence, which the library cannot judge: it is called per packet and keeps
+ * no timer. A capture tool knows how long it has been following in wall-clock
+ * time, so btbb_piconet_drop_clock() lets it say so, and the clock is then
+ * ruled out and discovery starts again exactly as after a lock the library
+ * gave up itself.
+ */
+static void test_the_caller_can_give_up_a_quiet_clock(void)
+{
+	btbb_piconet *pn = following_a_recovered_clock();
+	uint8_t first_channel = channel_at(pn, 0);
+	int with_it, without_it;
+
+	/* the clock it recovered is the observer's own, so the offset is 0 */
+	CHECK_EQ(0, btbb_piconet_get_clk_offset(pn));
+	CHECK_EQ(1, btbb_piconet_drop_clock(pn));
+
+	/* back to discovery, with no clock and no UAP left to filter on */
+	CHECK(!btbb_piconet_get_flag(pn, BTBB_FOLLOWING));
+	CHECK(!btbb_piconet_get_flag(pn, BTBB_CLK27_VALID));
+	CHECK(!btbb_piconet_get_flag(pn, BTBB_CLK6_VALID));
+	CHECK(!btbb_piconet_get_flag(pn, BTBB_UAP_VALID));
+	CHECK(!btbb_piconet_get_flag(pn, BTBB_HOP_REVERSAL_INIT));
+	CHECK_EQ(0, btbb_piconet_get_uap(pn));
+	CHECK_EQ(0, btbb_piconet_get_clk_offset(pn));
+	CHECK_EQ(0, pn->clock_recovered);
+	CHECK(pn->clock_candidates == NULL);
+	/* and the channels seen on the way are still there to search in */
+	CHECK_EQ(1, btbb_piconet_get_channel_seen(pn, first_channel));
+
+	/* the clock is remembered, and the loss counted, as one the library
+	 * gave up on failing headers would have been */
+	CHECK_EQ(1, pn->num_rejected);
+	CHECK_EQ(0, pn->rejected_offsets[0]);
+	CHECK_EQ(TEST_UAP, pn->rejected_uaps[0]);
+	CHECK_EQ(1, pn->lock_losses);
+
+	/* so the next attempt does not return to it */
+	btbb_piconet_set_uap(pn, TEST_UAP);
+	btbb_piconet_set_flag(pn, BTBB_CLK6_VALID, 1);
+	btbb_piconet_set_flag(pn, BTBB_GOT_FIRST_PACKET, 1);
+	pn->first_pkt_time = 0;
+	first_hop(pn, channel_at(pn, 0));
+	with_it = btbb_init_hop_reversal(0, pn);
+	CHECK(with_it > 1);
+	CHECK(!candidate_listed(pn, 0));
+
+	/* and nothing else went with it: the same search with nothing
+	 * rejected finds exactly that one clock more */
+	pn->num_rejected = 0;
+	without_it = btbb_init_hop_reversal(0, pn);
+	CHECK_EQ(with_it + 1, without_it);
+	CHECK(candidate_listed(pn, 0));
+	btbb_piconet_unref(pn);
+}
+
+/*
+ * Only a clock the library recovered is the library's to give up. A piconet
+ * still searching has none, and a clock the caller set itself - ubertooth-
+ * follow reads one from an adapter - belongs to the caller, with no search to
+ * fall back on, so a drop leaves it alone and says so rather than throwing
+ * away the only clock there is. A null piconet answers the same way, as
+ * btbb_process_packet() takes one.
+ */
+static void test_dropping_a_clock_the_library_has_not_got_does_nothing(void)
+{
+	btbb_piconet *searching = discovered(NULL, 0);
+	btbb_piconet *caller_set = discovered(NULL, 0);
+
+	CHECK_EQ(0, btbb_piconet_drop_clock(NULL));
+
+	CHECK_EQ(0, btbb_piconet_drop_clock(searching));
+	CHECK_EQ(0, searching->num_rejected);
+	CHECK_EQ(0, searching->lock_losses);
+	CHECK(btbb_piconet_get_flag(searching, BTBB_LAP_VALID));
+
+	btbb_piconet_set_clk_offset(caller_set, 1234);
+	btbb_piconet_set_flag(caller_set, BTBB_CLK27_VALID, 1);
+	btbb_piconet_set_flag(caller_set, BTBB_FOLLOWING, 1);
+	CHECK_EQ(0, btbb_piconet_drop_clock(caller_set));
+	CHECK(btbb_piconet_get_flag(caller_set, BTBB_FOLLOWING));
+	CHECK(btbb_piconet_get_flag(caller_set, BTBB_CLK27_VALID));
+	CHECK_EQ(1234, btbb_piconet_get_clk_offset(caller_set));
+	CHECK_EQ(0, caller_set->num_rejected);
+	CHECK_EQ(0, caller_set->lock_losses);
+
+	btbb_piconet_unref(searching);
+	btbb_piconet_unref(caller_set);
+}
+
+/*
+ * A clock the caller hands back is ruled out even though it decoded headers,
+ * where a clock the library gives up on failing headers is not. That is the
+ * whole difference between the two kinds of evidence. A wrong CLK1-27 carries
+ * the CLK1-6 discovery confirmed, so every one of the few packets it hears
+ * dewhitens and checks out: having decoded something says nothing about a
+ * follow that has gone quiet, and leaving the clock available would let
+ * discovery lock it again, which is the loop this exists to break.
+ */
+static void test_a_dropped_clock_is_ruled_out_even_if_it_worked(void)
+{
+	btbb_piconet *pn = following_clock_offset(0);
+	btbb_packet *good = decodable_packet();
+	btbb_packet *bad = failed_header_packet();
+
+	CHECK(good != NULL);
+	CHECK(bad != NULL);
+	if (good == NULL || bad == NULL) {
+		btbb_piconet_unref(pn);
+		return;
+	}
+	CHECK_EQ(0, btbb_process_packet(good, pn));
+	CHECK_EQ(1, pn->lock_worked);
+
+	CHECK_EQ(1, btbb_piconet_drop_clock(pn));
+	CHECK(!btbb_piconet_get_flag(pn, BTBB_FOLLOWING));
+	CHECK_EQ(1, pn->num_rejected);
+	CHECK_EQ(0, pn->rejected_offsets[0]);
+
+	/* and the library's own rule is untouched: a clock that worked and
+	 * then failed header after header is still kept available */
+	follow_a_clock(pn, 100);
+	CHECK_EQ(0, btbb_process_packet(good, pn));
+	CHECK_EQ(1, pn->lock_worked);
+	CHECK_EQ(FOLLOW_HEADER_FAILURES,
+		 headers_until_the_clock_is_given_up(pn, bad, 1));
+	CHECK_EQ(1, pn->num_rejected);
+	btbb_packet_unref(good);
+	btbb_packet_unref(bad);
+	btbb_piconet_unref(pn);
+}
+
+/*
+ * The caller warns its own user, so a drop prints no line of its own: the HEC
+ * failures the library's own note describes have not happened. What it does
+ * say, once, is that this piconet has now given up clock after clock and may
+ * have ended or left range, because that is as true of clocks the caller
+ * handed back as of clocks the library rejected.
+ */
+static void test_dropped_clocks_are_counted_and_reported_once(void)
+{
+	btbb_piconet *pn = discovered(NULL, 0);
+	char out[4096], err[4096];
+	const char *at;
+	int said_so = 0;
+	int i;
+
+	if (capture_or_fail() != 0) {
+		btbb_piconet_unref(pn);
+		return;
+	}
+	/* a different clock each time round, each handed back in turn */
+	for (i = 1; i <= LOCK_LOSS_TRIES + 2; i++) {
+		follow_a_clock(pn, i * 2);
+		CHECK_EQ(1, btbb_piconet_drop_clock(pn));
+	}
+	capture_stop(out, sizeof(out), err, sizeof(err));
+
+	for (at = err; (at = strstr(at, "Still listening")) != NULL; at++)
+		said_so++;
+	CHECK_EQ(1, said_so);
+	/* nothing about failing headers, none of which arrived */
+	CHECK(strstr(err, "failed their HEC") == NULL);
+	CHECK_EQ(LOCK_LOSS_TRIES + 2, pn->lock_losses);
+	CHECK_EQ(LOCK_LOSS_TRIES + 2, pn->num_rejected);
+	/* and nothing of it on stdout */
+	CHECK_EQ(0, (int) strlen(out));
+	if (failures != 0)
+		printf("stderr was: %s\n", err);
+	btbb_piconet_unref(pn);
+}
+
+/*
  * Everything UAP and clock discovery has to say about its progress goes to
  * stderr. A tool that dumps its capture to stdout would otherwise have these
  * lines in the dump, with nothing to tell them from capture data.
@@ -1754,6 +1930,10 @@ int main(void)
 	test_the_rejected_clocks_are_a_short_list();
 	test_giving_up_is_reported_once();
 	test_a_working_lock_restores_the_reporting();
+	test_the_caller_can_give_up_a_quiet_clock();
+	test_dropping_a_clock_the_library_has_not_got_does_nothing();
+	test_a_dropped_clock_is_ruled_out_even_if_it_worked();
+	test_dropped_clocks_are_counted_and_reported_once();
 	test_a_refused_aliased_request_leaves_recovery_alone();
 
 	if (failures != 0) {
