@@ -126,7 +126,7 @@ if(BUILD_TESTING)
     target_include_directories(test_uthash_oom PRIVATE ${PROJECT_SOURCE_DIR}/lib/src)
     target_compile_options(test_uthash_oom PRIVATE -std=gnu90)
     add_test(NAME uthash_oom COMMAND test_uthash_oom)
-    # Three child processes and a few hundred survey entries: under a tenth of
+    # Four child processes and a few hundred survey entries: under a tenth of
     # a second. The limit is for a case where the library does not exit.
     set_tests_properties(uthash_oom PROPERTIES TIMEOUT 30)
 
