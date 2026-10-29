@@ -1767,6 +1767,9 @@ static void forget_header(btbb_packet* pkt)
 	btbb_packet_set_flag(pkt, BTBB_HEC_VALID, 0);
 	memset(pkt->packet_header, 0, sizeof(pkt->packet_header));
 	pkt->packet_lt_addr = 0;
+	/* The type goes too, so that btbb_packet_get_type() cannot name a
+	 * type the recorded header bits do not hold. */
+	pkt->packet_type = 0;
 	pkt->packet_flags = 0;
 	pkt->packet_hec = 0;
 	pkt->corrected_header_bits = 0;

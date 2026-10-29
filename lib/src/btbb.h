@@ -371,7 +371,23 @@ BTBB_API int btbb_piconet_drop_clock(btbb_piconet *pn);
    btbb_piconet_get_clk_offset(), and 0 otherwise. */
 BTBB_API int btbb_process_packet(btbb_packet *pkt, btbb_piconet *pn);
 
-/* use packet headers to determine UAP */
+/* Use packet headers to determine UAP. Returns 1 where this packet settled
+   the piconet's UAP and CLK1-6, and 0 otherwise.
+
+   A packet that settles them comes back carrying what the trial clock that
+   settled them read: its header, with BTBB_HEC_CHECKED and BTBB_HEC_VALID,
+   and the payload where a trial's CRC is what settled it. Those were read at
+   the piconet's clock, which the packet does not hold: pkt's own clock is
+   still the one the caller gave it, the receiving board's, and
+   BTBB_CLK6_VALID stays clear on the packet to say so.
+   btbb_piconet_get_clk_offset() gives the difference, in 625 us slots.
+
+   So a valid HEC here is not an invitation to decode the packet again.
+   btbb_decode_header() or btbb_decode_payload() called on it would dewhiten
+   at the board's clock and replace what this call recorded with the wrong
+   answer. A caller that wants to decode it again has to hand the packet its
+   symbols at the piconet's clock first, which costs it the payload this call
+   left. */
 BTBB_API int btbb_uap_from_header(btbb_packet *pkt, btbb_piconet *pn);
 
 /* Print hexadecimal representation of the derived AFH map */

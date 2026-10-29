@@ -13,7 +13,7 @@ UndefinedBehaviorSanitizer. The vectors of the original test programs were
 kept and ported (see #9). Malformed radio packets are this library's normal
 input, so the decoders and the capture writers are fuzzed as well.
 
-The tests have helped find and fix 75 issues, many of them in packet types and
+The tests have helped find and fix 77 issues, many of them in packet types and
 capture paths that are rarely seen on the air.
 
 - [How to run them](#how-to-run-them)
