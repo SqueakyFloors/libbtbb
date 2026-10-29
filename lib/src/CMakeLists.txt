@@ -47,6 +47,15 @@ if( BUILD_SHARED_LIB )
     # Shared library
     message(STATUS "Building shared library")
     add_library(btbb SHARED ${c_sources})
+    # SOVERSION is the number a program records when it links this library,
+    # so it stays at 1 for as long as a program that uses the library through
+    # btbb.h keeps working: functions and constants may be added to the
+    # header, but one that is already there cannot change its signature or go
+    # away, and neither can pkt_queue, the one type the header defines rather
+    # than leaving opaque. Anything else moves it to 2, and every program
+    # linking libbtbb then has to be rebuilt. MINOR_VERSION carries the
+    # additions; the abi_surface test holds down which symbols are exported,
+    # and the changelog records what was compared with 2020-12-R1.
     set_target_properties(btbb PROPERTIES VERSION ${MAJOR_VERSION}.${MINOR_VERSION} SOVERSION 1)
     set_target_properties(btbb PROPERTIES CLEAN_DIRECT_OUTPUT 1)
     install(TARGETS btbb

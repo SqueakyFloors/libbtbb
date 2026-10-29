@@ -5,13 +5,13 @@ and other projects for many years. It came with a few test programs, from 2012
 and 2015; that is typical for a volunteer project of this size and scope. This
 fork adds to that foundation with a test suite in the normal build.
 
-There are now 17 tests, driven in large part by the Bluetooth Core
+There are now 19 tests, driven in large part by the Bluetooth Core
 Specification's own published sample data, and they run on every push and pull
 request on Linux and macOS, plain and under AddressSanitizer and
 UndefinedBehaviorSanitizer. The vectors of the original test programs were
 kept and ported (see #9).
 
-The tests have helped find and fix 72 issues, many of them in packet types and
+The tests have helped find and fix 74 issues, many of them in packet types and
 capture paths that are rarely seen on the air.
 
 - [How to run them](#how-to-run-them)
@@ -79,7 +79,8 @@ linkage, and `tests/CMakeLists.txt` says which tests do it.
 | `smoke` | The public API end to end: one known packet of each kind decoded, `btbb_gen_syncword()` and `btbb_find_ac()` with and without a bit error, and every frequency from 2400 to 2480 MHz decoded to a channel index and a PCAP `channel_k` | Sync words computed independently from the (64,30) block code in `python/utils/encode_sw.py`, not from the library's own tables |
 | `release_version` | That `cmake/set_release.cmake` produces the version the build claims | The script itself |
 | `btaptap` | The keystroke decoder end to end, run as a user runs it: keystrokes out of baseband and HCI captures, modifier keys, a held key, `-c`, `-h` beside a capture, a frame cut short, and every way a run can fail, each one an `error:` line on stderr and a non-zero exit. Also the `pcapdump` module the README offers on its own, which writes a capture file and reads it back | The Ellisys export recorded in `python/pcaptools/tests`, 864 keyboard reports of someone typing, and captures the test builds itself from the HID boot-mode report layout |
-| `library_config` | The library configurations the build offers: that one building neither library is refused while configuring, and that a static-only build builds a test program | Configures, and builds, a tree of its own, because a build is in one configuration only |
+| `library_config` | The library configurations the build offers: that one building neither library is refused while configuring, that a static-only build builds a test program, and that the directories `libbtbb.pc` names hold the library and the header, including after the install is staged into a second prefix | Configures, builds and installs trees of its own, because a build is in one configuration and one prefix only |
+| `abi_surface` | What the shared library exports, against `btbb.h`: that every function the header declares is in the library, so a program including it links, and that no other symbol under the library's `btbb_` or `lell_` prefix is exported, so nothing reads as part of the interface without being usable as one | The header and the built library, read with `nm`, where the build found one. The 32 internal symbols the library exports under other names - `precalc`, `DH`, `bt_compidtostr`, `pcapng_append_packet` - are out of scope here; #79 covers those |
 
 ## How big the suite is
 
@@ -90,7 +91,7 @@ count:
 
 | | Count | How it was counted |
 |---|---|---|
-| Tests in the build | 18 | `ctest` case count; 14 C programs and four script tests, two of them only with the Python tools enabled |
+| Tests in the build | 19 | `ctest` case count; 14 C programs and five script tests, two of them only with the Python tools enabled and one only in a shared build where `nm` is found |
 | Assertion sites | 870 | 856 `CHECK`, `CHECK_EQ`, `CHECK_EQUALS`, `CHECK_CONTAINS`, `CHECK_LACKS` and `XFAIL` call sites across the eleven programs that use those macros, plus the 14 explicit failure conditions in `test_le_long.c`, which checks with plain `if` |
 | Assertions executed per run | 176,054 | a scratch copy of the tree with a counter added to each `CHECK` macro body and reported from a destructor, then every test binary run once and the counts summed. The macros do not nest, so nothing is double counted. `test_le_long` is not in this figure |
 | Published spec vectors | 7680 hop frequencies | 15 tables of `TABLE_ENTRIES` (512) in `tests/test_spec_hop.c`: three addresses, the basic sequence and four channel maps each |
@@ -199,10 +200,12 @@ Rows are ordered by severity, most severe first.
 | 🟠 | Python and build | `PcapDumper` joined the bytes of its file and record headers with `''.join()` | the half of the `pcapdump` module the README offers could not write a capture at all | `btaptap`'s module cases, which write a capture and read it back | #64 | #55 |
 | 🟠 | Python and build | `PcapReader` called a record corrupt when the length the packet was exceeded the capture's snapshot length, which is the one thing a snapshot length produces | a capture taken at a snapshot length, as a long-running capture is, was refused at its first record: no keystrokes, one error line, exit 1 | `btaptap`, a capture whose snapshot length is 40 holding a 50-byte packet | #64 | #55 |
 | 🟠 | Python and build | `lib/src/CMakeLists.txt` guarded "no library at all" with an option name nothing sets | `cmake -DBUILD_SHARED_LIB=OFF`, the obvious way to ask for a static build, configured a tree with no library in it and failed halfway through the build with `ld: library 'btbb-static' not found` | `library_config`, and a static-only job in CI | #64 | #62 |
+| 🟠 | Python and build | `libbtbb.pc` took its `libdir` and `includedir` from GNUInstallDirs, while the install writes the library to `lib${LIB_SUFFIX}` and the header to `include`, and its prefix was the one the build was configured with rather than where the files ended up | `pkg-config --libs libbtbb` gave a `-L` for a directory holding no library - `/usr/lib/x86_64-linux-gnu` where the prefix is `/usr` on a multiarch distribution, `lib64` on some others, and the configure-time prefix for any install staged with `cmake --install --prefix`, which is what this repository's CI does - so a program linked by luck where the compiler's own search path covered for it and not at all where it did not | `library_config`, an install whose libdir and includedir are set to names the install does not use, and the same build installed into a second prefix with the first one taken away | #80 | #73 |
 | 🟡 | Decoders | `btbb_find_ac()`'s documented bound said it reads `search_length + 72` symbols where it reads `search_length + 63` | a caller sizing its buffer from the header over-allocated, and could not tell what was really required | `spec_bredr`, several offsets with the match at the last of them | #28 | #32 |
 | 🟡 | Hop and clock | `fill_hop_pattern()` and `get_hop_pattern()` wrote "Calculating complete hopping sequence.", "Hopping sequence calculated." and "Found hopping sequence in cache." to stdout | a tool streaming its capture to stdout had them mixed into the stream, where a script cannot tell them from capture data | `hop`, both streams captured, on a cache miss and a cache hit | #30 | #14 |
 | 🟡 | Output streams | `lell_print()` complained about malformed packets with `printf` | the six diagnostic messages landed on stdout in the middle of the packet dump, so a tool writing its capture to stdout had them mixed in and a script could not tell them from packet fields | `le_print`, seven malformed packets, one per message, each comparing the whole of stderr and checking stdout carries none of it | #8 | #4 |
 | 🟡 | Output streams | Four advertising-data fields printed their indentation before deciding whether the field could be read | with the complaint moved to stderr, a blank indented line would have been left in the dump | `le_print`, a packet whose four fields are all readable | #8 | #4 |
+| 🟡 | Python and build | `btbb_pcap_open()` was exported under the library's public prefix while no installed header declared it | a name that reads as part of the interface, in a library whose other `btbb_` names are the interface, and that nothing following the header could call. Withdrawing it later would break whoever had taken it up from the symbol table | `abi_surface`, the exported names against the 95 functions `btbb.h` declares | #80 | #73 |
 
 One BR/EDR record field is written outside the range its published
 description gives, on purpose. The corrected-payload-bits count is recorded as
@@ -282,6 +285,9 @@ map changes, and the replaced allocator.
 | Keystrokes `btaptap` recovered from the recorded Ellisys export, 864 keyboard reports | 0, and the export refused | 543 characters, the paragraph that was typed | PR #64, `python3 btaptap -e python/pcaptools/tests/ellysis-keyboard.csv` on each build |
 | The 33 cases of the new `btaptap` test, run against the tree before the fix | 38 failures and 6 errors | all pass | PR #64, the test file copied into a checkout of `master` at `622b6c2` |
 | Test programs a `-DBUILD_SHARED_LIB=OFF` build links | none: the build stopped at the first one | the configuration is refused, and `-DBUILD_SHARED_LIB=OFF -DBUILD_STATIC_LIB=ON` builds and passes all 15 | PR #64, `ctest` in a static-only build |
+| Symbols exported under the library's `btbb_` or `lell_` prefix that `btbb.h` does not declare | 1 | 0 | PR #80, the exported names against the header's 95 declarations, which is the comparison `abi_surface` makes wherever the build finds `nm` |
+| Of the two directories `libbtbb.pc` names, how many hold what it says they hold | 0 of 2, both with `CMAKE_INSTALL_LIBDIR` and `CMAKE_INSTALL_INCLUDEDIR` set the way a multiarch system sets them, and after an install staged into a second prefix | 2 of 2 | PR #80, the two installs the new `library_config` cases make |
+| Public functions whose signature changed since 2020-12-R1, and structures `btbb.h` defines whose layout changed | not known | 0 and 0, with six functions and five constants added | PR #80, `abidiff` 2.4 on both shared libraries, reported on #73 |
 
 Each capture-file fix was also reverted on its own: 1 to 8 failing checks each,
 two compile errors, one SIGSEGV and two sanitizer reports, 20 rows in PR #36.

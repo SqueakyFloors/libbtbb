@@ -131,8 +131,41 @@ if(BUILD_TESTING)
              -DGENERATOR=${CMAKE_GENERATOR}
              -DC_COMPILER=${CMAKE_C_COMPILER}
              -DTOOLCHAIN_FILE=${CMAKE_TOOLCHAIN_FILE}
+             -DSHARED_SUFFIX=${CMAKE_SHARED_LIBRARY_SUFFIX}
              -P ${CMAKE_CURRENT_SOURCE_DIR}/test_library_config.cmake)
-    # Two configures and one compile: 5.5 s on an arm64 Mac, 15 s on a
-    # slower CI runner.
-    set_tests_properties(library_config PROPERTIES TIMEOUT 60)
+    # Four configures, three compiles and five installs: 11 s on an idle
+    # arm64 Mac, 30 s on one running other builds at the same time, and under
+    # 20 s on the CI runners. The limit is for a case that hangs rather than
+    # for a slow machine.
+    set_tests_properties(library_config PROPERTIES TIMEOUT 120)
+
+    # The exported names against the header the install offers. It reads the
+    # built library with nm, so it needs the shared one: a static archive's
+    # symbol table is not what a program links against.
+    if(TARGET btbb)
+        find_program(ABI_NM NAMES ${CMAKE_NM} nm)
+        if(ABI_NM)
+            # A Mach-O symbol name carries a leading underscore that an ELF
+            # one does not.
+            set(abi_strip_underscore OFF)
+            # Mach-O has one symbol table and its nm has no -D; elsewhere the
+            # dynamic table is the one a program resolves against.
+            set(abi_dynamic_symbols ON)
+            if(APPLE)
+                set(abi_strip_underscore ON)
+                set(abi_dynamic_symbols OFF)
+            endif()
+            add_test(NAME abi_surface COMMAND ${CMAKE_COMMAND}
+                     -DLIBRARY=$<TARGET_FILE:btbb>
+                     -DHEADER=${PROJECT_SOURCE_DIR}/lib/src/btbb.h
+                     -DNM=${ABI_NM}
+                     -DSTRIP_UNDERSCORE=${abi_strip_underscore}
+                     -DDYNAMIC_SYMBOLS=${abi_dynamic_symbols}
+                     -P ${CMAKE_CURRENT_SOURCE_DIR}/test_abi_surface.cmake)
+            # One nm run: 0.1 s on Linux, 0.5 s on a macOS CI runner.
+            set_tests_properties(abi_surface PROPERTIES TIMEOUT 15)
+        else()
+            message(STATUS "nm was not found: leaving out the abi_surface test")
+        endif()
+    endif()
 endif()
