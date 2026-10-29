@@ -984,6 +984,18 @@ int btbb_uap_from_header(btbb_packet *pkt, btbb_piconet *pn)
 
 			default: /* CRC success */
 				settle_clk6_offset(pn, count);
+				/* This trial is the packet's own decode - its
+				 * CRC is what settled the address part - so
+				 * the header it read at this clock is the
+				 * packet's own header, and the packet carries
+				 * it the way it already carries the payload
+				 * this trial decoded. Without it the record of
+				 * the packet a reader most needs, the first
+				 * evidence the address part came from, holds a
+				 * payload under 18 zero bits that read as an
+				 * LT_ADDR of 0 and a NULL packet, which
+				 * carries no payload at all. */
+				record_header_at_clock(pkt, clock);
 				if (!btbb_piconet_get_flag(pn, BTBB_UAP_VALID))
 					piconet_note("Correct CRC! UAP = 0x%x found after %d total packets.\n",
 						     UAP, pn->total_packets_observed);

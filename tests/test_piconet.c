@@ -1082,6 +1082,61 @@ static void test_the_settled_offset_reads_the_packets_own_header(void)
 	btbb_piconet_unref(pn);
 }
 
+/*
+ * The trial clock whose CRC comes out is the packet's own decode, so the
+ * packet comes out of the search carrying both halves of what that trial
+ * read: the payload, and the header it was unwhitened with.  A caller writing
+ * a capture record needs no second read of its own, and nothing it could do
+ * would keep both - handing the packet its symbols again at the piconet's
+ * clock is what reads the header, and that is also what drops the payload.
+ */
+static void test_the_settling_packet_carries_its_own_header(void)
+{
+	/* whitened at the piconet's CLK1-6 of 37, read by a board whose own
+	 * clock says 5: the header only reads at the piconet's */
+	const int piconet_clk6 = 0x25;
+	const uint32_t board_clkn = 10;
+	char stream[MAX_SYMBOLS];
+	btbb_piconet *pn = btbb_piconet_new();
+	btbb_packet *pkt;
+	int length;
+
+	CHECK(pn != NULL);
+	if (pn == NULL)
+		return;
+	btbb_init_piconet(pn, SPEC_DH1_LAP);
+	length = spec_dh1_symbols(stream, piconet_clk6);
+	pkt = spec_dh1_packet(stream, length, board_clkn);
+	CHECK(pkt != NULL);
+	if (pkt == NULL) {
+		btbb_piconet_unref(pn);
+		return;
+	}
+
+	CHECK_EQ(1, btbb_uap_from_header(pkt, pn));
+	CHECK_EQ(SPEC_DH1_UAP, btbb_piconet_get_uap(pn));
+
+	/* the header the settling trial read, with its check bits holding
+	 * under the address part it gave */
+	CHECK(btbb_packet_get_flag(pkt, BTBB_HEC_CHECKED));
+	CHECK(btbb_packet_get_flag(pkt, BTBB_HEC_VALID));
+	CHECK_EQ(SPEC_DH1_HEADER_DATA, air_to_host16(pkt->packet_header, 10));
+	CHECK_EQ(SPEC_DH1_HEC, pkt->packet_hec);
+	CHECK_EQ(3, pkt->packet_lt_addr);
+	CHECK_EQ(PACKET_TYPE_DH1, pkt->packet_type);
+	CHECK_EQ(0, pkt->corrected_header_bits);
+
+	/* and the payload that trial decoded, under the CRC answer it gave:
+	 * reading the header has not cost the record its payload */
+	CHECK(btbb_packet_get_flag(pkt, BTBB_HAS_PAYLOAD));
+	CHECK(btbb_packet_get_flag(pkt, BTBB_CRC_CHECKED));
+	CHECK(btbb_packet_get_flag(pkt, BTBB_CRC_CORRECT));
+	CHECK(btbb_packet_get_payload_length(pkt) > 0);
+
+	btbb_packet_unref(pkt);
+	btbb_piconet_unref(pn);
+}
+
 /* ------------------- giving up a clock that does not work ---------------- */
 
 /*
@@ -2571,6 +2626,7 @@ int main(void)
 	test_the_clocks_of_the_device_and_the_observer_differ();
 	test_every_candidate_agrees_on_clk1_6();
 	test_the_settled_offset_reads_the_packets_own_header();
+	test_the_settling_packet_carries_its_own_header();
 	test_a_run_of_header_failures_gives_up_the_clock();
 	test_a_lost_lock_leaves_the_piconet_ready_to_search();
 	test_a_header_that_checks_out_ends_the_run();

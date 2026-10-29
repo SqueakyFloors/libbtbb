@@ -176,6 +176,15 @@ char *tun_format(btbb_packet* p);
  */
 uint8_t try_clock(int clock, btbb_packet* p);
 
+/* Read the header at this CLK1-6 and record it on the packet, leaving the
+ * payload and what was checked of it alone.  Returns 1 when the check bits
+ * passed under the packet's UAP.  This is btbb_decode_header() without its
+ * own clock and without clearing the payload: it is what the address-part
+ * search calls once a trial clock has settled, so that the packet carries
+ * the header that trial read rather than nothing.
+ */
+int record_header_at_clock(btbb_packet* p, int clock);
+
 /* extract LAP from FHS payload */
 uint32_t lap_from_fhs(btbb_packet* p);
 
