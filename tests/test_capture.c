@@ -1831,7 +1831,7 @@ static void test_bredr_interface_options(void)
  * The writers hand the description to the pcapng layer as an option list, and
  * both that layer and the timestamp-resolution check walk the list: from one
  * option to the next by the length in its header, stopping at an option whose
- * code is zero. A description of 252 characters or more fills the room the
+ * code is zero. A description of 253 characters or more fills the room the
  * list set aside for it, so the step past it used to land on whatever was on
  * the stack after the list, and that was read as the next option's header.
  *

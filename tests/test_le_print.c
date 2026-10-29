@@ -257,8 +257,8 @@ static void test_tx_power_level_is_signed(void)
 			       err, sizeof(err)) != 0)
 		return;
 
-	CHECK_CONTAINS(out, "-12 dBm");
-	CHECK_CONTAINS(out, "20 dBm");
+	CHECK_CONTAINS(out, "           -12 dBm\n");
+	CHECK_CONTAINS(out, "           20 dBm\n");
 	CHECK_LACKS(out, "244 dBm");
 	if (err[0] != '\0') {
 		printf("FAIL: unexpected stderr output: %s", err);

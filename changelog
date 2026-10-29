@@ -114,13 +114,19 @@ libbtbb (2020-12-R1+fork5) unstable; urgency=low
   * A capture file's interface description is no longer read past the end of
     the option list that carries it. The description was handed to the pcapng
     writer as a list of options with no terminating option, so a description
-    of 252 characters or more left both the writer and the timestamp
+    of 253 characters or more left both the writer and the timestamp
     resolution check reading an option header from the bytes after the list,
     and writing whatever they found there into the file. Ubertooth's tools
     pass a nine-character description, so their captures were never affected.
-  * An allocation that fails is reported rather than written through:
-    btbb_piconet_new() and get_piconet() return NULL, as btbb_packet_new()
-    already did, and the FEC 2/3 decoder and tun_format() do the same.
+  * An allocation the library makes and cannot get is reported rather than
+    written through. btbb_piconet_new() and get_piconet() return NULL, as
+    btbb_packet_new() already did, and the FEC 2/3 decoder and tun_format()
+    do the same. btbb_init() returns -1 when it cannot build the whole access
+    code error correction table, having thrown away the part it did build: a
+    table with a hole in it stops putting right the error patterns the
+    missing entries describe, and nothing used to say so. The hash table
+    these two use allocates on its own account as well, and that allocation
+    still ends the process, which is how the bundled uthash reports it.
   * An advertising PDU's length is read from the whole header octet, as the
     Bluetooth Core specification has defined it since 5.0. Six bits were read,
     which was the 4.x header, so an extended advertising PDU on a primary

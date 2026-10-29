@@ -67,9 +67,10 @@ static const struct {
  * header from there.
  *
  * desc is zeroed, so a shorter description already stops the walk inside it;
- * the terminator is what the longest one stops on. The description is cut to
- * 255 characters, the longest the option's 16-bit length needs to describe
- * and what the writer has always copied.
+ * the terminator is what a description of 253 characters or more stops on,
+ * those being the lengths whose padded option fills desc. The description is
+ * cut to 255 characters, which is what fits in desc and what the writer has
+ * always copied.
  */
 typedef struct {
 	option_header header;
