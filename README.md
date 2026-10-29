@@ -1,16 +1,24 @@
 libbtbb
 =======
 
-This is the Bluetooth baseband decoding library, forked from the GR-Bluetooth 
-project.  It can be used to extract Bluetooth packet and piconet information 
-from Ubertooth devices as well as GR-Bluetooth/USRP.
+libbtbb decodes Bluetooth baseband. It turns the symbols a radio captured into
+Bluetooth Classic (BR/EDR) and Low Energy packets, recovers a piconet's address
+and clock from them, and writes captures in pcap and pcapng format. The
+Ubertooth tools are what use it: `ubertooth-rx`, `ubertooth-btle`,
+`ubertooth-scan`, `ubertooth-follow` and the rest link this library. It began
+in the GR-Bluetooth project and also decodes symbols captured with
+GR-Bluetooth/USRP. This repository carries Wireshark plugins and a Python
+keyboard sniffer alongside the library.
 
-This code is incomplete, it is still under active development.  Patches and 
-bug reports should be submitted to the bug tracker on GitHub:
-https://github.com/greatscottgadgets/libbtbb/issues
+This is [SqueakyFloors/libbtbb](https://github.com/SqueakyFloors/libbtbb), a
+fork of [greatscottgadgets/libbtbb](https://github.com/greatscottgadgets/libbtbb)
+that builds on the original with fixes and a test suite; after this fork's
+release its tested fixes are offered back upstream. Bug reports and patches
+for this fork go to its own tracker:
+https://github.com/SqueakyFloors/libbtbb/issues
 
-This software has been developed and tested on Linux, it should work on other 
-platforms but this has yet to be tested.
+It builds on Linux and macOS, and is tested on both: see
+[TESTING.md](TESTING.md).
 
 
 Tested against the Bluetooth specification
@@ -27,12 +35,12 @@ v5.4's own sample data: all 7680 hop frequencies of Vol 2, Part G, Section 2,
 the access code, HEC, CRC, FEC and whitening vectors and the complete DH1 and
 DM1 packets of Sections 3 to 9, and the Low Energy link layer rules of Vol 6,
 Part B. CI builds and runs them on Linux with gcc and macOS with clang under
-`-Wall -Wextra -Werror`, and again under AddressSanitizer and
-UndefinedBehaviorSanitizer. Malformed radio packets are this library's normal
-input, so the decoders and the capture writers are fuzzed as well: five
-libFuzzer targets, which CI runs for a minute each.
+`-Wall -Wextra -Werror`, and once more on Linux with clang under
+AddressSanitizer and UndefinedBehaviorSanitizer. Malformed radio packets are
+this library's normal input, so the decoders and the capture writers are fuzzed
+as well: five libFuzzer targets, which CI runs for a minute each.
 
-The tests have helped find and fix 78 issues, many in packet types and capture
+The tests have helped find and fix 90 defects, many in packet types and capture
 paths that are rarely seen on the air. [TESTING.md](TESTING.md) describes what
 each test covers and where its vectors come from, lists each fix with what a
 user would notice, and gives before and after measurements.
@@ -166,6 +174,33 @@ $ cmake/cleanup.sh
 ```
 
 
+What a program links
+====================
+
+`btbb.h` is the whole interface. The library exports exactly the functions that
+header declares and nothing else. Its own helpers stay internal, so a program
+that happens to have a function called `hop()` or `DH()` of its own cannot be
+put in their place, and there is nothing outside the header for a program to
+come to depend on. A program includes `btbb.h` and links `-lbtbb`;
+`pkg-config --cflags libbtbb` and `pkg-config --libs libbtbb` give the flags
+for the install that is there.
+
+The shared library is `libbtbb.so.1` on Linux and `libbtbb.1.dylib` on macOS.
+Its version is 1.3, which `pkg-config --modversion libbtbb` reports. The
+soname stays at 1 for as long as a program built against `btbb.h` goes on
+working: functions and constants may be added to the header, so the version's
+second number moves and the soname does not. Removing one, or changing a
+signature, would move the soname to 2 and every program linking libbtbb would
+have to be rebuilt. The library's own release string, which
+`btbb_get_release()` returns, is a separate thing: it is the git commit the
+build came from, or the release it was cut at.
+
+To build the static library instead, or as well, see
+[README.cmake](README.cmake). On Windows a program linking the static library
+defines `BTBB_STATIC` before including the header, so that the header asks for
+neither of the `__declspec` declarations a DLL needs.
+
+
 Packaging
 =========
 
@@ -178,4 +213,6 @@ build does not produce.
 To package this library, follow [Build Instructions](#build-instructions)
 above, and [Where it installs](#where-it-installs) for the directories an
 install uses and how to choose them. An install writes the shared library,
-the `btbb.h` header, `libbtbb.pc` and the `btaptap` script.
+the `btbb.h` header, `libbtbb.pc`, the `btaptap` script and the `pcapdump`
+module it reads captures with. `-DENABLE_PYTHON=OFF` leaves the last two out,
+for a package that wants the library alone.

@@ -1,9 +1,10 @@
 BTBB Wireshark plugin
 
 This is the Bluetooth baseband plugin for Wireshark, it also includes an LMP
-level dissector.
+level dissector.  It is for Wireshark 2.0 and later, and builds on its own:
+the libbtbb build does not build it.
 
-To build this on Debian/Ubuntu/BackTrack linux distributions:
+To build this on Debian/Ubuntu linux distributions:
   sudo apt-get install wireshark-dev wireshark
   cd libbtbb/wireshark/plugins/btbb/
   mkdir build
@@ -13,5 +14,11 @@ To build this on Debian/Ubuntu/BackTrack linux distributions:
   make install
 
 This will install to the .wireshark/ in your home directory.  To override this
-set the DESTDIR environment variable when running cmake.
+set CMAKE_INSTALL_LIBDIR when running cmake:
+  cmake -DCMAKE_INSTALL_LIBDIR=/path/to/plugins ..
+The configure step prints the directory it settled on.
 
+Wireshark 4 reads a compiled plugin from a per-version subdirectory of its
+plugin folder rather than from .wireshark/, so install it there instead.
+Help > About Wireshark > Folders names the folders your build reads; see also
+https://www.wireshark.org/docs/wsug_html_chunked/ChPluginFolders.html

@@ -1,6 +1,8 @@
 CMake Settings
 ==============
-The following are flags that may be of use when configuing this project.
+The following are flags that may be of use when configuring this project.
+Where the library and the header are installed is in README.md, under
+"Where it installs".
 
  * ENABLE_PYTHON
   * A boolean flag for building and installing btaptap python tool.
@@ -23,8 +25,13 @@ The following are flags that may be of use when configuing this project.
  * INSTALL_DEFAULT_BINDIR
   * The directory the tools are installed in, under the install prefix.
     It defaults to bin.
+ * BUILD_TESTING
+  * Whether to build the test suite, on by default. Run it with ctest; see
+    TESTING.md.
  * RELEASE_STRING
-  * The version the library reports. It defaults to the current git commit,
-    or to the latest release when the source is not a git checkout.
+  * The version the library reports from btbb_get_release(). It defaults to
+    the current git commit, or to the latest release when the source is not a
+    git checkout. It is not the library's version or soname, which are in
+    README.md under "What a program links".
 
-CMake 3.5 or newer is required.
+CMake 3.5 or newer is required, and CMake 4 builds this project.
