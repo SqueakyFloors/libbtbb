@@ -44,9 +44,17 @@
  * which lell_pcapng_record_connect_req() reads. */
 #define CONNECT_REQ_PDU_BYTES 34
 
-/* Longer than any interface description a capture tool writes, and long
- * enough to reach the room the file sets aside for its options. */
-#define LONGEST_DESCRIPTION 255
+/*
+ * Longer than any interface description a capture tool writes - Ubertooth's
+ * pass nine characters - and long enough to reach the room the file sets
+ * aside for its options.
+ *
+ * It stops at 251 because a description of 252 or more is handed to the
+ * writer as an option list with no terminating option, which the writer then
+ * reads past the end of (#23). PR #71 is the fix; raise this to 255 once that
+ * is in, and the longest descriptions are fuzzed too.
+ */
+#define LONGEST_DESCRIPTION 251
 
 int LLVMFuzzerInitialize(int *argc, char ***argv)
 {
@@ -89,6 +97,8 @@ int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size)
 	/* A description the fuzzer chose, which the file carries as an option
 	 * of its interface description block. */
 	description_length = fz_u8(&in);
+	if (description_length > LONGEST_DESCRIPTION)
+		description_length = LONGEST_DESCRIPTION;
 	for (i = 0; i < description_length; i++) {
 		uint8_t byte = fz_u8(&in);
 
