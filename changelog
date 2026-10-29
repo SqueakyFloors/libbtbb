@@ -404,11 +404,12 @@ libbtbb (2020-12-R1+fork5) unstable; urgency=low
   * The interface was compared with 2020-12-R1 before the release, by reading
     the debug information of both shared libraries with abidiff. The soname
     stays libbtbb.so.1, so a program built against an earlier fork build goes
-    on working. btbb.h, the only header the install offers, has gained five
+    on working. btbb.h, the only header the install offers, has gained six
     functions - btbb_find_ac_n(), btbb_packet_set_esco_length(),
-    btbb_packet_get_esco_length(), lell_allocate_and_decode_n() and
-    lell_get_payload_length() - and five constants, and has lost nothing; no
-    function it declares has changed its signature; and pkt_queue, the one
+    btbb_packet_get_esco_length(), btbb_piconet_drop_clock(),
+    lell_allocate_and_decode_n() and lell_get_payload_length() - and five
+    constants, and has lost nothing; no function it declares has changed its
+    signature; and pkt_queue, the one
     structure it defines rather than leaves opaque, is unchanged. The
     structures behind btbb_packet, btbb_piconet and lell_packet have all
     grown, which a program cannot see, because no installed header describes
