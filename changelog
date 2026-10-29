@@ -10,7 +10,8 @@ libbtbb (2020-12-R1+fork5) unstable; urgency=low
     air that cannot be read is not an error, so the decode now counts these
     payloads by kind and writes each payload's detail only for a caller that
     has asked for verbose output. lell_malformed_count() reads a count, and
-    starts it again, so a capture tool can report one line when a run ends;
+    starts it again when asked, so a capture tool can report one line per
+    run;
     lell_set_malformed_verbose() asks for the detail as it goes. A list of
     16-bit service UUIDs whose length is not a whole number of them is
     counted with the rest, where it used to be passed over in silence.

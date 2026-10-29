@@ -2,8 +2,9 @@
  * What lell_print() writes, and on which stream: packets whose decode
  * involves byte assembly (a CONNECT_REQ, whose connection access address has
  * its top bit set, and advertising data carrying 16-bit service UUIDs), and
- * packets whose advertising data is malformed, where the complaint belongs on
- * stderr and the dump on stdout.
+ * packets the decode cannot read as what they claim to be, which are counted
+ * by kind and say nothing until a caller asks for the detail - and then on
+ * stderr, with the dump on stdout either way.
  *
  * This file is part of libbtbb
  *
