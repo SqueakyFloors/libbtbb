@@ -944,6 +944,18 @@ int crc_check(int clock, btbb_packet* pkt)
 		pkt->payload_length = 0;
 		pkt->corrected_payload_bits = 0;
 	}
+	else {
+		/* The CRC came out at this clock, so this trial is the
+		 * packet's own decode: the payload in the field is the one
+		 * the CRC flags above describe. Report it as a payload this
+		 * packet decoded, the same as btbb_decode_payload() does, or
+		 * the record of the packet that settled the address part -
+		 * the first evidence the address part was derived from -
+		 * would carry a correct CRC over a payload a reader cannot
+		 * see. */
+		btbb_packet_set_flag(pkt, BTBB_HAS_PAYLOAD,
+				     pkt->payload_length > 0);
+	}
 
 	return retval;
 }
@@ -1248,6 +1260,11 @@ int DH(int clock, btbb_packet* pkt)
 		default: /* not a DH1/3/5 */
 			return 0;
 	}
+	/* These types carry their payload with no forward error correction,
+	 * so nothing in it is corrected. The other decoders report the count
+	 * they made; this one reports none, rather than leaving behind a
+	 * count from whatever decoded this packet before. */
+	pkt->corrected_payload_bits = 0;
 	if(!decode_payload_header(stream, clock, header_bytes, size, 0,
 				  HEADER_WHITENING_BITS, pkt))
 		return 0;

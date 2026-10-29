@@ -11,7 +11,7 @@ request on Linux and macOS, plain and under AddressSanitizer and
 UndefinedBehaviorSanitizer. The vectors of the original test programs were
 kept and ported (see #9).
 
-The tests have helped find and fix 63 issues, many of them in packet types and
+The tests have helped find and fix 70 issues, many of them in packet types and
 capture paths that are rarely seen on the air.
 
 - [How to run them](#how-to-run-them)
@@ -186,6 +186,8 @@ Rows are ordered by severity, most severe first.
 | 🟠 | Capture files | `ref_uap << 24` shifted into the sign bit of an `int` | undefined behaviour, which a sanitizer traps | `capture` under UndefinedBehaviorSanitizer | #36 | #23 |
 | 🟠 | Capture files | A packet with no payload declared a zero-length array | undefined behaviour, which a sanitizer traps | `capture` | #36 | #27 |
 | 🟠 | Capture files | `btbb_pcapng_close()` and `lell_pcapng_close()` reported a failure on every close and could not report a real one | a caller could not tell a closed file from a failed one | `capture` | #36 | — |
+| 🟠 | Capture files | The trial clock whose CRC came out was not reported as the packet's own decode, so the record of the packet that settles a piconet's upper address part carried a correct-CRC result and no payload | the record a reader most needs, the first evidence the address part was derived from, asserted a correct CRC over a payload the file did not hold: in a four-record replay, `caplen=22 flags=0x0c97 payload=none` where the packet had decoded 8 bytes | `capture`: the search's own pass, a four-record replay through one piconet, and the payload read back out of both writers | #85 | #78 |
+| 🟠 | Capture files | A candidate clock the search rules out because the address part it reads is not the piconet's was decoded anyway, and the trial's payload and CRC answer stayed on the packet | following a piconet by LAP and UAP, a record of another piconet's packet on the same LAP could carry a payload that trial decoded. The clock is now ruled out without decoding it | `capture`, a packet whose address part is not the piconet's | #85 | #78 |
 | 🟠 | Python and build | `btaptap` read every byte of a capture through `ord()`, which python 3 raises a `TypeError` for, and the read loop took any `TypeError` as the end of the capture | no capture ever gave up a keystroke: the tool printed nothing, said nothing and exited 0, since the changelog claimed python 3 support in 2020-12-R1 | `btaptap`, keystrokes out of a baseband and an HCI capture and out of the recorded Ellisys export | #64 | #55 |
 | 🟠 | Python and build | The Ellisys path opened the CSV in text mode, so the CR LF line endings its header comparison expects never matched, and past that point it called `xreadlines()`, converted hex with `str.decode("hex")` and built its faked L2CAP packet with `chr()` | `-e` refused the repository's own example export as not an Ellisys export, and exited 0 | `btaptap`, the recorded export decoded, and a CSV that is not one refused | #64 | #55 |
 | 🟠 | Python and build | An unsupported data link layer was reported once per packet, and the run still exited 0 | a capture from the Ubertooth tools, whose link type `btaptap` does not read, printed one line per packet and reported success | `btaptap`, a `DLT_BLUETOOTH_BREDR_BB` capture | #64 | #55 |
@@ -250,6 +252,7 @@ map changes, and the replaced allocator.
 | Peripheral slot differs from the central slot it repeats | 63,104 of 65,536 | 0 of 65,536 | PR #11 |
 | Clock recovery against a device whose map the observer is one channel short of, over 400 true-clock values: a wrong CLK1-27 accepted | 99 of 400 | 10 of 400 | PR #49 review, reproduced independently by both reviewers. It is not impossible, and a piconet followed on a wrong clock still has no way back |
 | The same 400: no lock within the hops observed, which is recoverable | 194 | 276 | PR #49. This is what the wrong locks were traded for |
+| Payload bytes in the record of the packet that settles a piconet's address part | 0 of the 8 it decoded | 8 of 8 | PR #85, the four-record replay of #78 through the fork's `ubertooth-rx -i` against each library. The other three records are unchanged, and 95 records replayed from 30 s of lab air are byte-identical between the two, since no packet there settled an address part |
 | The same 400: the true clock found | 84 | 88 | PR #49 |
 | Cost of the confirmation rule where the predictions are exact | — | four more packets to lock (10.7 → 14.7, 45.3 → 49.3, 34.2 → 38.2 over three scenarios) | PR #49, both reviewers independently |
 | A clock given up, then the same search run again: restarts that ended back on the clock that had just failed, 90 locks over 400 true-clock values | 90 of 90 | 0 of 90 | PR #65, the recovery sweep in `tests/test_clock_sweep.c` at 400 trials. The "forgotten" rows of that run are the old behavior, reproduced by clearing the clocks the piconet remembers giving up |
