@@ -2,25 +2,25 @@ libbtbb (2020-12-R1+fork5) unstable; urgency=low
   * A survey piconet can be read while the survey is still running. The only
     way into a survey's results was btbb_next_survey_result(), which takes
     each piconet out of the survey, so a tool could not read the UAP the
-    survey had recovered for a LAP without giving up the survey's own copy of
-    it - which is why ubertooth-rx -z, whose job is finding addresses, wrote
-    capture records with no reference address in them. The new
+    survey had recovered for a LAP without giving up the survey's own copy
+    of it - which is why ubertooth-rx -z, whose job is finding addresses,
+    wrote capture records with no reference address in them. The new
     btbb_survey_piconet(lap) hands back the live piconet for a LAP, or NULL
-    where the survey has not heard that LAP, and leaves it in the survey to go
-    on being updated. Taking a piconet out with btbb_next_survey_result() now
-    removes its entry from the survey's hash table as well as from the front
-    of its list: the entry used to be freed while the table's buckets still
-    pointed at it, so a survey carrying on after some of its results had been
-    read looked that LAP up again for every further packet of that piconet and
-    wrote through a piconet that had been released; the table and its buckets
-    were also never freed, so each survey that was read to the end left them
-    behind. A survey that cannot
-    allocate room for a piconet now drops the packet: neither the survey's
-    entry for the LAP nor the piconet itself was checked, so whichever had
-    failed was written through and the tool died with it. btbb_piconet_new()
-    returns NULL where it cannot allocate a piconet, and says so on standard
-    error as btbb_packet_new() does, for the same reason. Library version 1.2,
-    for the new function.
+    where the survey has not heard that LAP, and leaves it in the survey to
+    go on being updated. Taking a piconet out with btbb_next_survey_result()
+    now removes its entry from the survey's hash table as well as from the
+    front of its list: the entry used to be freed while the table's buckets
+    still pointed at it, so a survey carrying on after some of its results
+    had been read looked that LAP up again for every further packet of that
+    piconet and wrote through a piconet that had been released; the table
+    and its buckets were also never freed, so each survey that was read to
+    the end left them behind. Both allocations a survey makes for a LAP it
+    has just heard - its own entry for that LAP, and the piconet - are
+    checked, and the packet is dropped where either fails; whichever had
+    failed used to be written through and the tool died with it.
+    btbb_piconet_new() returns NULL where it cannot allocate a piconet, and
+    says so on standard error as btbb_packet_new() does, for the same
+    reason. Library version 1.2, for the new function.
   * A clock the library gave up is not chosen again. Discovery starting over
     had no memory of the clock that had just failed, so a piconet could lock
     the same wrong clock, decode nothing, give it up, and go round that loop
