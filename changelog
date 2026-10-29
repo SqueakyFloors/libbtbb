@@ -1,4 +1,14 @@
 libbtbb (2020-12-R1+fork5) unstable; urgency=low
+  * The packaging files are gone. The RPM spec, the MacPorts Portfile and the
+    Homebrew formula in packaging/ described earlier releases: the spec listed
+    libbtbb.so.0 and two headers where the build produces libbtbb.so.1 and
+    installs one, and the Portfile and the formula fetched the 2014-02-R2
+    source. Distributions, MacPorts and Homebrew each keep their own packaging
+    next to the version they ship, so the files are removed rather than kept in
+    step with every release, and nothing in the tree describes a library the
+    build does not produce. README has a "Packaging" section pointing at the
+    build and install instructions.
+
   * A survey piconet can be read while the survey is still running. The only
     way into a survey's results was btbb_next_survey_result(), which takes
     each piconet out of the survey, so a tool could not read the UAP the

@@ -78,3 +78,18 @@ To list the installed files without removing them, use:
 ```
 $ cmake/cleanup.sh
 ```
+
+
+Packaging
+=========
+
+This repository carries no packaging files. Distributions, MacPorts and
+Homebrew each keep their own, next to the version they ship. The repository
+used to carry an RPM spec, a MacPorts Portfile and a Homebrew formula from
+earlier releases; they are gone, so nothing here describes a library the
+build does not produce.
+
+To package this library, follow [Build Instructions](#build-instructions)
+above, and [Where it installs](#where-it-installs) for the directories an
+install uses and how to choose them. An install writes the shared library,
+the `btbb.h` header, `libbtbb.pc` and the `btaptap` script.
