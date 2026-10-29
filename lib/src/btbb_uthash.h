@@ -21,6 +21,13 @@
  * the Free Software Foundation, Inc., 51 Franklin Street,
  * Boston, MA 02110-1301, USA.
  */
+/* uthash reads its settings when it is included, so a source that has already
+ * included it is running on the defaults and the settings below would come too
+ * late to have any effect. */
+#if defined(UTHASH_VERSION) && !defined(INCLUDED_BTBB_UTHASH_H)
+#error "include btbb_uthash.h rather than uthash.h, and before it"
+#endif
+
 #ifndef INCLUDED_BTBB_UTHASH_H
 #define INCLUDED_BTBB_UTHASH_H
 
@@ -39,8 +46,9 @@
  * error with the exit status every other failure uses, where uthash's own
  * default prints nothing and exits 255.
  *
- * btbb.h records this for the piconet survey, the only part of the library a
- * caller reaches a hash table through.
+ * The library keeps two hash tables: the access code error correction table
+ * btbb_init() builds, which is the larger of the two by far, and the piconet
+ * survey's table of the LAPs it has heard. btbb.h records this for both.
  */
 #define uthash_fatal(msg)                                                 \
 	do {                                                              \

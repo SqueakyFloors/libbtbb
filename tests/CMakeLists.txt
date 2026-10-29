@@ -118,9 +118,10 @@ if(BUILD_TESTING)
     # A million hops, for the one case that walks a range of clock values.
     set_tests_properties(hop PROPERTIES TIMEOUT 60)
 
-    # What the survey's hash table does when it cannot be allocated. Internal
-    # again, so it compiles the two translation units it reaches into, and it
-    # replaces the allocator uthash makes its own allocations with.
+    # What the library's hash tables do when they cannot be allocated.
+    # Internal again, so it compiles the two translation units it reaches
+    # into, and it replaces the allocator uthash makes its own allocations
+    # with.
     add_executable(test_uthash_oom test_uthash_oom.c)
     target_include_directories(test_uthash_oom PRIVATE ${PROJECT_SOURCE_DIR}/lib/src)
     target_compile_options(test_uthash_oom PRIVATE -std=gnu90)

@@ -127,15 +127,16 @@ libbtbb (2020-12-R1+fork5) unstable; urgency=low
     The hash table that table lives in allocates on its own account as well,
     and that allocation still ends the process, which the entry below covers.
   * An allocation failure inside a hash table says why the process ended. The
-    piconet survey keeps a table of the LAPs it has heard, and that table is
-    grown inside macros that expand in the caller and have no error path to
-    return, so a failed allocation there ends the process rather than work
-    through a table that is not there. It now prints "error: libbtbb: out of
-    memory" on standard error and exits with status 1, the status every other
-    failure uses, where it used to print nothing and exit 255. btbb.h records
-    this for the survey functions. The allocations the survey makes itself
-    for a LAP it has just heard are checked as before, and drop the packet
-    instead.
+    library keeps two tables: the access code error correction table
+    btbb_init() builds, and the piconet survey's table of the LAPs it has
+    heard. Each is grown inside macros that expand in the caller and have no
+    error path to return, so a failed allocation there ends the process rather
+    than work through a table that is not there. It now prints "error:
+    libbtbb: out of memory" on standard error and exits with status 1, the
+    status every other failure uses, where it used to print nothing and exit
+    255. btbb.h records this for both. The entries themselves are allocated by
+    the library and checked as before: btbb_init() returns -1, and the survey
+    drops the packet.
   * An advertising PDU's length is read from the whole header octet, as the
     Bluetooth Core specification has defined it since 5.0. Six bits were read,
     which was the 4.x header, so an extended advertising PDU on a primary

@@ -1,10 +1,11 @@
 /*
- * What the library does when the piconet survey's hash table cannot be
- * allocated. The table is grown inside uthash's macros, which expand in the
- * caller and have no error path to return, so the library ends the process
- * there - and says why first. These cases check the message, the stream it
- * goes to and the exit status, for each of the three allocations uthash
- * makes: the table, its bucket array, and a larger bucket array when a
+ * What the library does when one of its hash tables cannot be allocated: the
+ * piconet survey's table of LAPs, and the access code error correction table
+ * btbb_init() builds. A table is grown inside uthash's macros, which expand
+ * in the caller and have no error path to return, so the library ends the
+ * process there - and says why first. These cases check the message, the
+ * stream it goes to and the exit status, for each of the three allocations
+ * uthash makes: the table, its bucket array, and a larger bucket array when a
  * bucket chain grows.
  *
  * The failure is produced by an allocator of this test's own under
@@ -158,6 +159,18 @@ static void check_child(void (*body)(void), const char *what)
 	char out[256], err[256];
 	int status = 0;
 
+	/* Each case fails an allocation by its number, counted from the first
+	 * one this process makes, so a case that ran after something else had
+	 * allocated would fail an allocation other than the one it means to
+	 * and cover nothing. Said here rather than left to the order main()
+	 * happens to call them in. */
+	if (uthash_allocations != 0) {
+		printf("FAIL %s: ran after %d hash table allocation(s) had "
+		       "been made\n", what, uthash_allocations);
+		++failures;
+		return;
+	}
+
 	if (run_in_child(body, &status, out, sizeof(out),
 			 err, sizeof(err)) != 0) {
 		printf("FAIL %s: the child could not be started\n", what);
@@ -195,7 +208,7 @@ static void check_child(void (*body)(void), const char *what)
 	}
 }
 
-/* The first allocation a survey makes through uthash is the table itself. */
+/* The first allocation the survey makes through uthash is the table itself. */
 static void fail_the_table(void)
 {
 	fail_from = 1;
@@ -229,6 +242,17 @@ static void fail_an_expansion(void)
 }
 
 /*
+ * The library's other hash table, and the larger of the two: the access code
+ * error correction table btbb_init() builds. Its first entry allocates the
+ * table, as the survey's does.
+ */
+static void fail_the_error_correction_table(void)
+{
+	fail_from = 1;
+	btbb_init(2);
+}
+
+/*
  * The failures above are the allocator's doing and nothing else's: with it
  * serving every request, the same call keeps the piconet it started in the
  * survey, in this process.
@@ -254,9 +278,11 @@ int main(void)
 	/* each of these runs before this process has a survey table of its
 	 * own, so the child makes the table and reaches the allocation its
 	 * case is about */
-	check_child(fail_the_table, "the table");
+	check_child(fail_the_table, "the survey's table");
 	check_child(fail_the_bucket_array, "the bucket array");
 	check_child(fail_an_expansion, "a larger bucket array");
+	check_child(fail_the_error_correction_table,
+		    "the error correction table");
 
 	test_a_survey_that_can_allocate_keeps_its_piconet();
 
