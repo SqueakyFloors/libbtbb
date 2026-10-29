@@ -70,6 +70,12 @@ function(btbb_clean_install_dir out_var depth_var dir what)
 			continue()
 		endif()
 		if(segment STREQUAL "..")
+			# One directory back, as the install reads it. Only a ".." with
+			# nothing before it to go back through leads out.
+			if(kept)
+				list(REMOVE_AT kept -1)
+				continue()
+			endif()
 			message(FATAL_ERROR
 				"${what} is \"${dir}\", which leads out of the directory it "
 				"is given relative to. Give a directory under the prefix, "
@@ -165,12 +171,16 @@ if(IS_ABSOLUTE "${BTBB_INSTALL_LIBDIR}")
 	# Such an install cannot be staged somewhere else and still be found,
 	# which is worth saying while the directories are being chosen: the file
 	# lands outside the prefix, so it has no way to tell that the prefix has
-	# moved, and the header it names would be the one at the old place.
-	message(STATUS
-		"libbtbb.pc will name ${CMAKE_INSTALL_PREFIX} as the prefix of the "
-		"header, because an absolute library directory leaves the file with "
-		"no relation to the prefix: an install staged elsewhere with "
-		"--prefix needs its own configure")
+	# moved, and the header it names would be the one at the old place. Said
+	# only where the header is the one that would move: an absolute
+	# includedir is named as it stands and does not move either.
+	if(NOT IS_ABSOLUTE "${BTBB_INSTALL_INCLUDEDIR}")
+		message(STATUS
+			"libbtbb.pc will name ${CMAKE_INSTALL_PREFIX} as the prefix of "
+			"the header, because an absolute library directory leaves the "
+			"file with no relation to the prefix: an install staged "
+			"elsewhere with --prefix needs its own configure")
+	endif()
 else()
 	# One ".." for each directory between the prefix and this file, which is
 	# in a pkgconfig directory inside the library's own.
