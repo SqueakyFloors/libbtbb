@@ -55,13 +55,18 @@ typedef struct __attribute__((packed)) pcap_hdr_s {
 	uint32_t network;        /* data link type */
 } pcap_hdr_t;
 
-/* Nothing came of the file this call made, so it does not outlive the call,
-   and the reason it failed is kept for the caller to report. */
-static FILE *abandon_new_file( FILE *pcap_file, int fd, const char *filename )
+/* Nothing came of the file this call opened, so a file the call made itself
+   does not outlive it. The reason it failed is kept for the caller to report.
+   created is 0 for a name that was already there and is not a regular file,
+   which this call did not make and must not remove. */
+static FILE *abandon_new_file( FILE *pcap_file, int fd, const char *filename,
+			       int created )
 {
 	int saved_errno = errno;
 
-	pcapng_remove_own_file( fd, filename );
+	if (created) {
+		pcapng_remove_own_file( fd, filename );
+	}
 	(void) fclose( pcap_file );
 	errno = saved_errno;
 	return NULL;
@@ -81,23 +86,31 @@ static FILE *btbb_pcap_open(const char *filename, uint32_t dlt, uint32_t snaplen
 		.network = dlt,
 	};
 	FILE *pcap_file;
-	int fd;
+	int fd, created = 1;
 
-	/* O_EXCL, which is what the PCAPNG writer opens with: a capture is
-	   not written over a file that is already there, and a descriptor at
-	   all means this call made the file, so it can be taken away again if
-	   the header cannot be written. Opening for writing in the ordinary
-	   way would empty the user's file before a byte was written, and
-	   leave an empty one of its own behind when the header failed. */
+	/* Two opens rather than one, to learn whether the file is this call's
+	   own: with O_EXCL a descriptor means the name was free and this call
+	   made what is behind it, so it can be taken away again if the header
+	   cannot be written. A name already in use is opened as it always
+	   was, and what is there is not this call's to remove. */
 	fd = open( filename, O_WRONLY|O_CREAT|O_EXCL,
 		   S_IRUSR|S_IWUSR|S_IRGRP|S_IWGRP );
-	if (fd == -1) return NULL;
+	if (fd == -1) {
+		int open_errno = errno;
+
+		if (open_errno != EEXIST) return NULL;
+		fd = open( filename, O_WRONLY|O_TRUNC );
+		if (fd == -1) return NULL;
+		created = 0;
+	}
 
 	pcap_file = fdopen( fd, "wb" );
 	if (pcap_file == NULL) {
 		int saved_errno = errno;
 
-		pcapng_remove_own_file( fd, filename );
+		if (created) {
+			pcapng_remove_own_file( fd, filename );
+		}
 		(void) close( fd );
 		errno = saved_errno;
 		return NULL;
@@ -117,13 +130,13 @@ static FILE *btbb_pcap_open(const char *filename, uint32_t dlt, uint32_t snaplen
 	   records that have to be whole, so give up on it here rather than
 	   write a capture that cannot be rolled back. */
 	if (setvbuf(pcap_file, NULL, _IONBF, 0) != 0) {
-		return abandon_new_file( pcap_file, fd, filename );
+		return abandon_new_file( pcap_file, fd, filename, created );
 	}
 
 	/* A file whose header did not reach it is no capture file, so say so
 	   now rather than leaving the caller with a handle to it. */
 	if (fwrite(&pcap_header, sizeof(pcap_header), 1, pcap_file) != 1) {
-		return abandon_new_file( pcap_file, fd, filename );
+		return abandon_new_file( pcap_file, fd, filename, created );
 	}
 
 	return pcap_file;

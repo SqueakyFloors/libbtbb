@@ -2997,49 +2997,11 @@ static void test_create_keeps_an_existing_file(void)
 }
 
 /*
- * The plain PCAP writer keeps a file that was already there, as the PCAPNG
- * writer does. It used to open the name for writing in the ordinary way,
- * which emptied the user's file before a byte of the capture was written.
- */
-static void test_pcap_create_keeps_an_existing_file(void)
-{
-	static const char content[] = "not a capture file";
-	const char *filename = "test_capture_exists.pcap";
-	btbb_pcap_handle *bh = NULL;
-	lell_pcap_handle *lh = NULL;
-	char readback[sizeof(content)];
-	FILE *f;
-
-	unlink_quietly(filename);
-	f = fopen(filename, "wb");
-	CHECK(f != NULL);
-	if (f == NULL)
-		return;
-	CHECK(fwrite(content, 1, sizeof(content), f) == sizeof(content));
-	CHECK(fclose(f) == 0);
-
-	/* both writers open through the same function */
-	CHECK(btbb_pcap_create_file(filename, &bh) != 0);
-	CHECK(bh == NULL);
-	CHECK(lell_pcap_create_file(filename, &lh) != 0);
-	CHECK(lh == NULL);
-
-	memset(readback, 0, sizeof(readback));
-	f = fopen(filename, "rb");
-	CHECK(f != NULL);
-	if (f != NULL) {
-		CHECK(fread(readback, 1, sizeof(readback), f) ==
-		      sizeof(content));
-		CHECK(memcmp(readback, content, sizeof(content)) == 0);
-		CHECK(fclose(f) == 0);
-	}
-	unlink_quietly(filename);
-}
-
-/*
- * And a file whose header could not be written is not left behind, so a
+ * A PCAP file whose header could not be written is not left behind, so a
  * capture that failed to start leaves no empty file to be mistaken for one
- * that caught nothing.
+ * that caught nothing. Only a file the call made itself: a name already in
+ * use is written over, as it always was, and what was there is not the
+ * writer's to remove.
  *
  * The header write is made to fail by the limit on how large a file this
  * process may write, which is how the cases below make a write fail: the
@@ -3047,12 +3009,23 @@ static void test_pcap_create_keeps_an_existing_file(void)
  */
 static void test_pcap_create_failure_leaves_no_file(void)
 {
-	const char *filename = "test_capture_noheader.pcap";
+	const char *made = "test_capture_noheader.pcap";
+	const char *given = "test_capture_wasthere.pcap";
 	struct rlimit saved, limited;
 	btbb_pcap_handle *bh = NULL;
+	lell_pcap_handle *lh = NULL;
+	FILE *f;
 
 	if (getrlimit(RLIMIT_FSIZE, &saved) != 0)
 		return;
+
+	/* a file to open over, made before the limit is lowered */
+	unlink_quietly(given);
+	f = fopen(given, "wb");
+	CHECK(f != NULL);
+	if (f == NULL)
+		return;
+	CHECK(fclose(f) == 0);
 
 	limited = saved;
 	/* less than the 24-byte file header */
@@ -3062,14 +3035,48 @@ static void test_pcap_create_failure_leaves_no_file(void)
 		   the default action would end the test */
 		void (*old_xfsz)(int) = signal(SIGXFSZ, SIG_IGN);
 
-		unlink_quietly(filename);
-		CHECK(btbb_pcap_create_file(filename, &bh) != 0);
+		unlink_quietly(made);
+		CHECK(btbb_pcap_create_file(made, &bh) != 0);
 		CHECK(bh == NULL);
-		CHECK(!file_exists(filename));
-		unlink_quietly(filename);
+		CHECK(!file_exists(made));
+
+		/* the LE writer opens through the same function */
+		CHECK(lell_pcap_create_file(made, &lh) != 0);
+		CHECK(lh == NULL);
+		CHECK(!file_exists(made));
+
+		/* the one that was already there stays */
+		CHECK(btbb_pcap_create_file(given, &bh) != 0);
+		CHECK(bh == NULL);
+		CHECK(file_exists(given));
 
 		CHECK(setrlimit(RLIMIT_FSIZE, &saved) == 0);
 		(void) signal(SIGXFSZ, old_xfsz);
+	}
+	unlink_quietly(made);
+	unlink_quietly(given);
+}
+
+/*
+ * A name that is not a file at all is opened as it always was, which is how
+ * a tool sends its capture to standard output: it names the descriptor as a
+ * path. Nothing here is the writer's to remove.
+ */
+static void test_pcap_create_writes_to_a_device(void)
+{
+	btbb_pcap_handle *bh = NULL;
+	lell_pcap_handle *lh = NULL;
+
+	CHECK(btbb_pcap_create_file("/dev/null", &bh) == 0);
+	CHECK(bh != NULL);
+	if (bh != NULL) {
+		(void) btbb_pcap_close(bh);
+	}
+
+	CHECK(lell_pcap_create_file("/dev/null", &lh) == 0);
+	CHECK(lh != NULL);
+	if (lh != NULL) {
+		(void) lell_pcap_close(lh);
 	}
 }
 
@@ -3269,8 +3276,8 @@ int main(void)
 	test_create_failure_leaves_no_file();
 	test_create_keeps_an_existing_file();
 	test_create_keeps_a_file_it_did_not_make();
-	test_pcap_create_keeps_an_existing_file();
 	test_pcap_create_failure_leaves_no_file();
+	test_pcap_create_writes_to_a_device();
 	test_write_errors();
 
 	if (failures) {

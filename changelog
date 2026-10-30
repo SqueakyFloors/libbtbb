@@ -102,11 +102,10 @@ libbtbb (2026-10-R1) unstable; urgency=low
     empty or part written, for the user to tell apart from a capture that
     caught nothing; it is now taken away again, and a file that was already
     there is still left untouched.
-  * Fixed: asking for a PCAP capture file at a name already in use emptied
-    that file without a word; the name is now refused, as it already was for
-    a PcapNG file, and the file is left as it was.
   * Fixed: a PCAP file whose header could not be written was left behind
-    empty; it is now taken away again.
+    empty, for the user to tell apart from a capture that caught nothing; a
+    file the writer made itself is now taken away again, and a name that was
+    already in use is written over as before and left alone.
 
   [ Output ]
   * Fixed: decoding a packet printed it; only btbb_print_packet() prints now,
