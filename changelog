@@ -1,175 +1,183 @@
 libbtbb (2026-10-R1) unstable; urgency=low
 
   [ Decoding (BR/EDR) ]
-  * AUX1, EV3, EV4 and EV5 payloads decode, each at the longest length its
-    type allows.
-  * A DV packet's data field decodes, with its own whitening rather than the
-    voice field's.
-  * An HV3 voice packet is reported as HV3, not as 32 bytes of EV3.
-  * An eSCO payload's length comes from btbb_packet_set_esco_length(), read
-    back by btbb_packet_get_esco_length(), or from the longest length whose
-    CRC agrees rather than the first.
-  * A packet whose payload did not decode, or is shorter than its own CRC,
-    reports no payload and is not called CRC-checked.
-  * A packet cut short decodes no payload and no header out of symbols the
-    capture did not hold.
+  * Fixed: AUX1, EV3, EV4, and EV5 payloads did not decode; they now do, each
+    at the longest length its type allows.
+  * Fixed: a DV packet's data field was dewhitened as the voice field; it now
+    decodes with its own whitening.
+  * Fixed: an HV3 voice packet was reported as 32 bytes of EV3; it is now
+    reported as HV3.
+  * Fixed: an eSCO payload's length was the first length whose CRC agreed; it
+    now comes from btbb_packet_set_esco_length(), or the longest that agrees.
+  * Fixed: a packet whose payload did not decode, or is shorter than its own
+    CRC, was given a payload and called CRC-checked; it is now given neither.
+  * Fixed: a packet cut short decoded a header and a payload out of symbols
+    the capture did not hold; it now decodes neither.
   * New flags BTBB_HEC_CHECKED, BTBB_HEC_VALID and BTBB_CRC_CHECKED join
     BTBB_CRC_CORRECT to say what the decoder checked and what it found.
   * New btbb_find_ac_n() takes the symbol stream's length and reads no
     further; btbb_find_ac(), which carries no length, is unchanged.
 
   [ Decoding (LE) ]
-  * An extended advertising PDU keeps its whole payload: the Length is read
-    from the whole header octet, as the Core specification defines it.
-  * The LE symbol buffer is 264 bytes, so a Length of 252 to 255 keeps its
-    last octets and its real CRC.
-  * An LE data PDU may carry the 251 bytes Data Length Extension permits, and
-    capture files record all of it rather than its first 64 bytes.
+  * Fixed: an extended advertising PDU lost the end of its payload; the Length
+    now comes from the whole header octet, as the Core specification defines.
+  * Fixed: a Length of 252 to 255 lost its last octets and its real CRC; the
+    LE symbol buffer is now 264 bytes, so they are kept.
+  * Fixed: capture files held only the first 64 bytes of an LE data PDU; they
+    now hold all 251 bytes Data Length Extension permits.
   * New lell_allocate_and_decode_n() takes the bytes captured, so it cannot
     read past a caller's buffer; lell_get_payload_length() reads the length.
-  * A malformed advertising payload is counted, not reported line by line, by
-    lell_malformed_count(); lell_set_malformed_verbose() asks for the detail.
-  * A service UUID list whose length is not a whole number of UUIDs prints the
-    whole ones it holds, and a short 16-bit list is counted.
-  * A Tx Power Level prints as the signed value the specification defines, so
-    lell_print() reports -12 dBm rather than 244 dBm on every host.
-  * An advertising PDU shorter than the fields read from it says what is
-    missing, and a data PDU with no payload reports no LL Control opcode.
-  * A flags element with no flags in it no longer has a flags byte read from
-    past the end of the advertising data.
-  * A frequency outside 2402 to 2480 MHz gives a bounded channel index.
+  * Fixed: a malformed advertising payload was reported line by line; it is now
+    counted by lell_malformed_count(); lell_set_malformed_verbose() asks for it.
+  * Fixed: a service UUID list whose length is not a whole number of UUIDs
+    printed none of them; the whole ones now print, and the leftover is counted.
+  * Fixed: lell_print() reported a Tx Power Level of -12 dBm as 244 dBm; it
+    now prints the signed value the specification defines, on every host.
+  * Fixed: an advertising PDU too short for the fields read from it now says
+    what is missing, and a data PDU with no payload shows no LL Control opcode.
+  * Fixed: a flags element with no flags in it had a flags byte read from past
+    the end of the advertising data; it no longer does.
+  * Fixed: a frequency outside 2402 to 2480 MHz gave an unbounded channel
+    index; the index is now bounded.
   * Manufacturer-specific data names 4133 companies from the Bluetooth SIG's
     published Assigned Numbers, where BlueZ's gave 1038, and keeps the 73.
-  * LE decode complaints go to standard error rather than into the packet dump
-    on standard output, unchanged in wording.
+  * Fixed: LE decode complaints went into the packet dump on standard output;
+    they now go to standard error, unchanged in wording.
 
   [ Clock and hopping ]
-  * A clock search on a piconet using adaptive frequency hopping recognizes
-    the adapted hopping and keeps narrowing toward a clock, where it used to
-    start over on the basic sequence and never find one.
-  * Adaptive frequency hopping (AFH) follows the Core specification (Vol 2,
-    Part B, 2.6.3.1), so a clock tracked with AFH names the right channels.
-  * An adaptive piconet is not handed the hopping sequence cached for the same
-    address and a different channel map.
-  * A clock and UAP that are not the piconet's are given up: 20 failed
-    headers, or 10 after two seconds, give BTBB_PROCESS_LOCK_LOST.
+  * Fixed: a clock search on a piconet using adaptive frequency hopping (AFH)
+    started over on the basic sequence; it now narrows toward a clock.
+  * Fixed: a clock tracked with AFH named the wrong channels; hopping now
+    follows the Core specification (Vol 2, Part B, 2.6.3.1).
+  * Fixed: an adaptive piconet was handed the hopping sequence cached for the
+    same address and a different channel map; it no longer is.
+  * Fixed: a clock and UAP that are not the piconet's were kept forever; 20
+    failed headers, or 10 after two seconds, now give BTBB_PROCESS_LOCK_LOST.
   * New btbb_piconet_drop_clock() hands back a clock whose only symptom is
     silence; a clock given up is not chosen again, and a caller's is kept.
-  * Clock recovery needs four further hops to agree before it accepts a
-    candidate clock, which accepts a wrong one about a tenth as often.
-  * A piconet that nothing works for is reported once, after three clocks are
-    given up, rather than on every loss.
-  * btbb_piconet_get_clk_offset() reports the offset once CLK1-6 is known, in
-    625 us slots; btbb.h says which clock each stage of recovery reports.
+  * Fixed: clock recovery accepted a wrong clock too readily; it now needs
+    four further hops to agree, which accepts a wrong one a tenth as often.
+  * Fixed: a piconet that nothing works for was reported on every loss; it is
+    now reported once, after three clocks are given up.
+  * Fixed: btbb_piconet_get_clk_offset() read 0 until the whole clock was
+    known; it now reports it in 625 us slots as soon as CLK1-6 is known.
   * New btbb_survey_piconet(lap) hands back the live piconet for a LAP and
     leaves it in the survey, so a tool can read a recovered UAP.
-  * btbb_init_hop_reversal() refuses aliased hop reversal, where 79 channels
-    are observed folded into 25, with a note on standard error.
-  * Reading a piconet's AFH map answers hops one at a time, without the 128 MB
-    allocation and the wait a whole hopping sequence cost.
+  * Fixed: btbb_init_hop_reversal() reversed hops where 79 channels are
+    observed folded into 25; it now refuses, with a note on standard error.
+  * Fixed: reading a piconet's AFH map cost a 128 MB allocation and the wait a
+    whole hopping sequence took; it now answers hops one at a time.
   * The hopping sequence is gone, with its notes on standard output and the
     exported hop(), gen_hop_pattern() and get_hop_pattern().
 
   [ Capture files ]
-  * The record of the packet that settles a piconet's address part holds that
-    packet's own header and payload together, with the HEC flags.
-  * A record carries only a payload the decoder produced for that packet, not
-    a trial clock's result from guessing the upper address part.
+  * Fixed: the record of the packet that settles a piconet's address part held
+    another packet's header; it now holds that packet's own, with the HEC flags.
+  * Fixed: a record could carry a trial clock's payload from guessing the upper
+    address part; it now carries only what the decoder produced for the packet.
   * BR/EDR records say whether the header's HEC and the payload's CRC were
     checked and whether they held, in both PCAP and PCAPNG files.
-  * BR/EDR records carry the number of bits forward error correction put
-    right, where both fields read 0 before whatever the reception.
-  * The connection parameters a PCAPNG file records for a CONNECT_IND are the
-    ones the packet carried, so a reader can follow the connection.
-  * lell_pcapng_append_packet() returns the positive
-    LELL_PCAPNG_CONNECT_INFO_NOT_RECORDED when a long LE PCAPNG capture runs
-    out of room for a CONNECT_IND's parameters, so a tool can warn once.
-  * An LE capture file's reference access address flag follows the address the
-    caller gave rather than the channel, as the published layout defines.
-  * The snapshot length a capture file declares is the longest record its
-    writer can produce: 422 bytes for BR/EDR, 274 for LE and 288 for PPI.
-  * A failed or incomplete write is reported, and the part that reached the
-    file taken back out, so a full disk ends the capture on a whole record.
-  * btbb_pcapng_close() and lell_pcapng_close() return 0 on success.
-  * The interface options a PCAPNG file records for a CONNECT_IND, a BD_ADDR
-    and a clock carry the length of their contents.
-  * A pcapng capture file is created in a few milliseconds rather than a few
-    hundred; the bytes written are unchanged.
-  * The captured and original lengths in LE PCAP records are the right way
-    round, and the PCAPNG writer copies no more than the record holds.
+  * Fixed: the forward error correction fields in BR/EDR records read 0
+    whatever the reception; they now carry the number of bits put right.
+  * Fixed: a PCAPNG file recorded connection parameters a CONNECT_IND did not
+    carry; it now records the packet's own, so a reader can follow it.
+  * Fixed: a long LE PCAPNG capture ran out of room for a CONNECT_IND's
+    parameters in silence; lell_pcapng_append_packet() now says so with the
+    positive LELL_PCAPNG_CONNECT_INFO_NOT_RECORDED, so a tool can warn once.
+  * Fixed: an LE capture file's reference access address flag followed the
+    channel; it now follows the address the caller gave, as the layout defines.
+  * Fixed: a capture file declared a snapshot length shorter than its records;
+    it is now the longest: 422 bytes for BR/EDR, 274 for LE, and 288 for PPI.
+  * Fixed: a failed or incomplete write went unreported; it is now reported
+    and taken back out, so a full disk ends the capture on a whole record.
+  * Fixed: btbb_pcapng_close() and lell_pcapng_close() reported an error even
+    when the file closed cleanly; they now return 0 on success.
+  * Fixed: the interface options a PCAPNG file records for a CONNECT_IND, a
+    BD_ADDR, and a clock gave the wrong length; they now give their contents'.
+  * Fixed: creating a pcapng capture file took a few hundred milliseconds; it
+    now takes a few, and the bytes written are unchanged.
+  * Fixed: the captured and original lengths in LE PCAP records were the wrong
+    way round, and the PCAPNG writer copied more than the record holds.
 
   [ Output ]
-  * Decoding a packet does not print it; btbb_print_packet() prints a packet
+  * Fixed: decoding a packet printed it; only btbb_print_packet() prints now,
     as it always has.
-  * Progress and complaints from UAP and clock discovery go to standard error;
-    the AFH map btbb_print_afh_map() prints stays on standard output.
-  * An allocation the library cannot get is reported: the FEC 2/3 decoder,
-    tun_format() and btbb_piconet_new() return NULL, btbb_init() returns -1.
-  * A failed allocation in one of the library's hash tables prints "error:
-    libbtbb: out of memory" and exits 1, where it exited 255 in silence.
+  * Fixed: progress and complaints from UAP and clock discovery went to
+    standard output; they now go to standard error, apart from the AFH map.
+  * Fixed: an allocation the library could not get went unreported; the FEC
+    2/3 decoder, tun_format(), and btbb_piconet_new() now return NULL, and
+    btbb_init() returns -1.
+  * Fixed: a failed allocation in one of the library's hash tables exited 255
+    in silence; it now prints "error: libbtbb: out of memory" and exits 1.
 
   [ Build and install ]
-  * Builds and installs out of the box on current tools: the CMake minimum is
-    3.5, and the Python tools install from a PEP 440 wheel.
-  * The library and the header go where the system keeps them, from
-    GNUInstallDirs; CMAKE_INSTALL_LIBDIR, CMAKE_INSTALL_INCLUDEDIR and
-    LIB_SUFFIX choose otherwise.
-  * libbtbb.pc names the directories the files are really in and works out its
-    prefix from its own location, so a staged or moved install still links.
-  * The cleanup script looks in lib64 and a multiarch directory as well as
-    lib, and finds the pkg-config file, a static archive, a .dylib and btbb.h.
-  * The library exports only the functions btbb.h declares, 96 names where 128
-    were exported; one of them, bt_compidtostr(), clashed with BlueZ's.
-  * On Windows the BTBB_API macro each declaration in btbb.h carries is the
-    dllexport or dllimport declaration a shared library needs.
+  * Fixed: the library did not build or install out of the box on current
+    tools; the CMake minimum is 3.5, and the Python tools install from a wheel.
+  * Fixed: the library and the header did not go where the system keeps them;
+    GNUInstallDirs now decides, and CMAKE_INSTALL_LIBDIR,
+    CMAKE_INSTALL_INCLUDEDIR and LIB_SUFFIX choose otherwise.
+  * Fixed: libbtbb.pc named directories the files were not in; it now names
+    the real ones and takes its prefix from its own location, so a staged or
+    moved install still links.
+  * Fixed: the cleanup script looked only in lib and left files behind; it now
+    looks in lib64 and a multiarch directory, and finds the pkg-config file, a
+    static archive, a .dylib and btbb.h.
+  * Fixed: the library exported 128 names, one of which, bt_compidtostr(),
+    clashed with BlueZ's; it now exports only the 96 btbb.h declares.
+  * Fixed: on Windows the BTBB_API macro each declaration in btbb.h carries
+    was not the dllexport or dllimport declaration a shared library needs.
   * The soname stays libbtbb.so.1 and the library version is 1.3, where
     2020-12-R1's was 1.0; abidiff finds nine functions gained, none lost.
   * Existing callers see three changes behind that interface: two functions
     answer a positive value where they answered 0, the writers report a write
     that missed the file, and a decode says less where it knows less.
-  * A build asking for no library, "cmake -DBUILD_SHARED_LIB=OFF", is refused
-    while configuring, naming both options it takes.
+  * Fixed: a build asking for no library, "cmake -DBUILD_SHARED_LIB=OFF", was
+    accepted; it is now refused while configuring, naming both options it takes.
   * The RPM spec, the MacPorts Portfile and the Homebrew formula in packaging/
     are gone; each of those projects keeps its own packaging.
 
   [ Python tools ]
-  * btaptap decodes keystrokes again; the recorded Ellisys export, 864
-    keyboard reports, gives up the paragraph that was typed into it.
-  * btaptap reports a capture it cannot read through as one "error:" line and
-    a non-zero exit, where it exited 0 or raised a traceback.
-  * btaptap's command line is checked: an unknown option, a missing value, a
-    repeated value, -r with -e, and -c without -r each exit 1.
-  * btaptap's -h prints the usage text on standard output and no longer
-    cancels a capture given beside it.
-  * The pcapdump module writes a capture file again, and takes a timestamp's
-    unit from the capture's magic number, so nanosecond files read as such.
-  * The pcapdump module refuses a file that is not a capture, reads one taken
-    at a snapshot length, and writes a record's two lengths in order.
-  * btaptap finds the pcapdump module of the install it belongs to, and
-    installing into a second prefix puts the module there too.
-  * The scripts in python/utils that produced the committed tables run on
-    python 3, and gen_barker_correct.py reproduces the barker tables.
+  * Fixed: btaptap decoded no keystrokes; it does again, and the recorded
+    Ellisys export, 864 keyboard reports, gives up the paragraph typed into it.
+  * Fixed: btaptap exited 0 or raised a traceback on a capture it cannot read
+    through; it now reports one "error:" line and a non-zero exit.
+  * Fixed: btaptap took a bad command line; an unknown option, a missing value,
+    a repeated value, -r with -e, and -c without -r now each exit 1.
+  * Fixed: btaptap's -h canceled a capture given beside it; it now prints the
+    usage text on standard output and leaves the capture alone.
+  * Fixed: the pcapdump module wrote no capture file; it writes one again, and
+    takes a timestamp's unit from the capture's magic number, so nanosecond
+    files read as such.
+  * Fixed: the pcapdump module took a file that is not a capture, misread one
+    taken at a snapshot length, and wrote a record's two lengths out of order.
+  * Fixed: btaptap did not find the pcapdump module of the install it belongs
+    to; it now does, and installing into a second prefix puts the module there.
+  * Fixed: the scripts in python/utils that produced the committed tables did
+    not run on python 3; they now do, and gen_barker_correct.py reproduces the
+    barker tables.
 
   [ Under the hood ]
   * Clock recovery no longer writes about 200 kB past its candidate list under
     adaptive hopping.
   * The first packet of a recovery attempt no longer adapts to an AFH map the
     library never observed.
-  * Hop predictions follow the AFH map as it is learned, one hop at a time
-    rather than from a 128 MB table.
-  * Choosing the CLK1-27 candidates walks the 2^21 clock values once, and
-    btbb_winnow() stops once the clock is known.
-  * The hop pattern remembered while reversing hops is bounded, and a piconet
-    released during clock recovery no longer leaks its candidate list.
-  * btbb_next_survey_result() takes the piconet's entry out of the survey's
-    hash table as well as its list, and the table is freed.
-  * The 625 us slot offset and the 312.5 us CLKN tick offset are separate
-    fields, and the UAP is widened before it is shifted into an address.
+  * Hop predictions came from a 128 MB table; they now follow the AFH map as
+    it is learned, one hop at a time.
+  * Choosing the CLK1-27 candidates walked the 2^21 clock values more than
+    once; it now walks them once, and btbb_winnow() stops once the clock is
+    known.
+  * The hop pattern remembered while reversing hops was unbounded, and a
+    piconet released during clock recovery leaked its candidate list.
+  * btbb_next_survey_result() left the piconet's entry in the survey's hash
+    table; it now takes it out of the table as well as the list, and the table
+    is freed.
+  * The 625 us slot offset and the 312.5 us CLKN tick offset shared one field,
+    and the UAP was shifted into an address before it was widened.
   * An allocation failure in the LE decoder is no longer dereferenced.
   * An interface description of 253 characters or more is no longer read past
     the end of the option list that carries it.
-  * A PCAPNG header block's spare room is filled with as many padding options
-    as it takes, and options past that room are refused rather than written.
+  * One padding option could not cover a PCAPNG header block's spare room; as
+    many as it takes are now written, and options past that room refused.
   * A PCAPNG record no longer carries three bytes of the caller's memory in
     the padding that rounds it to a 4-byte boundary, in either writer.
   * A no-payload record, a high reference UAP, the LE decoder, the dump, and
