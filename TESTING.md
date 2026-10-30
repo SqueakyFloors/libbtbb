@@ -118,21 +118,25 @@ no dissector range-checks it, so a reader is better served by the real number.
 
 ## What only hardware can check
 
-Much of the Classic (BR/EDR) path rests on the unit tests, since the lab has
-Low Energy transmitters only. What still needs Classic hardware is AFH hop
-selection and clock recovery, whose results are statistical and need many
-follow runs compared against the previous pin; the BR/EDR capture record flags
-and padding; and the eSCO payload decode over a voice link.
+The Ubertooth fork runs the hardware side, and its bench now has a Classic
+(BR/EDR) pair as well as Low Energy transmitters. Its results are in
+[SqueakyFloors/ubertooth#736](https://github.com/SqueakyFloors/ubertooth/issues/736).
+Checked there against live BR/EDR traffic: the library's progress and decode
+commentary stays off standard output, the hopping sequence no longer costs
+128 MB of memory a run, and a BR/EDR capture record carries the HEC result
+flags and a reference UAP. Waiting on hardware the bench is still gaining: the
+eSCO payload decode needs a voice link between the peers, and AFH hop selection
+and clock recovery need a peer that adapts its hopping and one that reports its
+true clock. The capture record's CRC result flag has not been seen either,
+because no BR/EDR payload has come off the air yet. Resting on the unit tests
+alone: the capture record's padding bytes, which are only visible by reading
+the file back, and the payload reported for a packet that decoded none.
 
 Some cases can only ever be unit tests, because they need packet types real
 stacks rarely send, malformed input, a host out of memory, or an ARM host: the
 AUX1, DV, EV4, and EV5 payload lengths, the buffer bounds, the signedness of a
 Tx Power Level read through a plain `char`, the allocation failures, and a
 255-octet PDU at the top of the Length range.
-
-The Ubertooth fork runs the hardware side. Its test plan for a libbtbb pin
-bump, and what has been checked on a board, is
-[SqueakyFloors/ubertooth#736](https://github.com/SqueakyFloors/ubertooth/issues/736).
 
 ## Adding a test
 
