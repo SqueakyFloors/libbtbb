@@ -3086,7 +3086,7 @@ static void test_pcap_create_opens_a_name_in_use(void)
 	btbb_pcap_handle *bh = NULL;
 	lell_pcap_handle *lh = NULL;
 	char path[64];
-	char magic[4];
+	uint32_t magic;
 	int fd;
 	FILE *f;
 
@@ -3119,17 +3119,16 @@ static void test_pcap_create_opens_a_name_in_use(void)
 		if (bh != NULL) {
 			(void) btbb_pcap_close(bh);
 		}
-		/* the capture's header reached the file behind the
-		   descriptor, which is the whole point of naming it */
+		/* The capture's header reached the file behind the
+		   descriptor, which is the whole point of naming it. The
+		   magic is read as the word the writer wrote, not as four
+		   bytes, so the check holds whichever order the host puts
+		   them in. */
 		f = fopen(target, "rb");
 		CHECK(f != NULL);
 		if (f != NULL) {
-			CHECK(fread(magic, 1, sizeof(magic), f) ==
-			      sizeof(magic));
-			CHECK((unsigned char) magic[0] == 0x4d);
-			CHECK((unsigned char) magic[1] == 0x3c);
-			CHECK((unsigned char) magic[2] == 0xb2);
-			CHECK((unsigned char) magic[3] == 0xa1);
+			CHECK(fread(&magic, sizeof(magic), 1, f) == 1);
+			CHECK(magic == 0xa1b23c4dul);
 			CHECK(fclose(f) == 0);
 		}
 	}

@@ -111,7 +111,13 @@ static FILE *btbb_pcap_open(const char *filename, uint32_t dlt, uint32_t snaplen
 		/* O_CREAT again, because the name being in use does not mean
 		   there is a file to open: a symbolic link whose target does
 		   not exist is in use, and opening it through a stream made
-		   that target. O_EXCL is what is dropped here. */
+		   that target. O_EXCL is what is dropped here.
+
+		   That one case does leave a file behind when the header
+		   fails, and nothing here can help it: removing the name
+		   would take away the link and leave the target, which is
+		   the file that was written. A name in use is treated as the
+		   user's either way. */
 		fd = open( filename, O_WRONLY|O_CREAT|O_TRUNC,
 			   S_IRUSR|S_IWUSR|S_IRGRP|S_IWGRP|S_IROTH|S_IWOTH );
 		if (fd == -1) return NULL;
@@ -147,6 +153,13 @@ static FILE *btbb_pcap_open(const char *filename, uint32_t dlt, uint32_t snaplen
 	/* A file whose header did not reach it is no capture file, so say so
 	   now rather than leaving the caller with a handle to it. */
 	if (fwrite(&pcap_header, sizeof(pcap_header), 1, pcap_file) != 1) {
+		/* fwrite() need not set errno on a short write, and errno is
+		   the whole of what the caller has to report, so a write
+		   that said nothing about itself is reported as the
+		   input/output error it is. */
+		if (errno == 0) {
+			errno = EIO;
+		}
 		return abandon_new_file( pcap_file, fd, filename, created );
 	}
 
