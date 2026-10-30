@@ -46,12 +46,65 @@ suite, what each test covers, and where its vectors come from; `changelog`
 lists the fixes, one entry per release.
 
 
+Checked on hardware
+===================
+
+The Ubertooth fork runs the hardware side. Its bench measured this library
+against the pin it replaced, on live Low Energy and Classic (BR/EDR) traffic:
+
+| What | Previous pin | This library |
+|---|---|---|
+| `ubertooth-rx` peak memory on a Classic link | 140 to 142 MB | 12 MB |
+| Non-packet lines mixed into `ubertooth-rx` standard output | 42 to 302 per window | 0 |
+| BR/EDR pcapng frames whose header check is recorded | 0 of 1,108 | 105 of 105, all passed |
+| Lines on standard error during a Low Energy capture | 5,000 to 10,000 per window | 4 |
+| Low Energy capture rate | 323 to 363 packets/s | 336 to 366 packets/s |
+| Time to announce a UAP | median 11.3 s | median 1.4 s |
+
+The test plan and the raw output are in
+[SqueakyFloors/ubertooth#736](https://github.com/SqueakyFloors/ubertooth/issues/736),
+and the rest of the measured wins in
+[SqueakyFloors/ubertooth#536](https://github.com/SqueakyFloors/ubertooth/issues/536).
+What is still waiting on hardware, and what rests on the unit tests alone, is
+in [TESTING.md](TESTING.md#what-only-hardware-can-check).
+
+
 Concepts
 ========
 
 What this library decodes, and why it has to work the way it does — address
 parts, access code, whitening, clock recovery, the Low Energy connection
 request — is explained in [How Bluetooth sniffing works](https://github.com/SqueakyFloors/ubertooth/blob/main/docs/concepts.md).
+
+
+Capture files
+=============
+
+The library writes captures in pcap and pcapng format. A BR/EDR capture has
+the `LINKTYPE_BLUETOOTH_BREDR_BB` link type and a Low Energy capture
+`LINKTYPE_BLUETOOTH_LE_LL_WITH_PHDR`; `lell_pcap_ppi_create_file()` writes the
+older `LINKTYPE_PPI` form of a Low Energy pcap as well.
+
+Every record carries the channel, the signal and noise levels, and flags that
+say which of its fields hold anything. A BR/EDR record also carries the
+reference LAP and UAP the capture tool was following, and flags for what the
+decoder verified: whether the header check and the payload CRC were checked,
+and whether each passed, so a reader can tell a verified payload from a guess.
+A Low Energy record carries the access address the tool was listening for.
+
+A pcapng Low Energy capture also records the parameters of each CONNECT_IND,
+the interval, latency, timeout, channel map, and hop increment, as an option
+of the interface description block, which is what a reader needs to follow
+those connections. The room for the options is set aside when the file is
+created, so a long capture can fill it; the writer then returns
+`LELL_PCAPNG_CONNECT_INFO_NOT_RECORDED`, positive because the packet itself
+was written, and a capture tool warns once and carries on.
+
+Wireshark dissects the Low Energy link type itself. For BR/EDR baseband it
+needs the `btbb` and `btbredr` dissectors in `wireshark/`, which build
+separately from the library; see [wireshark/README.md](wireshark/README.md). The
+format of the pcapng options is specified in the Ubertooth fork's
+https://github.com/SqueakyFloors/ubertooth/blob/main/docs/source/bluetooth_captures_PCAP.rst
 
 
 Python tools
