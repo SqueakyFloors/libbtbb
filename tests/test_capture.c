@@ -26,6 +26,7 @@
  */
 
 #include <errno.h>
+#include <fcntl.h>
 #include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -3014,10 +3015,12 @@ static void test_pcap_create_failure_leaves_no_file(void)
 	struct rlimit saved, limited;
 	btbb_pcap_handle *bh = NULL;
 	lell_pcap_handle *lh = NULL;
+	int got_limit;
 	FILE *f;
 
-	CHECK(getrlimit(RLIMIT_FSIZE, &saved) == 0);
-	if (getrlimit(RLIMIT_FSIZE, &saved) != 0)
+	got_limit = getrlimit(RLIMIT_FSIZE, &saved);
+	CHECK(got_limit == 0);
+	if (got_limit != 0)
 		return;
 
 	/* a file to open over, made before the limit is lowered */
@@ -3067,26 +3070,71 @@ static void test_pcap_create_failure_leaves_no_file(void)
 }
 
 /*
- * A name that is not a file at all is opened as it always was, which is how
- * a tool sends its capture to standard output: it names the descriptor as a
- * path. Nothing here is the writer's to remove.
+ * A name already in use is opened as it always was, whatever is behind it,
+ * and nothing there is the writer's to remove.
+ *
+ * The case that matters is a descriptor named as a path, which is how a tool
+ * sends its capture to standard output: it saves that descriptor and gives
+ * the writer /dev/fd/N. Refusing a name in use takes that away, and no
+ * reading of the path can tell it from a capture file the user named, since
+ * macOS reports /dev/fd/N with the type of whatever is behind it. A device
+ * is checked too, as the simplest name that is not a file.
  */
-static void test_pcap_create_writes_to_a_device(void)
+static void test_pcap_create_opens_a_name_in_use(void)
 {
+	const char *target = "test_capture_viafd.pcap";
 	btbb_pcap_handle *bh = NULL;
 	lell_pcap_handle *lh = NULL;
+	char path[64];
+	char magic[4];
+	int fd;
+	FILE *f;
 
 	CHECK(btbb_pcap_create_file("/dev/null", &bh) == 0);
 	CHECK(bh != NULL);
 	if (bh != NULL) {
 		(void) btbb_pcap_close(bh);
+		bh = NULL;
 	}
-
 	CHECK(lell_pcap_create_file("/dev/null", &lh) == 0);
 	CHECK(lh != NULL);
 	if (lh != NULL) {
 		(void) lell_pcap_close(lh);
 	}
+
+	/* a descriptor of this test's own, named as a path the way a tool
+	   names its saved standard output */
+	unlink_quietly(target);
+	fd = open(target, O_WRONLY | O_CREAT | O_EXCL, 0666);
+	CHECK(fd != -1);
+	if (fd == -1)
+		return;
+	snprintf(path, sizeof(path), "/dev/fd/%d", fd);
+	if (access(path, W_OK) != 0) {
+		snprintf(path, sizeof(path), "/proc/self/fd/%d", fd);
+	}
+	if (access(path, W_OK) == 0) {
+		CHECK(btbb_pcap_create_file(path, &bh) == 0);
+		CHECK(bh != NULL);
+		if (bh != NULL) {
+			(void) btbb_pcap_close(bh);
+		}
+		/* the capture's header reached the file behind the
+		   descriptor, which is the whole point of naming it */
+		f = fopen(target, "rb");
+		CHECK(f != NULL);
+		if (f != NULL) {
+			CHECK(fread(magic, 1, sizeof(magic), f) ==
+			      sizeof(magic));
+			CHECK((unsigned char) magic[0] == 0x4d);
+			CHECK((unsigned char) magic[1] == 0x3c);
+			CHECK((unsigned char) magic[2] == 0xb2);
+			CHECK((unsigned char) magic[3] == 0xa1);
+			CHECK(fclose(f) == 0);
+		}
+	}
+	CHECK(close(fd) == 0);
+	unlink_quietly(target);
 }
 
 /*
@@ -3286,7 +3334,7 @@ int main(void)
 	test_create_keeps_an_existing_file();
 	test_create_keeps_a_file_it_did_not_make();
 	test_pcap_create_failure_leaves_no_file();
-	test_pcap_create_writes_to_a_device();
+	test_pcap_create_opens_a_name_in_use();
 	test_write_errors();
 
 	if (failures) {

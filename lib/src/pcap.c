@@ -56,9 +56,10 @@ typedef struct __attribute__((packed)) pcap_hdr_s {
 } pcap_hdr_t;
 
 /* Nothing came of the file this call opened, so a file the call made itself
-   does not outlive it. The reason it failed is kept for the caller to report.
-   created is 0 for a name that was already there and is not a regular file,
-   which this call did not make and must not remove. */
+   does not outlive it. The reason it failed is kept for the caller to
+   report. created is 0 for a name that was already in use, whatever is
+   behind it, which this call did not make and must not remove.
+   pcap_file is NULL where the stream was never made. */
 static FILE *abandon_new_file( FILE *pcap_file, int fd, const char *filename,
 			       int created )
 {
@@ -67,7 +68,12 @@ static FILE *abandon_new_file( FILE *pcap_file, int fd, const char *filename,
 	if (created) {
 		pcapng_remove_own_file( fd, filename );
 	}
-	(void) fclose( pcap_file );
+	if (pcap_file != NULL) {
+		(void) fclose( pcap_file );
+	}
+	else {
+		(void) close( fd );
+	}
 	errno = saved_errno;
 	return NULL;
 }
@@ -102,21 +108,19 @@ static FILE *btbb_pcap_open(const char *filename, uint32_t dlt, uint32_t snaplen
 		int open_errno = errno;
 
 		if (open_errno != EEXIST) return NULL;
-		fd = open( filename, O_WRONLY|O_TRUNC );
+		/* O_CREAT again, because the name being in use does not mean
+		   there is a file to open: a symbolic link whose target does
+		   not exist is in use, and opening it through a stream made
+		   that target. O_EXCL is what is dropped here. */
+		fd = open( filename, O_WRONLY|O_CREAT|O_TRUNC,
+			   S_IRUSR|S_IWUSR|S_IRGRP|S_IWGRP|S_IROTH|S_IWOTH );
 		if (fd == -1) return NULL;
 		created = 0;
 	}
 
 	pcap_file = fdopen( fd, "wb" );
 	if (pcap_file == NULL) {
-		int saved_errno = errno;
-
-		if (created) {
-			pcapng_remove_own_file( fd, filename );
-		}
-		(void) close( fd );
-		errno = saved_errno;
-		return NULL;
+		return abandon_new_file( NULL, fd, filename, created );
 	}
 
 	/* Write straight through, which has to be set before anything else
@@ -133,6 +137,10 @@ static FILE *btbb_pcap_open(const char *filename, uint32_t dlt, uint32_t snaplen
 	   records that have to be whole, so give up on it here rather than
 	   write a capture that cannot be rolled back. */
 	if (setvbuf(pcap_file, NULL, _IONBF, 0) != 0) {
+		/* setvbuf() need not set errno, and errno is the whole of
+		   what the caller has to report, so a stream whose buffer
+		   cannot be given up is reported as the memory it is. */
+		errno = ENOMEM;
 		return abandon_new_file( pcap_file, fd, filename, created );
 	}
 
