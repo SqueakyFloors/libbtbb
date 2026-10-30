@@ -44,6 +44,9 @@ libbtbb (2026-10-R1) unstable; urgency=low
     on standard output, unchanged in wording.
 
   [ Clock and hopping ]
+  * A clock search on a piconet using adaptive frequency hopping recognizes
+    the adapted hopping and keeps narrowing toward a clock, where it used to
+    start over on the basic sequence and never find one.
   * Adaptive frequency hopping (AFH) follows the Core specification (Vol 2,
     Part B, 2.6.3.1), so a clock tracked with AFH names the right channels.
   * An adaptive piconet is not handed the hopping sequence cached for the same
