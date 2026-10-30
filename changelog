@@ -1,4 +1,19 @@
 libbtbb (2020-12-R1+fork5) unstable; urgency=low
+  * A clock search against a piconet using adaptive frequency hopping now
+    recognizes that the hopping is adapted. The library reads the evidence
+    for it from a peripheral slot that repeats the channel of the central
+    slot before it, which happens only under adapted hopping, and that is
+    also the one hop that rules out every candidate chosen from the basic
+    sequence. The evidence was read after the comparison, so it went with
+    the list the comparison emptied, and the search started over on the
+    basic sequence again: against a real link on a lab bench, 80 searches
+    over 284 packets, every one of them on the basic sequence, and no clock.
+    The same packets now produce 34 searches, hopping adapted from the first
+    pair onward, and a search that narrows to a single candidate over eight
+    hops instead of being emptied after three. Recognizing it also no longer
+    waits for the next search: the candidates are chosen again from the
+    adapted sequence and every hop remembered so far is compared against
+    them.
   * The documentation describes the library as it is now. README says what
     libbtbb decodes and who uses it, where to report a problem with this fork,
     and what a program links: btbb.h is the whole interface, and the library's

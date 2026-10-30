@@ -854,9 +854,56 @@ int btbb_winnow(btbb_piconet *pn)
 		}
 	}
 
-	for (; pn->winnowed < pn->packets_observed; pn->winnowed++) {
+	while (pn->winnowed < pn->packets_observed) {
 		index = pn->pattern_indices[pn->winnowed];
 		channel = pn->pattern_channels[pn->winnowed];
+
+		/*
+		 * Adapted hopping, recognized from this hop before the hop is
+		 * compared with the candidates.
+		 *
+		 * A peripheral slot repeats the channel of the central slot
+		 * before it only when hop selection is adapted: that is the
+		 * AFH same channel mechanism (Core 5.x, Vol 2, Part B, 2.6.1),
+		 * and the basic sequence never puts the two slots of a pair on
+		 * one channel, so one such pair of packets settles it.
+		 *
+		 * The order matters, because that same pair is what empties a
+		 * candidate list chosen from the basic sequence, and an empty
+		 * list starts discovery over.  Read after the comparison, the
+		 * evidence went with the list, so a search against an adapted
+		 * piconet could start over hundreds of times without ever
+		 * adapting to it.
+		 */
+		if (pn->winnowed > 0 &&
+		    !btbb_piconet_get_flag(pn, BTBB_LOOKS_LIKE_AFH)) {
+			last_index = pn->pattern_indices[pn->winnowed - 1];
+			last_channel = pn->pattern_channels[pn->winnowed - 1];
+			if (index == last_index + 1 && channel == last_channel) {
+				btbb_piconet_set_flag(pn, BTBB_LOOKS_LIKE_AFH, 1);
+				btbb_piconet_set_flag(pn, BTBB_IS_AFH, 1);
+				piconet_note("Hopping pattern appears to be AFH\n");
+				/*
+				 * The candidates were chosen from a sequence
+				 * this piconet does not follow, so its clock
+				 * is not among them.  Choose them again from
+				 * the adapted sequence and compare every hop
+				 * remembered so far: btbb_init_hop_reversal()
+				 * takes pn->winnowed back to the first of them,
+				 * so the loop carries on from there.
+				 */
+				if (btbb_piconet_get_flag(pn, BTBB_HOP_REVERSAL_INIT) &&
+				    candidates_superseded(pn)) {
+					new_count = btbb_init_hop_reversal(0, pn);
+					if (new_count == 0) {
+						reset(pn);
+						return 0;
+					}
+					continue;
+				}
+			}
+		}
+
 		new_count = channel_winnow(index, channel, pn);
 		if (new_count == 0)
 			break;	/* reset() has started discovery over */
@@ -865,23 +912,7 @@ int btbb_winnow(btbb_piconet *pn)
 		if (btbb_piconet_get_flag(pn, BTBB_CLK27_VALID))
 			break;
 
-		/* There is no previous hop to compare the first one with. */
-		if (pn->winnowed > 0) {
-			last_index = pn->pattern_indices[pn->winnowed - 1];
-			last_channel = pn->pattern_channels[pn->winnowed - 1];
-			/*
-			 * Two packets in a row on the same channel should only
-			 * happen if adaptive frequency hopping is in use.
-			 * There can be false positives, though, especially if
-			 * there is aliasing.
-			 */
-			if (!btbb_piconet_get_flag(pn, BTBB_LOOKS_LIKE_AFH)
-			    && (index == last_index + 1)
-			    && (channel == last_channel)) {
-				btbb_piconet_set_flag(pn, BTBB_LOOKS_LIKE_AFH, 1);
-				piconet_note("Hopping pattern appears to be AFH\n");
-			}
-		}
+		pn->winnowed++;
 	}
 
 	return new_count;

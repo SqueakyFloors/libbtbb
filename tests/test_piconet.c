@@ -310,6 +310,104 @@ static void test_two_hops_on_one_channel_look_like_afh(void)
 }
 
 /*
+ * The basic sequence never puts the two slots of a slot pair on one channel:
+ * CLK1 feeds the selection kernel, so the peripheral slot is somewhere else.
+ * That is what makes a single repeat conclusive evidence of adapted hopping
+ * rather than a hint, and it holds for every address.
+ */
+static void test_the_basic_sequence_never_repeats_across_a_slot_pair(void)
+{
+	static const uint32_t laps[] = {TEST_LAP, 0x000000, 0xffffff, 0x9e8b33};
+	size_t a;
+	uint32_t pair;
+
+	for (a = 0; a < sizeof(laps) / sizeof(laps[0]); a++) {
+		btbb_piconet *pn = btbb_piconet_new();
+
+		btbb_init_piconet(pn, laps[a]);
+		btbb_piconet_set_uap(pn, (uint8_t) (a * 0x55));
+		btbb_piconet_set_flag(pn, BTBB_IS_AFH, 0);
+		precalc(pn);
+		address_precalc((int) (((uint32_t) (a * 0x55) << 24 |
+					laps[a]) & 0xfffffff), pn);
+		for (pair = 0; pair < (1u << 17); pair++)
+			if (channel_at(pn, 2 * pair) ==
+			    channel_at(pn, 2 * pair + 1)) {
+				CHECK_EQ(-1, (int) pair);	/* names it */
+				break;
+			}
+		btbb_piconet_unref(pn);
+	}
+}
+
+/*
+ * A device using adapted hopping, watched by a piconet that has not adapted
+ * yet.  Its candidates come from the basic sequence, so the device's clock is
+ * not among them, and the hop that proves the sequence is adapted - a
+ * peripheral slot repeating its central slot's channel - is also the hop that
+ * rules every candidate out.  The evidence has to be read before the
+ * comparison, or it goes with the list: the search starts over on the basic
+ * sequence and can do that for the whole of a capture without ever adapting.
+ */
+static void test_an_adapted_sequence_is_recognized_before_its_hops_are_dropped(void)
+{
+	/* Channels 0-39 used, as a host writes a map around a busy band. */
+	static const uint8_t map_truth[10] = {0xff, 0xff, 0xff, 0xff, 0xff};
+	btbb_piconet *device = discovered(map_truth, 1);
+	btbb_piconet *pn = discovered(map_truth, 0);
+	uint32_t true_clock = 0;
+	uint32_t clock, offset;
+	uint8_t channel;
+
+	CHECK_EQ(40, device->used_channels);
+	/* The same channels seen, but hop selection not adapted to them. */
+	CHECK_EQ(40, pn->used_channels);
+
+	/* A central slot whose peripheral slot repeats its channel, which the
+	 * observer's basic sequence predicts somewhere else. */
+	for (clock = 0x1000000; clock < 0x1000000 + 0x1000; clock += 2)
+		if (channel_at(device, clock) == channel_at(device, clock + 1) &&
+		    channel_at(pn, clock) != channel_at(pn, clock + 1)) {
+			true_clock = clock;
+			break;
+		}
+	CHECK(true_clock != 0);
+	pn->first_pkt_time = true_clock;
+	pn->clk6_offset = 0;	/* so the known clock bits are true_clock's */
+
+	channel = channel_at(device, true_clock);
+	first_hop(pn, channel);
+	CHECK(btbb_init_hop_reversal(0, pn) > 1);
+	CHECK(!candidate_listed(pn, true_clock));
+
+	/* the peripheral slot, on the same channel */
+	observe(pn, 1, channel);
+
+	CHECK(btbb_piconet_get_flag(pn, BTBB_LOOKS_LIKE_AFH));
+	CHECK(btbb_piconet_get_flag(pn, BTBB_IS_AFH));
+	/* The search is still running, on candidates chosen from the adapted
+	 * sequence, and the device's clock is one of them. */
+	CHECK(btbb_piconet_get_flag(pn, BTBB_HOP_REVERSAL_INIT));
+	CHECK(pn->num_candidates > 1);
+	CHECK(candidate_listed(pn, true_clock));
+
+	/* and the rest of the device's hops settle on it */
+	for (offset = 2; offset < 2 * 60; offset += 2) {
+		observe(pn, (int) offset,
+			channel_at(device, true_clock + offset));
+		if (!btbb_piconet_get_flag(pn, BTBB_HOP_REVERSAL_INIT))
+			break;	/* every candidate was dropped */
+		if (btbb_piconet_get_flag(pn, BTBB_CLK27_VALID))
+			break;
+	}
+	CHECK(btbb_piconet_get_flag(pn, BTBB_CLK27_VALID));
+	CHECK_EQ(1, pn->num_candidates);
+	CHECK(candidate_listed(pn, true_clock));
+	btbb_piconet_unref(pn);
+	btbb_piconet_unref(device);
+}
+
+/*
  * While the clock is being recovered, every packet may add a channel to the
  * AFH map, and the hops predicted from it change with it.  The predictions
  * used to come from a sequence generated once, when hop reversal started, so
@@ -2704,6 +2802,8 @@ int main(void)
 	test_afh_candidates_fit_their_list();
 	test_first_hop_alone_does_not_look_like_afh();
 	test_two_hops_on_one_channel_look_like_afh();
+	test_the_basic_sequence_never_repeats_across_a_slot_pair();
+	test_an_adapted_sequence_is_recognized_before_its_hops_are_dropped();
 	test_candidates_follow_the_map_as_it_is_learned();
 	test_candidates_rechosen_only_for_a_new_sequence();
 	test_one_walk_finds_the_same_candidates();
