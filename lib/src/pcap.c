@@ -23,11 +23,17 @@
 #include "bluetooth_packet.h"
 #include "btbb.h"
 #include "pcap-common.h"
+/* for pcapng_remove_own_file(): both writers make a file before they know it
+   will be a capture file, and neither leaves one behind that is not */
+#include "pcapng.h"
 
+#include <errno.h>
+#include <fcntl.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <assert.h>
+#include <sys/stat.h>
 #include <sys/types.h>
 #include <unistd.h>
 
@@ -49,6 +55,18 @@ typedef struct __attribute__((packed)) pcap_hdr_s {
 	uint32_t network;        /* data link type */
 } pcap_hdr_t;
 
+/* Nothing came of the file this call made, so it does not outlive the call,
+   and the reason it failed is kept for the caller to report. */
+static FILE *abandon_new_file( FILE *pcap_file, int fd, const char *filename )
+{
+	int saved_errno = errno;
+
+	pcapng_remove_own_file( fd, filename );
+	(void) fclose( pcap_file );
+	errno = saved_errno;
+	return NULL;
+}
+
 /* Internal, although the name carries the library's public prefix: no header
    the install puts in include/ declares it, so nothing outside these sources
    can call it. */
@@ -62,9 +80,28 @@ static FILE *btbb_pcap_open(const char *filename, uint32_t dlt, uint32_t snaplen
 		.snaplen = snaplen,
 		.network = dlt,
 	};
+	FILE *pcap_file;
+	int fd;
 
-	FILE *pcap_file = fopen(filename, "w");
-	if (pcap_file == NULL) return NULL;
+	/* O_EXCL, which is what the PCAPNG writer opens with: a capture is
+	   not written over a file that is already there, and a descriptor at
+	   all means this call made the file, so it can be taken away again if
+	   the header cannot be written. Opening for writing in the ordinary
+	   way would empty the user's file before a byte was written, and
+	   leave an empty one of its own behind when the header failed. */
+	fd = open( filename, O_WRONLY|O_CREAT|O_EXCL,
+		   S_IRUSR|S_IWUSR|S_IRGRP|S_IWGRP );
+	if (fd == -1) return NULL;
+
+	pcap_file = fdopen( fd, "wb" );
+	if (pcap_file == NULL) {
+		int saved_errno = errno;
+
+		pcapng_remove_own_file( fd, filename );
+		(void) close( fd );
+		errno = saved_errno;
+		return NULL;
+	}
 
 	/* Write straight through, which has to be set before anything else
 	   uses the stream. This is what lets a record that cannot be written
@@ -80,15 +117,13 @@ static FILE *btbb_pcap_open(const char *filename, uint32_t dlt, uint32_t snaplen
 	   records that have to be whole, so give up on it here rather than
 	   write a capture that cannot be rolled back. */
 	if (setvbuf(pcap_file, NULL, _IONBF, 0) != 0) {
-		(void) fclose(pcap_file);
-		return NULL;
+		return abandon_new_file( pcap_file, fd, filename );
 	}
 
 	/* A file whose header did not reach it is no capture file, so say so
 	   now rather than leaving the caller with a handle to it. */
 	if (fwrite(&pcap_header, sizeof(pcap_header), 1, pcap_file) != 1) {
-		(void) fclose(pcap_file);
-		return NULL;
+		return abandon_new_file( pcap_file, fd, filename );
 	}
 
 	return pcap_file;
@@ -114,7 +149,6 @@ btbb_pcap_create_file(const char *filename, btbb_pcap_handle ** ph)
 			*ph = handle;
 		}
 		else {
-			perror("PCAP error:");
 			retval = -PCAP_FILE_NOT_ALLOWED;
 			goto fail;
 		}
