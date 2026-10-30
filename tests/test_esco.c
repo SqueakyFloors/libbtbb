@@ -575,9 +575,8 @@ static void test_known_esco_length_rules_out_hv3(void)
  * The payloads are built the way the air carries them - whitened, rate 2/3
  * FEC encoded for an EV4, at a clock that changes from one to the next, with
  * a tail of noise after the packet - and from a fixed seed, so the counts
- * below are exact rather than statistical. TESTING.md quotes the same sweep
- * with SWEEP_TRIALS raised to 20,000, run against this tree and against the
- * tree before this fix.
+ * below are exact rather than statistical. Raising SWEEP_TRIALS shows the
+ * rate more finely, at the cost of run time.
  */
 #define SWEEP_TRIALS 2000
 
@@ -690,8 +689,8 @@ static void test_length_sweep(void)
 	/*
 	 * A payload whose CRC is 0x0000 leaves the register at zero two bytes
 	 * early, so three lengths agree and the rule above takes the middle
-	 * one: one byte short. None of these 2,000 is like that - it is a
-	 * payload in 65536 - but one of the 20,000 in TESTING.md is.
+	 * one: one byte short. None of these 2,000 is like that, since it is
+	 * one payload in 65536; a longer sweep does reach one.
 	 */
 	sweep(PACKET_TYPE_EV5, 180, &shorter, &longer);
 	CHECK(shorter == 0);

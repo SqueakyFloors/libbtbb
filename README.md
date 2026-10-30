@@ -40,10 +40,10 @@ AddressSanitizer and UndefinedBehaviorSanitizer. Malformed radio packets are
 this library's normal input, so the decoders and the capture writers are fuzzed
 as well: five libFuzzer targets, which CI runs for a minute each.
 
-The tests have helped find and fix 90 defects, many in packet types and capture
-paths that are rarely seen on the air. [TESTING.md](TESTING.md) describes what
-each test covers and where its vectors come from, lists each fix with what a
-user would notice, and gives before and after measurements.
+The tests have helped find and fix defects in packet types and capture paths
+that are rarely seen on the air. [TESTING.md](TESTING.md) says how to run the
+suite, what each test covers, and where its vectors come from; `changelog`
+lists the fixes, one entry per release.
 
 
 Concepts
