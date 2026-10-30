@@ -26,6 +26,7 @@
  */
 
 #include <errno.h>
+#include <fcntl.h>
 #include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -2997,6 +2998,145 @@ static void test_create_keeps_an_existing_file(void)
 }
 
 /*
+ * A PCAP file whose header could not be written is not left behind, so a
+ * capture that failed to start leaves no empty file to be mistaken for one
+ * that caught nothing. Only a file the call made itself: a name already in
+ * use is written over, as it always was, and what was there is not the
+ * writer's to remove.
+ *
+ * The header write is made to fail by the limit on how large a file this
+ * process may write, which is how the cases below make a write fail: the
+ * writer uses stdio, so there is nothing to replace.
+ */
+static void test_pcap_create_failure_leaves_no_file(void)
+{
+	const char *made = "test_capture_noheader.pcap";
+	const char *given = "test_capture_wasthere.pcap";
+	struct rlimit saved, limited;
+	btbb_pcap_handle *bh = NULL;
+	lell_pcap_handle *lh = NULL;
+	int got_limit;
+	FILE *f;
+
+	got_limit = getrlimit(RLIMIT_FSIZE, &saved);
+	CHECK(got_limit == 0);
+	if (got_limit != 0)
+		return;
+
+	/* a file to open over, made before the limit is lowered */
+	unlink_quietly(given);
+	f = fopen(given, "wb");
+	CHECK(f != NULL);
+	if (f == NULL)
+		return;
+	CHECK(fclose(f) == 0);
+
+	limited = saved;
+	/* less than the 24-byte file header */
+	limited.rlim_cur = 10;
+	if (setrlimit(RLIMIT_FSIZE, &limited) == 0) {
+		/* the kernel raises SIGXFSZ as well as failing the write, and
+		   the default action would end the test */
+		void (*old_xfsz)(int) = signal(SIGXFSZ, SIG_IGN);
+
+		int reported;
+
+		unlink_quietly(made);
+		errno = 0;
+		CHECK(btbb_pcap_create_file(made, &bh) != 0);
+		/* read before any call of this test's own moves it: with
+		   nothing printed by the library, this is the whole of what
+		   the caller has to tell the user */
+		reported = errno;
+		CHECK(bh == NULL);
+		CHECK(reported == EFBIG);
+		CHECK(!file_exists(made));
+
+		/* the LE writer opens through the same function */
+		CHECK(lell_pcap_create_file(made, &lh) != 0);
+		CHECK(lh == NULL);
+		CHECK(!file_exists(made));
+
+		/* the one that was already there stays */
+		CHECK(btbb_pcap_create_file(given, &bh) != 0);
+		CHECK(bh == NULL);
+		CHECK(file_exists(given));
+
+		CHECK(setrlimit(RLIMIT_FSIZE, &saved) == 0);
+		(void) signal(SIGXFSZ, old_xfsz);
+	}
+	unlink_quietly(made);
+	unlink_quietly(given);
+}
+
+/*
+ * A name already in use is opened as it always was, whatever is behind it,
+ * and nothing there is the writer's to remove.
+ *
+ * The case that matters is a descriptor named as a path, which is how a tool
+ * sends its capture to standard output: it saves that descriptor and gives
+ * the writer /dev/fd/N. Refusing a name in use takes that away, and no
+ * reading of the path can tell it from a capture file the user named, since
+ * macOS reports /dev/fd/N with the type of whatever is behind it. A device
+ * is checked too, as the simplest name that is not a file.
+ */
+static void test_pcap_create_opens_a_name_in_use(void)
+{
+	const char *target = "test_capture_viafd.pcap";
+	btbb_pcap_handle *bh = NULL;
+	lell_pcap_handle *lh = NULL;
+	char path[64];
+	uint32_t magic;
+	int fd;
+	FILE *f;
+
+	CHECK(btbb_pcap_create_file("/dev/null", &bh) == 0);
+	CHECK(bh != NULL);
+	if (bh != NULL) {
+		(void) btbb_pcap_close(bh);
+		bh = NULL;
+	}
+	CHECK(lell_pcap_create_file("/dev/null", &lh) == 0);
+	CHECK(lh != NULL);
+	if (lh != NULL) {
+		(void) lell_pcap_close(lh);
+	}
+
+	/* a descriptor of this test's own, named as a path the way a tool
+	   names its saved standard output */
+	unlink_quietly(target);
+	fd = open(target, O_WRONLY | O_CREAT | O_EXCL, 0666);
+	CHECK(fd != -1);
+	if (fd == -1)
+		return;
+	snprintf(path, sizeof(path), "/dev/fd/%d", fd);
+	if (access(path, W_OK) != 0) {
+		snprintf(path, sizeof(path), "/proc/self/fd/%d", fd);
+	}
+	if (access(path, W_OK) == 0) {
+		CHECK(btbb_pcap_create_file(path, &bh) == 0);
+		CHECK(bh != NULL);
+		if (bh != NULL) {
+			(void) btbb_pcap_close(bh);
+		}
+		/* The capture's header reached the file behind the
+		   descriptor, which is the whole point of naming it. The
+		   magic is read as the word the writer wrote, not as four
+		   bytes, so the check holds whichever order the host puts
+		   them in. */
+		f = fopen(target, "rb");
+		CHECK(f != NULL);
+		if (f != NULL) {
+			CHECK(fread(&magic, sizeof(magic), 1, f) == 1);
+			CHECK(magic == 0xa1b23c4dul);
+			CHECK(fclose(f) == 0);
+		}
+	}
+	CHECK(close(fd) == 0);
+	unlink_quietly(target);
+}
+
+/*
  * A write that cannot be completed must be reported, and only the bytes that
  * reached the file may be counted into the section length.
  */
@@ -3192,6 +3332,8 @@ int main(void)
 	test_create_failure_leaves_no_file();
 	test_create_keeps_an_existing_file();
 	test_create_keeps_a_file_it_did_not_make();
+	test_pcap_create_failure_leaves_no_file();
+	test_pcap_create_opens_a_name_in_use();
 	test_write_errors();
 
 	if (failures) {

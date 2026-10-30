@@ -102,6 +102,10 @@ libbtbb (2026-10-R1) unstable; urgency=low
     empty or part written, for the user to tell apart from a capture that
     caught nothing; it is now taken away again, and a file that was already
     there is still left untouched.
+  * Fixed: a PCAP file whose header could not be written was left behind
+    empty, for the user to tell apart from a capture that caught nothing; a
+    file the writer made itself is now taken away again, and a name that was
+    already in use is written over as before and left alone.
 
   [ Output ]
   * Fixed: decoding a packet printed it; only btbb_print_packet() prints now,
@@ -113,6 +117,9 @@ libbtbb (2026-10-R1) unstable; urgency=low
     btbb_init() returns -1.
   * Fixed: a failed allocation in one of the library's hash tables exited 255
     in silence; it now prints "error: libbtbb: out of memory" and exits 1.
+  * Fixed: btbb_pcap_create_file() printed "PCAP error:" of its own beside
+    the caller's report of the same failure; the caller, which knows the file
+    name, now reports it alone, as it already did for every other writer.
 
   [ Build and install ]
   * Fixed: the library did not build or install out of the box on current
