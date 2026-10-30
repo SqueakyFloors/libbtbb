@@ -69,9 +69,27 @@ static int stop_writing_after_cut;	/* later writes write nothing at all */
 /* A write that fails outright, which is what a full disk does, from a chosen
  * call onwards: a disk that has no room left has none for the next write
  * either. The call is counted rather than matched, so a case can walk the
- * whole sequence of writes one file creation takes. */
+ * whole sequence of writes one file creation takes.
+ *
+ * The file can be replaced at that moment too, which is another process
+ * taking the name while the writer still holds the file it made. */
 static long write_calls;		/* writes made since the count was reset */
 static long fail_write_from;		/* fail from this call on, 0 for none */
+static const char *replace_file;	/* file to replace, NULL for none */
+
+static const char REPLACEMENT[] = "somebody else's file";
+
+static void replace_the_file(const char *filename)
+{
+	FILE *f;
+
+	(void) unlink(filename);
+	f = fopen(filename, "wb");
+	if (f != NULL) {
+		(void) fwrite(REPLACEMENT, 1, sizeof(REPLACEMENT) - 1, f);
+		(void) fclose(f);
+	}
+}
 
 static ssize_t real_write(int fd, const void *buf, size_t count)
 {
@@ -84,7 +102,11 @@ static ssize_t test_write(int fd, const void *buf, size_t count)
 
 	++write_calls;
 	if (fail_write_from != 0 && write_calls >= fail_write_from) {
-		errno = ENOSPC;
+		if (replace_file != NULL) {
+			replace_the_file(replace_file);
+			replace_file = NULL;
+		}
+		errno = ENOSPC;	/* set last: the calls above move it */
 		return -1;
 	}
 	if (short_write_option >= 0 && count > short_write_bytes &&
@@ -2841,19 +2863,25 @@ static void test_create_failure_leaves_no_file(void)
 {
 	const char *filename = "test_capture_failed.pcapng";
 	PCAPNG_HANDLE handle;
-	long writes, call;
+	long writes, maps, call;
 
 	/* First the file as it is written when nothing fails, which is also
-	   how many writes there are to fail one at a time below. */
+	   how many writes and mappings there are to fail one at a time
+	   below. Counting them rather than naming a number means a change to
+	   what the writer does cannot leave any of them uncovered. */
 	unlink_quietly(filename);
 	write_calls = 0;
+	mmap_calls = 0;
 	CHECK(pcapng_create(&handle, filename, NULL, 64,
 			    DLT_BLUETOOTH_BREDR_BB, BREDR_MAX_PAYLOAD, NULL,
 			    64) == PCAPNG_OK);
 	writes = write_calls;
+	maps = mmap_calls;
 	(void) pcapng_close(&handle);
 	CHECK(file_exists(filename));
+	/* so that the loops below are not empty */
 	CHECK(writes > 0);
+	CHECK(maps > 0);
 	unlink_quietly(filename);
 
 	for (call = 1; call <= writes; call++) {
@@ -2866,32 +2894,69 @@ static void test_create_failure_leaves_no_file(void)
 				    DLT_BLUETOOTH_BREDR_BB,
 				    BREDR_MAX_PAYLOAD, NULL,
 				    64) == PCAPNG_FILE_WRITE_ERROR);
-		reported = errno;	/* before any call of our own moves it */
+		/* Why the write failed is all the caller has to tell the
+		   user, so it has to survive closing and removing the file.
+		   It is read before any call of this test's own moves it. */
+		reported = errno;
 		fail_write_from = 0;
+		CHECK(reported == ENOSPC);
 		CHECK(!file_exists(filename));
-		if (call == 1) {
-			/* Why the write failed is all the caller has to tell
-			   the user, so it survives closing and removing the
-			   file. Only the first write is checked for it: after
-			   a later one the writer goes on to map the file, and
-			   what a mapping that worked leaves in errno is its
-			   own business. */
-			CHECK(reported == ENOSPC);
-		}
 		unlink_quietly(filename);
 	}
 
-	for (call = 1; call <= 2; call++) {
+	for (call = 1; call <= maps; call++) {
+		int reported;
+
 		mmap_calls = 0;
 		fail_mmap_at = call;
+		errno = 0;
 		CHECK(pcapng_create(&handle, filename, NULL, 64,
 				    DLT_BLUETOOTH_BREDR_BB,
 				    BREDR_MAX_PAYLOAD, NULL,
 				    64) == PCAPNG_MMAP_FAILED);
+		reported = errno;
 		fail_mmap_at = 0;
+		CHECK(reported == ENOMEM);
 		CHECK(!file_exists(filename));
 		unlink_quietly(filename);
 	}
+}
+
+/*
+ * A file the writer did not make is not removed. Another process can take
+ * the name between the write that failed and the removal: what is there then
+ * is somebody else's, and the point of the removal is to leave nothing of
+ * the writer's own behind rather than to clear the name.
+ */
+static void test_create_keeps_a_file_it_did_not_make(void)
+{
+	const char *filename = "test_capture_replaced.pcapng";
+	PCAPNG_HANDLE handle;
+	char readback[sizeof(REPLACEMENT)];
+	FILE *f;
+
+	unlink_quietly(filename);
+	write_calls = 0;
+	fail_write_from = 1;
+	replace_file = filename;	/* replaced when that write fails */
+	CHECK(pcapng_create(&handle, filename, NULL, 64,
+			    DLT_BLUETOOTH_BREDR_BB, BREDR_MAX_PAYLOAD, NULL,
+			    64) == PCAPNG_FILE_WRITE_ERROR);
+	fail_write_from = 0;
+	CHECK(replace_file == NULL);	/* the replacement really happened */
+	replace_file = NULL;
+
+	memset(readback, 0, sizeof(readback));
+	f = fopen(filename, "rb");
+	CHECK(f != NULL);
+	if (f != NULL) {
+		CHECK(fread(readback, 1, sizeof(readback), f) ==
+		      sizeof(REPLACEMENT) - 1);
+		CHECK(memcmp(readback, REPLACEMENT,
+			     sizeof(REPLACEMENT) - 1) == 0);
+		CHECK(fclose(f) == 0);
+	}
+	unlink_quietly(filename);
 }
 
 /*
@@ -3126,6 +3191,7 @@ int main(void)
 	test_section_option_short_write();
 	test_create_failure_leaves_no_file();
 	test_create_keeps_an_existing_file();
+	test_create_keeps_a_file_it_did_not_make();
 	test_write_errors();
 
 	if (failures) {

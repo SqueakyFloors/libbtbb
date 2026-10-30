@@ -173,7 +173,15 @@ typedef enum {
  * @param interface_options_space size in bytes dedicated to storing extra interface
  *                                options; will be rounded up so interface header
  *                                is an integer number of memory pages
- * @returns                       0 on success, non zero result code otherwisex
+ * @returns                       0 on success, non zero result code otherwise
+ *
+ * A call that fails leaves no file of its own behind: the file it created is
+ * removed again, so an unfinished capture file is never left for someone to
+ * tell apart from a capture that caught nothing. A file that was already
+ * there is refused with PCAPNG_FILE_EXISTS and left untouched, which is why
+ * a caller must not remove the name itself: it cannot tell the two apart.
+ * errno carries the reason for the failure, as it does from open(2) or
+ * write(2).
  */
 PCAPNG_RESULT pcapng_create( PCAPNG_HANDLE * handle,
 			     const char * filename,
@@ -183,6 +191,18 @@ PCAPNG_RESULT pcapng_create( PCAPNG_HANDLE * handle,
 			     const uint32_t snaplen,
 			     const option_header * interface_options,
 			     const size_t interface_options_space );
+
+/**
+ * Remove a file this library created, and nothing else: the name is left
+ * alone unless it still leads to the file the given descriptor holds. It is
+ * for a step that fails after pcapng_create() has made the file, so that the
+ * same promise holds there. errno is left as it was, since it carries the
+ * reason for the failure that led here.
+ *
+ * @param fd       the still-open descriptor of the file, or -1 for nothing
+ * @param filename the name it was created under
+ */
+void pcapng_remove_own_file( int fd, const char * filename );
 
 PCAPNG_RESULT pcapng_append_section_option( PCAPNG_HANDLE * handle,
 					    const option_header * section_option );

@@ -41,6 +41,28 @@
    gives one that big. */
 #define MAX_OPTION_VALUE_LENGTH 0xfffc
 
+void pcapng_remove_own_file( int fd, const char * filename )
+{
+	int saved_errno = errno;
+	struct stat opened, named;
+
+	/* The inode is read through the descriptor this library opened, so it
+	   is the file the library really holds, and the name is left alone
+	   unless it still leads there. Another process may have taken the
+	   name in the meantime, and what is there then is somebody else's:
+	   the point of the removal is to leave nothing of ours behind, not to
+	   clear the name. */
+	if ((fd != -1) &&
+	    (fstat( fd, &opened ) == 0) &&
+	    (stat( filename, &named ) == 0) &&
+	    (named.st_dev == opened.st_dev) &&
+	    (named.st_ino == opened.st_ino)) {
+		(void) unlink( filename );
+	}
+
+	errno = saved_errno;
+}
+
 /* Fill the spare room at the end of a block with padding options, so that a
    reader walks over it as options rather than reading it as data.
 
@@ -219,11 +241,16 @@ PCAPNG_RESULT pcapng_create( PCAPNG_HANDLE * handle,
 			handle->section_header_size += zeroes;
 			result = write_zeroes( handle->fd, zeroes );
 
-			/* mmap the section header */
-			handle->section_header = mmap( NULL, handle->section_header_size,
-						       PROT_READ|PROT_WRITE,
-						       MAP_SHARED,
-						       handle->fd, 0 );
+			/* mmap the section header. A mapping of a file whose
+			   last write failed would be given up a moment later
+			   anyway, and asking for it puts its own errno over
+			   the one that says why the write failed. */
+			if (result != -1) {
+				handle->section_header = mmap( NULL, handle->section_header_size,
+							       PROT_READ|PROT_WRITE,
+							       MAP_SHARED,
+							       handle->fd, 0 );
+			}
 		}
 	}
 
@@ -273,16 +300,17 @@ PCAPNG_RESULT pcapng_create( PCAPNG_HANDLE * handle,
 						 interface_options_space + PGSZ - 1)/PGSZ) -
 				handle->interface_description_size;
 			handle->interface_description_size += zeroes;
-			if (result != -1) {
-				result = write_zeroes( handle->fd, zeroes );
-			}
+			result = write_zeroes( handle->fd, zeroes );
 
-			/* mmap the interface description */
-			handle->interface_description = mmap( NULL, handle->interface_description_size, 
-							      PROT_READ|PROT_WRITE,
-							      MAP_SHARED,
-							      handle->fd,
-							      handle->section_header_size );
+			/* mmap the interface description, for the reasons
+			   given at the section header's mapping above */
+			if (result != -1) {
+				handle->interface_description = mmap( NULL, handle->interface_description_size,
+								      PROT_READ|PROT_WRITE,
+								      MAP_SHARED,
+								      handle->fd,
+								      handle->section_header_size );
+			}
 		}
 	}
 
@@ -316,15 +344,16 @@ PCAPNG_RESULT pcapng_create( PCAPNG_HANDLE * handle,
 	}
 
 	if (retval != PCAPNG_OK) {
-		/* close(), munmap() and unlink() each set errno of their own,
-		   and the caller reports strerror(errno), so the reason for
-		   the failure is put back afterwards. */
+		/* The close() and munmap() in pcapng_close() set errno of
+		   their own, and the caller reports strerror(errno), so the
+		   reason for the failure is put back afterwards. The file
+		   goes first, while its descriptor is still open. */
 		int saved_errno = errno;
 
-		(void) pcapng_close( handle );
 		if (created) {
-			(void) unlink( filename );
+			pcapng_remove_own_file( handle->fd, filename );
 		}
+		(void) pcapng_close( handle );
 		errno = saved_errno;
 	}
 
