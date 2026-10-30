@@ -885,30 +885,26 @@ int btbb_winnow(btbb_piconet *pn)
 		channel = pn->pattern_channels[pn->winnowed];
 
 		/*
-		 * Adapted hopping, recognized from this hop before the hop is
-		 * compared with the candidates.
+		 * Adapted hopping, read from this hop before the hop is
+		 * compared with the candidates - because the comparison
+		 * empties a list chosen from the basic sequence, and an empty
+		 * list starts discovery over and takes the evidence with it.
 		 *
-		 * A peripheral slot repeats the channel of the central slot
-		 * it answers only when hop selection is adapted: that is the
-		 * AFH same channel mechanism (Core 5.x, Vol 2, Part B, 2.6.1).
-		 * The basic sequence cannot do it, because within a pair every
-		 * input of the selection kernel is the same except the PERM5
-		 * control word and Y2, and matching would need the two PERM5
-		 * results to differ by 32 modulo 79, which 5-bit values cannot.
-		 * So one such pair of packets settles it.
+		 * A peripheral slot repeats the channel of the central slot it
+		 * answers only when hop selection is adapted: the AFH same
+		 * channel mechanism (Core 5.x, Vol 2, Part B, 2.6.1). The
+		 * basic sequence cannot, because within a pair every input of
+		 * the selection kernel is the same but the PERM5 control word
+		 * and Y2, so a match would need two PERM5 results to differ by
+		 * 32 modulo 79, which 5-bit values cannot. It has to be that
+		 * pair: a peripheral slot and the NEXT pair's central slot are
+		 * also one slot apart, and there the basic sequence does
+		 * repeat a channel. The piconet's CLK1 tells them apart.
 		 *
-		 * It has to be that pair, though.  A peripheral slot followed
-		 * by the NEXT pair's central slot is also one slot later, and
-		 * there the basic sequence does repeat a channel sometimes,
-		 * which would be read as adaptation that is not there.  Which
-		 * slot of a pair a hop is in is known: the piconet's CLK1.
-		 *
-		 * The order matters too, because that same pair is what
-		 * empties a candidate list chosen from the basic sequence, and
-		 * an empty list starts discovery over.  Read after the
-		 * comparison, the evidence went with the list, so a search
-		 * against an adapted piconet could start over hundreds of
-		 * times without ever adapting to it.
+		 * What can still mislead it is a packet that is not this
+		 * piconet's - the access code identifies only the LAP, within
+		 * the errors the caller allowed - or a receiver seeing the 79
+		 * channels aliased into 25.
 		 */
 		if (pn->winnowed > 0 &&
 		    !btbb_piconet_get_flag(pn, BTBB_LOOKS_LIKE_AFH)) {
@@ -922,14 +918,20 @@ int btbb_winnow(btbb_piconet *pn)
 				/*
 				 * The candidates were chosen from a sequence
 				 * this piconet does not follow, so its clock
-				 * is not among them.  Choose them again from
-				 * the adapted sequence and compare every hop
-				 * remembered so far: rechoose_candidates()
-				 * takes pn->winnowed back to the first of them,
-				 * so the loop carries on from there.
+				 * is not among them. Choose them again and
+				 * compare every hop remembered so far:
+				 * rechoose_candidates() takes pn->winnowed back
+				 * to the first of them, so the loop carries on
+				 * from there.
+				 *
+				 * Not if the map is still shorter than AFH is
+				 * defined for, though. Hop selection is not
+				 * adapted below that, so the basic sequence the
+				 * candidates came from is still the right one
+				 * and there is nothing to choose again - which
+				 * is what candidates_superseded() says.
 				 */
-				if (btbb_piconet_get_flag(pn, BTBB_HOP_REVERSAL_INIT) &&
-				    candidates_superseded(pn)) {
+				if (candidates_superseded(pn)) {
 					new_count = rechoose_candidates(pn);
 					if (new_count == 0)
 						return 0;

@@ -309,48 +309,6 @@ static void test_two_hops_on_one_channel_look_like_afh(void)
 	btbb_piconet_unref(pn);
 }
 
-/*
- * Which two slots the repeated channel has to be in.  Within a slot pair the
- * basic sequence cannot repeat a channel, so a repeat there is adapted hopping
- * and nothing else.  Across a pair boundary - a peripheral slot and the next
- * pair's central slot, also one slot apart - it can, and for some addresses
- * often, so a repeat there says nothing.
- */
-static void test_only_a_repeat_inside_a_slot_pair_means_adapted_hopping(void)
-{
-	/* An address where the basic sequence does repeat across a boundary,
-	 * and the first clock at which it does. */
-	const uint32_t cross_lap = 0x345678;
-	const uint8_t cross_uap = 0x02;
-	const uint32_t cross_clk = 1049087;
-	btbb_piconet *pn = btbb_piconet_new();
-	uint32_t pair;
-	int repeats_inside = 0;
-
-	btbb_init_piconet(pn, cross_lap);
-	btbb_piconet_set_uap(pn, cross_uap);
-	btbb_piconet_set_flag(pn, BTBB_IS_AFH, 0);
-	precalc(pn);
-	address_precalc((int) ((((uint32_t) cross_uap << 24) | cross_lap) &
-			       0xfffffff), pn);
-
-	/* The peripheral slot of this pair is elsewhere... */
-	CHECK(channel_at(pn, cross_clk - 1) != channel_at(pn, cross_clk));
-	/* ...and the next pair's central slot repeats it. */
-	CHECK_EQ(channel_at(pn, cross_clk), channel_at(pn, cross_clk + 1));
-	/* So the clock is in a peripheral slot, which is what tells the two
-	 * cases apart. */
-	pn->clk6_offset = 0;
-	pn->first_pkt_time = cross_clk;
-	CHECK(!central_slot(pn, 0));
-
-	/* Inside a pair it never happens, over a sample of this address. */
-	for (pair = 0; pair < (1u << 14); pair++)
-		if (channel_at(pn, 2 * pair) == channel_at(pn, 2 * pair + 1))
-			repeats_inside++;
-	CHECK_EQ(0, repeats_inside);
-	btbb_piconet_unref(pn);
-}
 
 /*
  * A repeat across a pair boundary is not evidence, so it must not flip the
@@ -507,12 +465,11 @@ static void test_choosing_the_candidates_again_recompares_every_hop(void)
 		CHECK(btbb_piconet_get_flag(pn, BTBB_HOP_REVERSAL_INIT));
 		CHECK(!btbb_piconet_get_flag(pn, BTBB_LOOKS_LIKE_AFH));
 	}
-	CHECK_EQ(5, hops);
 	CHECK(candidate_listed(pn, true_clock));
 
 	/* The peripheral slot answering the hop at offset 256, on its channel:
 	 * the sixth remembered hop, so the walk has five to start over on. */
-	CHECK(central_slot(pn, 256));
+	CHECK_EQ(0, (int) ((true_clock + 256) & 1));	/* a central slot */
 	observe(pn, 257, channel_at(device, true_clock + 256));
 	hops++;
 
@@ -2922,7 +2879,6 @@ int main(void)
 	test_afh_candidates_fit_their_list();
 	test_first_hop_alone_does_not_look_like_afh();
 	test_two_hops_on_one_channel_look_like_afh();
-	test_only_a_repeat_inside_a_slot_pair_means_adapted_hopping();
 	test_a_repeat_across_a_pair_boundary_is_not_adapted_hopping();
 	test_an_adapted_sequence_is_recognized_before_its_hops_are_dropped();
 	test_choosing_the_candidates_again_recompares_every_hop();

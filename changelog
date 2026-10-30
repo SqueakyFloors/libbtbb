@@ -1,19 +1,27 @@
 libbtbb (2020-12-R1+fork5) unstable; urgency=low
   * A clock search against a piconet using adaptive frequency hopping now
-    recognizes that the hopping is adapted. The library reads the evidence
-    for it from a peripheral slot that repeats the channel of the central
-    slot before it, which happens only under adapted hopping, and that is
-    also the one hop that rules out every candidate chosen from the basic
-    sequence. The evidence was read after the comparison, so it went with
-    the list the comparison emptied, and the search started over on the
-    basic sequence again: against a real link on a lab bench, 80 searches
-    over 284 packets, every one of them on the basic sequence, and no clock.
-    The same packets now produce 34 searches, hopping adapted from the first
-    pair onward, and a search that narrows to a single candidate over eight
-    hops instead of being emptied after three. Recognizing it also no longer
-    waits for the next search: the candidates are chosen again from the
-    adapted sequence and every hop remembered so far is compared against
-    them.
+    recognizes that the hopping is adapted. The evidence is a peripheral slot
+    that repeats the channel of the central slot it answers, which only
+    adapted hopping does, and that is also the one hop that rules out every
+    candidate chosen from the basic sequence. The evidence was read after the
+    comparison, so it went with the list the comparison emptied and the search
+    started over on the basic sequence again: against a real link on a lab
+    bench, 80 searches over 284 packets, every one of them on the basic
+    sequence, and no clock. The same packets now produce 34 searches and a
+    search that narrows to a single candidate over eight hops instead of being
+    emptied after three. Recognizing it no longer waits for the next search
+    either: the candidates are chosen again and every hop remembered so far is
+    compared against them, as they already were when the channel map changed.
+    Two limits are worth knowing. The repeat counts only inside a slot pair,
+    where the basic sequence cannot produce one; across a pair boundary it can,
+    and reading that as adaptation would leave a piconet hopping basically
+    predicting a sequence it does not follow for the rest of the run. Telling
+    the two apart needs the piconet's CLK1-6, so a search that has settled on
+    the wrong one can still be misled, and so can a packet that is not the
+    piconet's or a receiver seeing the 79 channels aliased into 25. And the
+    candidates are only chosen again once the map holds the 20 channels AFH is
+    defined for, because below that the sequence is the basic one whatever the
+    map says; until then a search still ends without a clock.
   * The documentation describes the library as it is now. README says what
     libbtbb decodes and who uses it, where to report a problem with this fork,
     and what a program links: btbb.h is the whole interface, and the library's
