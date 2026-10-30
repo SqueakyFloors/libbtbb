@@ -632,7 +632,7 @@ int btbb_init_hop_reversal(int aliased, btbb_piconet *pn)
 		pn->num_candidates = count;
 
 	if (restarted)
-		piconet_note("%d CLK1-27 candidates for the new AFH map\n",
+		piconet_note("%d CLK1-27 candidates for the new hop sequence\n",
 			     pn->num_candidates);
 	else
 		piconet_note("%d initial CLK1-27 candidates\n",
@@ -814,6 +814,34 @@ static int candidates_superseded(btbb_piconet *pn)
 	return memcmp(pn->candidates_afh_map, map, sizeof(map)) != 0;
 }
 
+/*
+ * Choose the candidates again from the hop sequence as it now stands, and
+ * take the walk of the remembered hops back to the first of them so they are
+ * all compared against the new list.  A walk that finds no candidate at all
+ * leaves nothing to search, so discovery starts over; the caller is told by
+ * the count of 0 either way.
+ */
+static int rechoose_candidates(btbb_piconet *pn)
+{
+	int count = btbb_init_hop_reversal(0, pn);
+
+	if (count == 0)
+		reset(pn);
+	return count;
+}
+
+/*
+ * Is this remembered hop in a central slot of its slot pair, the one a
+ * peripheral slot answers?  The piconet's CLK1 says so, and the hop's clock
+ * is the first packet's plus the offset between the two clocks plus the slots
+ * since then.
+ */
+static int central_slot(const btbb_piconet *pn, int index)
+{
+	return (((uint32_t) pn->clk6_offset + pn->first_pkt_time +
+		 (uint32_t) index) & 1u) == 0;
+}
+
 /* narrow a list of candidate clock values based on all observed hops */
 int btbb_winnow(btbb_piconet *pn)
 {
@@ -847,11 +875,9 @@ int btbb_winnow(btbb_piconet *pn)
 	if (btbb_piconet_get_flag(pn, BTBB_HOP_REVERSAL_INIT) &&
 	    !btbb_piconet_get_flag(pn, BTBB_CLK27_VALID) &&
 	    candidates_superseded(pn)) {
-		new_count = btbb_init_hop_reversal(0, pn);
-		if (new_count == 0) {
-			reset(pn);
+		new_count = rechoose_candidates(pn);
+		if (new_count == 0)
 			return 0;
-		}
 	}
 
 	while (pn->winnowed < pn->packets_observed) {
@@ -863,23 +889,33 @@ int btbb_winnow(btbb_piconet *pn)
 		 * compared with the candidates.
 		 *
 		 * A peripheral slot repeats the channel of the central slot
-		 * before it only when hop selection is adapted: that is the
-		 * AFH same channel mechanism (Core 5.x, Vol 2, Part B, 2.6.1),
-		 * and the basic sequence never puts the two slots of a pair on
-		 * one channel, so one such pair of packets settles it.
+		 * it answers only when hop selection is adapted: that is the
+		 * AFH same channel mechanism (Core 5.x, Vol 2, Part B, 2.6.1).
+		 * The basic sequence cannot do it, because within a pair every
+		 * input of the selection kernel is the same except the PERM5
+		 * control word and Y2, and matching would need the two PERM5
+		 * results to differ by 32 modulo 79, which 5-bit values cannot.
+		 * So one such pair of packets settles it.
 		 *
-		 * The order matters, because that same pair is what empties a
-		 * candidate list chosen from the basic sequence, and an empty
-		 * list starts discovery over.  Read after the comparison, the
-		 * evidence went with the list, so a search against an adapted
-		 * piconet could start over hundreds of times without ever
-		 * adapting to it.
+		 * It has to be that pair, though.  A peripheral slot followed
+		 * by the NEXT pair's central slot is also one slot later, and
+		 * there the basic sequence does repeat a channel sometimes,
+		 * which would be read as adaptation that is not there.  Which
+		 * slot of a pair a hop is in is known: the piconet's CLK1.
+		 *
+		 * The order matters too, because that same pair is what
+		 * empties a candidate list chosen from the basic sequence, and
+		 * an empty list starts discovery over.  Read after the
+		 * comparison, the evidence went with the list, so a search
+		 * against an adapted piconet could start over hundreds of
+		 * times without ever adapting to it.
 		 */
 		if (pn->winnowed > 0 &&
 		    !btbb_piconet_get_flag(pn, BTBB_LOOKS_LIKE_AFH)) {
 			last_index = pn->pattern_indices[pn->winnowed - 1];
 			last_channel = pn->pattern_channels[pn->winnowed - 1];
-			if (index == last_index + 1 && channel == last_channel) {
+			if (index == last_index + 1 && channel == last_channel &&
+			    central_slot(pn, last_index)) {
 				btbb_piconet_set_flag(pn, BTBB_LOOKS_LIKE_AFH, 1);
 				btbb_piconet_set_flag(pn, BTBB_IS_AFH, 1);
 				piconet_note("Hopping pattern appears to be AFH\n");
@@ -888,17 +924,15 @@ int btbb_winnow(btbb_piconet *pn)
 				 * this piconet does not follow, so its clock
 				 * is not among them.  Choose them again from
 				 * the adapted sequence and compare every hop
-				 * remembered so far: btbb_init_hop_reversal()
+				 * remembered so far: rechoose_candidates()
 				 * takes pn->winnowed back to the first of them,
 				 * so the loop carries on from there.
 				 */
 				if (btbb_piconet_get_flag(pn, BTBB_HOP_REVERSAL_INIT) &&
 				    candidates_superseded(pn)) {
-					new_count = btbb_init_hop_reversal(0, pn);
-					if (new_count == 0) {
-						reset(pn);
+					new_count = rechoose_candidates(pn);
+					if (new_count == 0)
 						return 0;
-					}
 					continue;
 				}
 			}
