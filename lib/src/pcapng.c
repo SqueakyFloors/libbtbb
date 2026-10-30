@@ -142,6 +142,7 @@ PCAPNG_RESULT pcapng_create( PCAPNG_HANDLE * handle,
 	int PGSZ = getpagesize( );
 	size_t zeroes = 0;
 	ssize_t result = -1;
+	int created = 0;
 
 	handle->section_header = NULL;
 	handle->interface_description = NULL;
@@ -166,6 +167,13 @@ PCAPNG_RESULT pcapng_create( PCAPNG_HANDLE * handle,
 		default:
 			retval = PCAPNG_FILE_NOT_ALLOWED;
 		}
+	}
+	else {
+		/* O_EXCL above means the file did not exist a moment ago, so
+		   this call made it and may take it away again if a later
+		   step fails. The caller cannot: from outside, a file this
+		   call made looks the same as one the user already had. */
+		created = 1;
 	}
 
 	if (retval == PCAPNG_OK) {
@@ -197,24 +205,26 @@ PCAPNG_RESULT pcapng_create( PCAPNG_HANDLE * handle,
 		handle->next_section_option_offset = handle->section_header_size;
 	}
 
-	if (result == -1) {
-		retval = PCAPNG_FILE_WRITE_ERROR;
-	}
-	else {
-		/* determine the size of section header with desired space */
-		zeroes = (size_t) PGSZ*((handle->section_header_size + 4 +
-					 section_options_space + PGSZ - 1)/PGSZ) -
-			handle->section_header_size;
-		handle->section_header_size += zeroes;
-		if (result != -1) {
-			result = write_zeroes( handle->fd, zeroes );
+	/* The open() failing is not a write error, and leaves nothing to write
+	   to, so retval is tested first here as it is in the blocks below. */
+	if (retval == PCAPNG_OK) {
+		if (result == -1) {
+			retval = PCAPNG_FILE_WRITE_ERROR;
 		}
+		else {
+			/* determine the size of section header with desired space */
+			zeroes = (size_t) PGSZ*((handle->section_header_size + 4 +
+						 section_options_space + PGSZ - 1)/PGSZ) -
+				handle->section_header_size;
+			handle->section_header_size += zeroes;
+			result = write_zeroes( handle->fd, zeroes );
 
-		/* mmap the section header */
-		handle->section_header = mmap( NULL, handle->section_header_size, 
-					       PROT_READ|PROT_WRITE,
-					       MAP_SHARED,
-					       handle->fd, 0 );
+			/* mmap the section header */
+			handle->section_header = mmap( NULL, handle->section_header_size,
+						       PROT_READ|PROT_WRITE,
+						       MAP_SHARED,
+						       handle->fd, 0 );
+		}
 	}
 
 	if (retval == PCAPNG_OK) {
@@ -306,7 +316,16 @@ PCAPNG_RESULT pcapng_create( PCAPNG_HANDLE * handle,
 	}
 
 	if (retval != PCAPNG_OK) {
+		/* close(), munmap() and unlink() each set errno of their own,
+		   and the caller reports strerror(errno), so the reason for
+		   the failure is put back afterwards. */
+		int saved_errno = errno;
+
 		(void) pcapng_close( handle );
+		if (created) {
+			(void) unlink( filename );
+		}
+		errno = saved_errno;
 	}
 
 	return retval;

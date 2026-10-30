@@ -25,10 +25,12 @@
  * Boston, MA 02110-1301, USA.
  */
 
+#include <errno.h>
 #include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/mman.h>
 #include <sys/resource.h>
 #include <sys/stat.h>
 #include <unistd.h>
@@ -37,8 +39,8 @@
 #include "bluetooth_le_packet.h"
 #include "pcapng-bt.h"
 
-/* Three cases below call the generic PCAPNG writer, which is internal to the
- * library, so this test compiles that translation unit as well as linking
+/* Several cases below call the generic PCAPNG writer, which is internal to
+ * the library, so this test compiles that translation unit as well as linking
  * the library for the btbb_pcapng_ and lell_pcap_ functions btbb.h
  * declares. */
 
@@ -47,7 +49,8 @@
  * writes sent here; this file reaches the real write() through real_write(),
  * which is defined before the macro is. <unistd.h> is included above, before
  * the macro, so that the declaration of write() is not rewritten into one of
- * test_write().
+ * test_write(). <sys/mman.h> is there for the same reason, for the mmap()
+ * the writer's calls are sent through further down.
  *
  * The write to cut short is picked out by the whole option header it begins
  * with - its code and its length, and the length of the write - rather than
@@ -63,6 +66,13 @@ static size_t short_write_bytes;	/* how much of it to let through */
 static int short_write_fired;		/* whether the cut really happened */
 static int stop_writing_after_cut;	/* later writes write nothing at all */
 
+/* A write that fails outright, which is what a full disk does, from a chosen
+ * call onwards: a disk that has no room left has none for the next write
+ * either. The call is counted rather than matched, so a case can walk the
+ * whole sequence of writes one file creation takes. */
+static long write_calls;		/* writes made since the count was reset */
+static long fail_write_from;		/* fail from this call on, 0 for none */
+
 static ssize_t real_write(int fd, const void *buf, size_t count)
 {
 	return write(fd, buf, count);
@@ -72,6 +82,11 @@ static ssize_t test_write(int fd, const void *buf, size_t count)
 {
 	const unsigned char *bytes = buf;
 
+	++write_calls;
+	if (fail_write_from != 0 && write_calls >= fail_write_from) {
+		errno = ENOSPC;
+		return -1;
+	}
 	if (short_write_option >= 0 && count > short_write_bytes &&
 	    count == 4 + short_write_length &&
 	    bytes[0] == (short_write_option & 0xff) &&
@@ -87,9 +102,35 @@ static ssize_t test_write(int fd, const void *buf, size_t count)
 	return real_write(fd, buf, count);
 }
 
+/* A mapping the kernel will not make, which is what too little memory or too
+ * many mappings gives. The writer makes two while it creates a file: one for
+ * the section header block and one for the interface description block. */
+static long mmap_calls;			/* mappings made since the reset */
+static long fail_mmap_at;		/* fail this one, 0 for none */
+
+static void *real_mmap(void *addr, size_t length, int prot, int flags, int fd,
+		       off_t offset)
+{
+	return mmap(addr, length, prot, flags, fd, offset);
+}
+
+static void *test_mmap(void *addr, size_t length, int prot, int flags, int fd,
+		       off_t offset)
+{
+	++mmap_calls;
+	if (fail_mmap_at != 0 && mmap_calls == fail_mmap_at) {
+		errno = ENOMEM;
+		return MAP_FAILED;
+	}
+	return real_mmap(addr, length, prot, flags, fd, offset);
+}
+
 #define write(fd, buf, count) test_write(fd, buf, count)
+#define mmap(addr, length, prot, flags, fd, offset) \
+	test_mmap(addr, length, prot, flags, fd, offset)
 #include "pcapng.c"
 #undef write
+#undef mmap
 
 static int failures = 0;
 
@@ -424,6 +465,13 @@ static void dirty_stack(void)
 static void unlink_quietly(const char *filename)
 {
 	(void) unlink(filename);
+}
+
+static int file_exists(const char *filename)
+{
+	struct stat st;
+
+	return stat(filename, &st) == 0;
 }
 
 /*
@@ -2775,6 +2823,111 @@ static void test_section_option_short_write(void)
 	stop_writing_after_cut = 0;
 	CHECK(short_write_fired);
 	short_write_fired = 0;
+	/* and the half-written file is not left for the user to find */
+	CHECK(!file_exists(filename));
+	unlink_quietly(filename);
+}
+
+/*
+ * A capture file the writer could not finish is not left behind. Someone who
+ * found one would have to tell it apart from a capture that ran and caught
+ * nothing, and the tool that asked for the file cannot clear it up itself:
+ * it is never told whether the name was already in use.
+ *
+ * Each of the writes creating a file takes is failed in turn, and each of the
+ * two mappings, so no step of the creation is left out.
+ */
+static void test_create_failure_leaves_no_file(void)
+{
+	const char *filename = "test_capture_failed.pcapng";
+	PCAPNG_HANDLE handle;
+	long writes, call;
+
+	/* First the file as it is written when nothing fails, which is also
+	   how many writes there are to fail one at a time below. */
+	unlink_quietly(filename);
+	write_calls = 0;
+	CHECK(pcapng_create(&handle, filename, NULL, 64,
+			    DLT_BLUETOOTH_BREDR_BB, BREDR_MAX_PAYLOAD, NULL,
+			    64) == PCAPNG_OK);
+	writes = write_calls;
+	(void) pcapng_close(&handle);
+	CHECK(file_exists(filename));
+	CHECK(writes > 0);
+	unlink_quietly(filename);
+
+	for (call = 1; call <= writes; call++) {
+		int reported;
+
+		write_calls = 0;
+		fail_write_from = call;
+		errno = 0;
+		CHECK(pcapng_create(&handle, filename, NULL, 64,
+				    DLT_BLUETOOTH_BREDR_BB,
+				    BREDR_MAX_PAYLOAD, NULL,
+				    64) == PCAPNG_FILE_WRITE_ERROR);
+		reported = errno;	/* before any call of our own moves it */
+		fail_write_from = 0;
+		CHECK(!file_exists(filename));
+		if (call == 1) {
+			/* Why the write failed is all the caller has to tell
+			   the user, so it survives closing and removing the
+			   file. Only the first write is checked for it: after
+			   a later one the writer goes on to map the file, and
+			   what a mapping that worked leaves in errno is its
+			   own business. */
+			CHECK(reported == ENOSPC);
+		}
+		unlink_quietly(filename);
+	}
+
+	for (call = 1; call <= 2; call++) {
+		mmap_calls = 0;
+		fail_mmap_at = call;
+		CHECK(pcapng_create(&handle, filename, NULL, 64,
+				    DLT_BLUETOOTH_BREDR_BB,
+				    BREDR_MAX_PAYLOAD, NULL,
+				    64) == PCAPNG_MMAP_FAILED);
+		fail_mmap_at = 0;
+		CHECK(!file_exists(filename));
+		unlink_quietly(filename);
+	}
+}
+
+/*
+ * A file that was already there is the user's own: the writer does not write
+ * to it, does not remove it, and says that the name is taken rather than
+ * that the write failed.
+ */
+static void test_create_keeps_an_existing_file(void)
+{
+	static const char content[] = "not a capture file";
+	const char *filename = "test_capture_exists.pcapng";
+	PCAPNG_HANDLE handle;
+	char readback[sizeof(content)];
+	FILE *f;
+
+	unlink_quietly(filename);
+	f = fopen(filename, "wb");
+	CHECK(f != NULL);
+	if (f == NULL)
+		return;
+	CHECK(fwrite(content, 1, sizeof(content), f) == sizeof(content));
+	CHECK(fclose(f) == 0);
+
+	CHECK(pcapng_create(&handle, filename, NULL, 64,
+			    DLT_BLUETOOTH_BREDR_BB, BREDR_MAX_PAYLOAD, NULL,
+			    64) == PCAPNG_FILE_EXISTS);
+
+	memset(readback, 0, sizeof(readback));
+	f = fopen(filename, "rb");
+	CHECK(f != NULL);
+	if (f != NULL) {
+		CHECK(fread(readback, 1, sizeof(readback), f) ==
+		      sizeof(content));
+		CHECK(memcmp(readback, content, sizeof(content)) == 0);
+		CHECK(fclose(f) == 0);
+	}
 	unlink_quietly(filename);
 }
 
@@ -2971,6 +3124,8 @@ int main(void)
 	test_padding_beyond_one_option();
 	test_section_option_limit();
 	test_section_option_short_write();
+	test_create_failure_leaves_no_file();
+	test_create_keeps_an_existing_file();
 	test_write_errors();
 
 	if (failures) {
