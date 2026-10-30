@@ -92,9 +92,12 @@ static FILE *btbb_pcap_open(const char *filename, uint32_t dlt, uint32_t snaplen
 	   own: with O_EXCL a descriptor means the name was free and this call
 	   made what is behind it, so it can be taken away again if the header
 	   cannot be written. A name already in use is opened as it always
-	   was, and what is there is not this call's to remove. */
+	   was, and what is there is not this call's to remove.
+
+	   The mode is the 0666 that opening a stream for writing asks for,
+	   so a capture file's permissions are what they have always been. */
 	fd = open( filename, O_WRONLY|O_CREAT|O_EXCL,
-		   S_IRUSR|S_IWUSR|S_IRGRP|S_IWGRP );
+		   S_IRUSR|S_IWUSR|S_IRGRP|S_IWGRP|S_IROTH|S_IWOTH );
 	if (fd == -1) {
 		int open_errno = errno;
 
@@ -172,7 +175,15 @@ btbb_pcap_create_file(const char *filename, btbb_pcap_handle ** ph)
 	}
 	return retval;
 fail:
-	(void) btbb_pcap_close( handle );
+	{
+		/* Why the file could not be opened is the caller's whole
+		   report of it, and freeing the handle closes a stream,
+		   which sets an errno of its own. */
+		int saved_errno = errno;
+
+		(void) btbb_pcap_close( handle );
+		errno = saved_errno;
+	}
 	return retval;
 }
 
@@ -447,7 +458,15 @@ lell_pcap_create_file_dlt(const char *filename, int dlt, lell_pcap_handle ** ph)
 	}
 	return retval;
 fail:
-	(void) lell_pcap_close( handle );
+	{
+		/* Why the file could not be opened is the caller's whole
+		   report of it, and freeing the handle closes a stream,
+		   which sets an errno of its own. */
+		int saved_errno = errno;
+
+		(void) lell_pcap_close( handle );
+		errno = saved_errno;
+	}
 	return retval;
 }
 

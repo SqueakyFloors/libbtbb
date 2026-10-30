@@ -3016,6 +3016,7 @@ static void test_pcap_create_failure_leaves_no_file(void)
 	lell_pcap_handle *lh = NULL;
 	FILE *f;
 
+	CHECK(getrlimit(RLIMIT_FSIZE, &saved) == 0);
 	if (getrlimit(RLIMIT_FSIZE, &saved) != 0)
 		return;
 
@@ -3035,9 +3036,17 @@ static void test_pcap_create_failure_leaves_no_file(void)
 		   the default action would end the test */
 		void (*old_xfsz)(int) = signal(SIGXFSZ, SIG_IGN);
 
+		int reported;
+
 		unlink_quietly(made);
+		errno = 0;
 		CHECK(btbb_pcap_create_file(made, &bh) != 0);
+		/* read before any call of this test's own moves it: with
+		   nothing printed by the library, this is the whole of what
+		   the caller has to tell the user */
+		reported = errno;
 		CHECK(bh == NULL);
+		CHECK(reported == EFBIG);
 		CHECK(!file_exists(made));
 
 		/* the LE writer opens through the same function */
