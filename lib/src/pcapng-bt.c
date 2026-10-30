@@ -158,9 +158,8 @@ create_bredr_capture_file_single_interface( PCAPNG_HANDLE * handle,
 		retval = check_and_fix_tsresol( handle, interface_options );
 
 		if (retval != PCAPNG_OK) {
-			/* The file was made a moment ago by the call above,
-			   and it is not going to be a capture file, so it
-			   does not outlive this call either. */
+			/* no capture file came of it, so it does not
+			   outlive this call either */
 			pcapng_remove_own_file( handle->fd, filename );
 			(void) pcapng_close( handle );
 		}
@@ -433,9 +432,8 @@ create_le_capture_file_single_interface( PCAPNG_HANDLE * handle,
 		retval = check_and_fix_tsresol( handle, interface_options );
 
 		if (retval != PCAPNG_OK) {
-			/* The file was made a moment ago by the call above,
-			   and it is not going to be a capture file, so it
-			   does not outlive this call either. */
+			/* no capture file came of it, so it does not
+			   outlive this call either */
 			pcapng_remove_own_file( handle->fd, filename );
 			(void) pcapng_close( handle );
 		}
