@@ -41,6 +41,33 @@
    gives one that big. */
 #define MAX_OPTION_VALUE_LENGTH 0xfffc
 
+void pcapng_remove_own_file( int fd, const char * filename )
+{
+	int saved_errno = errno;
+	struct stat opened, named;
+
+	/* The inode is read through the descriptor this library opened, so it
+	   is the file the library really holds, and the name is left alone
+	   unless it still leads there. Another process may have taken the
+	   name in the meantime, and what is there then is somebody else's:
+	   the point of the removal is to leave nothing of ours behind, not to
+	   clear the name.
+
+	   A file is removed by name and not by descriptor, so the comparison
+	   narrows that window rather than closing it. Anything that could win
+	   the instant that is left could remove the user's file on its own,
+	   without this library's help. */
+	if ((fd != -1) &&
+	    (fstat( fd, &opened ) == 0) &&
+	    (stat( filename, &named ) == 0) &&
+	    (named.st_dev == opened.st_dev) &&
+	    (named.st_ino == opened.st_ino)) {
+		(void) unlink( filename );
+	}
+
+	errno = saved_errno;
+}
+
 /* Fill the spare room at the end of a block with padding options, so that a
    reader walks over it as options rather than reading it as data.
 
@@ -197,24 +224,31 @@ PCAPNG_RESULT pcapng_create( PCAPNG_HANDLE * handle,
 		handle->next_section_option_offset = handle->section_header_size;
 	}
 
-	if (result == -1) {
-		retval = PCAPNG_FILE_WRITE_ERROR;
-	}
-	else {
-		/* determine the size of section header with desired space */
-		zeroes = (size_t) PGSZ*((handle->section_header_size + 4 +
-					 section_options_space + PGSZ - 1)/PGSZ) -
-			handle->section_header_size;
-		handle->section_header_size += zeroes;
-		if (result != -1) {
-			result = write_zeroes( handle->fd, zeroes );
+	/* The open() failing is not a write error, and leaves nothing to write
+	   to, so retval is tested first here as it is in the blocks below. */
+	if (retval == PCAPNG_OK) {
+		if (result == -1) {
+			retval = PCAPNG_FILE_WRITE_ERROR;
 		}
+		else {
+			/* determine the size of section header with desired space */
+			zeroes = (size_t) PGSZ*((handle->section_header_size + 4 +
+						 section_options_space + PGSZ - 1)/PGSZ) -
+				handle->section_header_size;
+			handle->section_header_size += zeroes;
+			result = write_zeroes( handle->fd, zeroes );
 
-		/* mmap the section header */
-		handle->section_header = mmap( NULL, handle->section_header_size, 
-					       PROT_READ|PROT_WRITE,
-					       MAP_SHARED,
-					       handle->fd, 0 );
+			/* mmap the section header. A mapping of a file whose
+			   last write failed would be given up a moment later
+			   anyway, and asking for it puts its own errno over
+			   the one that says why the write failed. */
+			if (result != -1) {
+				handle->section_header = mmap( NULL, handle->section_header_size,
+							       PROT_READ|PROT_WRITE,
+							       MAP_SHARED,
+							       handle->fd, 0 );
+			}
+		}
 	}
 
 	if (retval == PCAPNG_OK) {
@@ -263,16 +297,17 @@ PCAPNG_RESULT pcapng_create( PCAPNG_HANDLE * handle,
 						 interface_options_space + PGSZ - 1)/PGSZ) -
 				handle->interface_description_size;
 			handle->interface_description_size += zeroes;
-			if (result != -1) {
-				result = write_zeroes( handle->fd, zeroes );
-			}
+			result = write_zeroes( handle->fd, zeroes );
 
-			/* mmap the interface description */
-			handle->interface_description = mmap( NULL, handle->interface_description_size, 
-							      PROT_READ|PROT_WRITE,
-							      MAP_SHARED,
-							      handle->fd,
-							      handle->section_header_size );
+			/* mmap the interface description, for the reasons
+			   given at the section header's mapping above */
+			if (result != -1) {
+				handle->interface_description = mmap( NULL, handle->interface_description_size,
+								      PROT_READ|PROT_WRITE,
+								      MAP_SHARED,
+								      handle->fd,
+								      handle->section_header_size );
+			}
 		}
 	}
 
@@ -306,7 +341,20 @@ PCAPNG_RESULT pcapng_create( PCAPNG_HANDLE * handle,
 	}
 
 	if (retval != PCAPNG_OK) {
+		/* The close() and munmap() in pcapng_close() set errno of
+		   their own, and the caller reports strerror(errno), so the
+		   reason for the failure is put back afterwards.
+
+		   The file goes first, while its descriptor is still open. A
+		   descriptor at all means the O_EXCL open() above made the
+		   file, so taking it away cannot take away one the user
+		   already had. The caller could not do this: from outside, a
+		   file this call made looks like one that was there before. */
+		int saved_errno = errno;
+
+		pcapng_remove_own_file( handle->fd, filename );
 		(void) pcapng_close( handle );
+		errno = saved_errno;
 	}
 
 	return retval;

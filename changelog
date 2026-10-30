@@ -98,6 +98,10 @@ libbtbb (2026-10-R1) unstable; urgency=low
     now takes a few, and the bytes written are unchanged.
   * Fixed: the captured and original lengths in LE PCAP records were the wrong
     way round, and the PCAPNG writer copied more than the record holds.
+  * Fixed: a pcapng capture file that could not be written was left behind,
+    empty or part written, for the user to tell apart from a capture that
+    caught nothing; it is now taken away again, and a file that was already
+    there is still left untouched.
 
   [ Output ]
   * Fixed: decoding a packet printed it; only btbb_print_packet() prints now,
@@ -182,6 +186,9 @@ libbtbb (2026-10-R1) unstable; urgency=low
     the padding that rounds it to a 4-byte boundary, in either writer.
   * A no-payload record, a high reference UAP, the LE decoder, the dump, and
     an unaligned read of 16-bit UUIDs no longer rely on undefined behavior.
+  * A capture file name already in use was reported as a failed write; it is
+    now reported as the name being taken, and the reason a write did fail is
+    no longer lost while the file is closed and removed.
 
  -- Russell Wagner <152923636+SqueakyFloors@users.noreply.github.com>  30 Oct 2026 09:30:00 -0700
 
