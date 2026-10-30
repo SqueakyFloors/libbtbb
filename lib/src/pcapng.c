@@ -51,7 +51,12 @@ void pcapng_remove_own_file( int fd, const char * filename )
 	   unless it still leads there. Another process may have taken the
 	   name in the meantime, and what is there then is somebody else's:
 	   the point of the removal is to leave nothing of ours behind, not to
-	   clear the name. */
+	   clear the name.
+
+	   A file is removed by name and not by descriptor, so the comparison
+	   narrows that window rather than closing it. Anything that could win
+	   the instant that is left could remove the user's file on its own,
+	   without this library's help. */
 	if ((fd != -1) &&
 	    (fstat( fd, &opened ) == 0) &&
 	    (stat( filename, &named ) == 0) &&
@@ -164,7 +169,6 @@ PCAPNG_RESULT pcapng_create( PCAPNG_HANDLE * handle,
 	int PGSZ = getpagesize( );
 	size_t zeroes = 0;
 	ssize_t result = -1;
-	int created = 0;
 
 	handle->section_header = NULL;
 	handle->interface_description = NULL;
@@ -189,13 +193,6 @@ PCAPNG_RESULT pcapng_create( PCAPNG_HANDLE * handle,
 		default:
 			retval = PCAPNG_FILE_NOT_ALLOWED;
 		}
-	}
-	else {
-		/* O_EXCL above means the file did not exist a moment ago, so
-		   this call made it and may take it away again if a later
-		   step fails. The caller cannot: from outside, a file this
-		   call made looks the same as one the user already had. */
-		created = 1;
 	}
 
 	if (retval == PCAPNG_OK) {
@@ -346,13 +343,16 @@ PCAPNG_RESULT pcapng_create( PCAPNG_HANDLE * handle,
 	if (retval != PCAPNG_OK) {
 		/* The close() and munmap() in pcapng_close() set errno of
 		   their own, and the caller reports strerror(errno), so the
-		   reason for the failure is put back afterwards. The file
-		   goes first, while its descriptor is still open. */
+		   reason for the failure is put back afterwards.
+
+		   The file goes first, while its descriptor is still open. A
+		   descriptor at all means the O_EXCL open() above made the
+		   file, so taking it away cannot take away one the user
+		   already had. The caller could not do this: from outside, a
+		   file this call made looks like one that was there before. */
 		int saved_errno = errno;
 
-		if (created) {
-			pcapng_remove_own_file( handle->fd, filename );
-		}
+		pcapng_remove_own_file( handle->fd, filename );
 		(void) pcapng_close( handle );
 		errno = saved_errno;
 	}
