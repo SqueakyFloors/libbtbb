@@ -42,8 +42,8 @@ as well: five libFuzzer targets, which CI runs for a minute each.
 
 The tests have helped find and fix defects in packet types and capture paths
 that are rarely seen on the air. [TESTING.md](TESTING.md) says how to run the
-suite, what each test covers, and where its vectors come from; `changelog`
-lists the fixes, one entry per release.
+suite, what each test covers, and where its vectors come from;
+[CHANGELOG.md](CHANGELOG.md) lists the fixes, one entry per release.
 
 
 Checked on hardware
