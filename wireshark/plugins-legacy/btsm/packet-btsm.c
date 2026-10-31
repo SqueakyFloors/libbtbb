@@ -64,7 +64,7 @@ static const value_string commands[] = {
 	{ 0x04, "Pairing Random" },
 	{ 0x05, "Pairing Failed" },
 	{ 0x06, "Encryption Information" },
-	{ 0x07, "Master Identification" },
+	{ 0x07, "Central Identification" },
 	{ 0x08, "Identity Information" },
 	{ 0x09, "Identity Address Information" },
 	{ 0x0A, "Signing Information" },

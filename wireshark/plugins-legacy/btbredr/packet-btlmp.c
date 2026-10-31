@@ -285,8 +285,8 @@ static const true_false_string fec = {
 };
 
 static const true_false_string tid = {
-	"transaction initiated by slave",
-	"transaction initiated by master"
+	"transaction initiated by Peripheral",
+	"transaction initiated by Central"
 };
 
 /* short LMP opcodes */
@@ -2375,22 +2375,22 @@ proto_register_btlmp(void)
 		{ &hf_lmp_escolenms,
 			{ "Packet Length M -> S", "btlmp.escolenms",
 			FT_UINT16, BASE_DEC, NULL, 0x0,
-			"Packet Length in bytes Master to Slave", HFILL }
+			"Packet Length in bytes Central to Peripheral", HFILL }
 		},
 		{ &hf_lmp_escolensm,
 			{ "Packet Length S -> M", "btlmp.escolensm",
 			FT_UINT16, BASE_DEC, NULL, 0x0,
-			"Packet Length in bytes Slave to Master", HFILL }
+			"Packet Length in bytes Peripheral to Central", HFILL }
 		},
 		{ &hf_lmp_escotypems,
 			{ "eSCO Packet Type M -> S", "btlmp.escotypems",
 			FT_UINT8, BASE_HEX, VALS(esco_packet_type), 0x0,
-			"eSCO Packet Type Master to Slave", HFILL }
+			"eSCO Packet Type Central to Peripheral", HFILL }
 		},
 		{ &hf_lmp_escotypesm,
 			{ "eSCO Packet Type S -> M", "btlmp.escotypesm",
 			FT_UINT8, BASE_HEX, VALS(esco_packet_type), 0x0,
-			"eSCO Packet Type Slave to Master", HFILL }
+			"eSCO Packet Type Peripheral to Central", HFILL }
 		},
 		{ &hf_lmp_err,
 			{ "Error Code", "btlmp.err",

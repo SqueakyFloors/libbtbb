@@ -95,8 +95,8 @@ typedef struct __attribute__((packed)) {
   bredr_clk_info clock_info;
 } bredr_clk_option;
 
-#define PCAPNG_BREDR_OPTION_BD_ADDR           0xd340
-#define PCAPNG_BREDR_OPTION_MASTER_CLOCK_INFO 0xd341
+#define PCAPNG_BREDR_OPTION_BD_ADDR            0xd340
+#define PCAPNG_BREDR_OPTION_CENTRAL_CLOCK_INFO 0xd341
 
 /* --------------------------------- Low Energy ---------------------------- */
 

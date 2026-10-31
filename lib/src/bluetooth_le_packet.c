@@ -714,7 +714,7 @@ print128:
 				}
 				break;
 			case 0x12:
-				printf(" (Slave Connection Interval Range)\n");
+				printf(" (Peripheral Connection Interval Range)\n");
 				if (sublen-1 == 4) {
 					val = (buf[pos+2] << 8) | buf[pos+1];
 					printf("           (%0.2f, ", val * 1.25);
@@ -820,7 +820,7 @@ void lell_print(const lell_packet *pkt)
 				"LL_PAUSE_ENC_RSP",
 				"LL_VERSION_IND",
 				"LL_REJECT_IND",
-				"LL_SLAVE_FEATURE_REQ",
+				"LL_PERIPHERAL_FEATURE_REQ",
 				"LL_CONNECTION_PARAM_REQ",
 				"LL_CONNECTION_PARAM_RSP",
 				"LL_REJECT_IND_EXT",

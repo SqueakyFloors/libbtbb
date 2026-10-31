@@ -1962,7 +1962,7 @@ static void test_bredr_interface_options(void)
 	}
 
 	/* a clock option: a timestamp, the address, the clock and its mask */
-	value = find_option(idb, 16, PCAPNG_BREDR_OPTION_MASTER_CLOCK_INFO,
+	value = find_option(idb, 16, PCAPNG_BREDR_OPTION_CENTRAL_CLOCK_INFO,
 			    &value_length);
 	CHECK(value != 0);
 	if (value != 0) {

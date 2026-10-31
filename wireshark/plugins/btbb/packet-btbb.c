@@ -71,8 +71,8 @@ static int hf_btbb_fhs_psmode = -1;
 
 /* field values */
 static const true_false_string direction = {
-	"Slave to Master",
-	"Master to Slave"
+	"Peripheral to Central",
+	"Central to Peripheral"
 };
 
 static const true_false_string clock_bits = {
@@ -407,7 +407,7 @@ proto_register_btbb(void)
 		{ &hf_btbb_clkbits,
 			{ "Known Clock Bits", "btbb.clkbits",
 			FT_BOOLEAN, 8, TFS(&clock_bits), 0x01,
-			"Number of Known Master CLK Bits (6 or 27)", HFILL }
+			"Number of Known Central CLK Bits (6 or 27)", HFILL }
 		},
 		{ &hf_btbb_addrbits,
 			{ "Known Address Bits", "btbb.addrbits",

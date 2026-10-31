@@ -115,6 +115,11 @@
 
 ### Output
 
+- Renamed the Bluetooth connection roles from master/slave to
+  Central/Peripheral, as the Core specification now does. Printed packets
+  read `LL_PERIPHERAL_FEATURE_REQ` and `Peripheral Connection Interval
+  Range`, and the Wireshark plugins label LMP, LL, and SMP fields the same
+  way. The filter names and every numeric value are unchanged.
 - Fixed: decoding a packet printed it; only btbb_print_packet() prints now,
   as it always has.
 - Fixed: progress and complaints from UAP and clock discovery went to
