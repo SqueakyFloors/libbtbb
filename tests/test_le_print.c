@@ -377,7 +377,7 @@ static const struct {
 	{ BAD_TX_POWER_PACKET, "note: wrong length (2, should be 1)\n",
 	  "Type 0a (Tx Power Level)", LELL_MALFORMED_AD_FIELD_LENGTH },
 	{ BAD_INTERVAL_PACKET, "note: wrong length (2, should be 4)\n",
-	  "Type 12 (Slave Connection Interval Range)",
+	  "Type 12 (Peripheral Connection Interval Range)",
 	  LELL_MALFORMED_AD_FIELD_LENGTH },
 	{ BAD_SERVICE_DATA_PACKET, "note: wrong length (1, should be >= 2)\n",
 	  "Type 16 (Service Data)", LELL_MALFORMED_AD_FIELD_LENGTH },

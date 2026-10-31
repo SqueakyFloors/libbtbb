@@ -365,15 +365,15 @@ int btbb_pcapng_record_bdaddr(btbb_pcapng_handle * h, const uint64_t bdaddr,
 }
 
 static PCAPNG_RESULT
-record_bredr_master_clock_info( PCAPNG_HANDLE * handle,
-				const uint64_t bd_addr,
-				const uint64_t ns,
-				const uint32_t clk,
-	                        const uint32_t clk_mask)
+record_bredr_central_clock_info( PCAPNG_HANDLE * handle,
+				 const uint64_t bd_addr,
+				 const uint64_t ns,
+				 const uint32_t clk,
+				 const uint32_t clk_mask)
 {
 	const bredr_clk_option mcopt = {
 		.header = {
-			.option_code = PCAPNG_BREDR_OPTION_MASTER_CLOCK_INFO,
+			.option_code = PCAPNG_BREDR_OPTION_CENTRAL_CLOCK_INFO,
 			/* the length of the option's value, which does not
 			   include this 4-byte header */
 			.option_length = sizeof(bredr_clk_info)
@@ -393,8 +393,8 @@ int btbb_pcapng_record_btclock(btbb_pcapng_handle * h, const uint64_t bdaddr,
                                const uint64_t ns, const uint32_t clk,
 			       const uint32_t clkmask)
 {
-	return -record_bredr_master_clock_info( (PCAPNG_HANDLE *) h,
-						bdaddr, ns, clk, clkmask );
+	return -record_bredr_central_clock_info( (PCAPNG_HANDLE *) h,
+						 bdaddr, ns, clk, clkmask );
 }
 
 int btbb_pcapng_close(btbb_pcapng_handle * h)

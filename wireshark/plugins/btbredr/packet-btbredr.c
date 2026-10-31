@@ -78,8 +78,8 @@ static int hf_btbredr_fhs_psmode = -1;
 
 /* field values */
 static const true_false_string direction = {
-	"Slave to Master",
-	"Master to Slave"
+	"Peripheral to Central",
+	"Central to Peripheral"
 };
 
 static const true_false_string clock_bits = {

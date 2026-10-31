@@ -591,12 +591,12 @@ proto_register_btle(void)
 		{ &hf_btle_ll_control_ll_enc_req_skdm,
 			{ "SDKm", "btle.ll_enc_req.skdm",
 			FT_BYTES, BASE_NONE, NULL, 0x0,
-			"Master's Session Key Identifier", HFILL }
+			"Central's Session Key Identifier", HFILL }
 		},
 		{ &hf_btle_ll_control_ll_enc_req_ivm,
 			{ "IVm", "btle.ll_enc_req.ivm",
 			FT_BYTES, BASE_NONE, NULL, 0x0,
-			"Master's Initialization Vector", HFILL }
+			"Central's Initialization Vector", HFILL }
 		},
 
 		{ &hf_btle_ll_control_ll_enc_rsp,
@@ -607,12 +607,12 @@ proto_register_btle(void)
 		{ &hf_btle_ll_control_ll_enc_rsp_skds,
 			{ "SDKs", "btle.ll_enc_rsp.skds",
 			FT_BYTES, BASE_NONE, NULL, 0x0,
-			"Slave's Session Key Identifier", HFILL }
+			"Peripheral's Session Key Identifier", HFILL }
 		},
 		{ &hf_btle_ll_control_ll_enc_rsp_ivs,
 			{ "IVs", "btle.ll_enc_rsp.ivs",
 			FT_BYTES, BASE_NONE, NULL, 0x0,
-			"Slave's Initialization Vector", HFILL }
+			"Peripheral's Initialization Vector", HFILL }
 		},
 
 
