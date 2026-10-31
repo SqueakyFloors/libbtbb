@@ -17,6 +17,9 @@ release its tested fixes are offered back upstream. Bug reports and patches
 for this fork go to its own tracker:
 https://github.com/SqueakyFloors/libbtbb/issues
 
+This fork was developed largely with the help of AI coding agents, directed by
+the maintainer. See [AI-DISCLOSURE.md](AI-DISCLOSURE.md) for how.
+
 It builds on Linux and macOS, and is tested on both: see
 [TESTING.md](TESTING.md).
 
