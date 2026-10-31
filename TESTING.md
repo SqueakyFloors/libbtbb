@@ -9,8 +9,8 @@ driven in large part by the Bluetooth Core Specification's own published sample
 data; the vectors of the original test programs were kept and ported.
 Malformed radio packets are this library's normal input, so the decoders and
 the capture writers are fuzzed as well. The fixes the suite found and holds
-down are listed in `changelog`, one entry per release, with the pull request
-that made each one.
+down are listed in [CHANGELOG.md](CHANGELOG.md), one entry per release, with
+the pull request that made each one.
 
 ## How to run them
 
@@ -141,7 +141,7 @@ Tx Power Level read through a plain `char`, the allocation failures, and a
 ## Adding a test
 
 A fix to this library comes with a test that fails without it, in the suite
-that owns that area, and a row for the release in `changelog`. Add the vectors
+that owns that area, and a row for the release in CHANGELOG.md. Add the vectors
 to an existing test program where one covers the area; a new program goes in
 `tests/CMakeLists.txt` beside the others. If the fix cannot be exercised on the
 air yet, say so in [What only hardware can

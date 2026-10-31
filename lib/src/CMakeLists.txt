@@ -64,7 +64,7 @@ if( BUILD_SHARED_LIB )
     # than leaving opaque. Anything else moves it to 2, and every program
     # linking libbtbb then has to be rebuilt. MINOR_VERSION carries the
     # additions; the abi_surface test holds down which symbols are exported,
-    # and the changelog records what was compared with 2020-12-R1.
+    # and CHANGELOG.md records what was compared with 2020-12-R1.
     set_target_properties(btbb PROPERTIES VERSION ${MAJOR_VERSION}.${MINOR_VERSION} SOVERSION 1)
     set_target_properties(btbb PROPERTIES CLEAN_DIRECT_OUTPUT 1)
     # ARCHIVE as well as LIBRARY, so that the import library a Windows build
