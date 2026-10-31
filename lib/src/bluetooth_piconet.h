@@ -154,13 +154,13 @@ struct btbb_piconet {
 	 * used.  Maintained by precalc(), which is the only writer. */
 	uint8_t used_channels;
 
-	/* lower address part (of master's BD_ADDR) */
+	/* lower address part (of the Central's BD_ADDR) */
 	uint32_t LAP;
 
-	/* upper address part (of master's BD_ADDR) */
+	/* upper address part (of the Central's BD_ADDR) */
 	uint8_t UAP;
 
-	/* non-significant address part (of master's BD_ADDR) */
+	/* non-significant address part (of the Central's BD_ADDR) */
 	uint16_t NAP;
 
 	/* CLK1-27 candidates */
