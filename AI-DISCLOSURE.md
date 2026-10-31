@@ -13,8 +13,8 @@ packaging, or reviewing the fork can judge it with that in mind.
   upstream `2020-12-R1` release were written or revised by large-language-model
   coding agents working to a written ruleset, with a human reviewing what
   landed.
-- Changes that were not trivial were reviewed by a second, independent agent on
-  a different model family before being considered for merge.
+- Non-trivial changes were reviewed in one or more rounds by two independent
+  agents on a different model family before being considered for merge.
 
 ## What the agents were and were not allowed to do
 
@@ -44,8 +44,8 @@ Agents followed a written set of rules. In short:
 This was also an exercise in learning to orchestrate AI agents, and the fork's
 footprint is large. Not every change was strictly necessary. The aim is that
 what remains is of real value — correctness fixes to the Classic and Low Energy
-decoders, to clock and hop recovery, and to the capture-file writers — built on
-the work of the original authors.
+decoders, to clock and hop recovery, and to the capture-file writers, extensive
+unit tests, and improved documentation.
 
 ## Credit
 
@@ -57,5 +57,4 @@ the original a great deal.
 ## Licensing
 
 Contributions here, however they were produced, are offered under the same
-license as the rest of this repository (see `LICENSE`). The maintainer vouches
-for them.
+license as the rest of this repository (see `LICENSE`).
