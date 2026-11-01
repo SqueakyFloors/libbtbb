@@ -139,6 +139,31 @@ AUX1, DV, EV4, and EV5 payload lengths, the buffer bounds, the signedness of a
 Tx Power Level read through a plain `char`, the allocation failures, and a
 255-octet PDU at the top of the Length range.
 
+## What the library shares between callers
+
+`btbb.h` tells a caller that decodes on several threads what the library keeps
+to itself, so that list has to be the real one. What the library shares is
+exactly its writable objects of static storage duration, and the linker will
+name them, which is a check that does not depend on reading the sources:
+
+```sh
+cmake -S . -B build -DCMAKE_C_FLAGS=-O0 && cmake --build build --target btbb
+nm build/lib/src/CMakeFiles/btbb.dir/*.c.o |
+	awk '$2 ~ /^[bBdD]$/ && $3 !~ /^ltmp/ { print $3 }' | sort
+```
+
+`b` and `B` are the zero-initialized ones and `d` and `D` the rest; read-only
+data is `r` or `R` and does not appear, and `ltmp` names belong to the Mach-O
+assembler rather than to the library.
+
+Seven come out, and `btbb.h` describes each: the hop permutation table and its
+flag, and the access-code syndrome table, all three built before any thread
+starts; the survey's mode flag, set during setup; and the three the header says
+are unguarded, the survey's table of addresses heard and the two
+malformed-payload counts. `-O0` matters because an optimizing build merges
+small objects into one symbol and hides their names. Anything else appearing
+there is state the header does not account for.
+
 ## Adding a test
 
 A fix to this library comes with a test that fails without it, in the suite

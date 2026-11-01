@@ -111,20 +111,20 @@ static void _malformed(lell_malformed_kind kind, const char *fmt, ...)
 }
 
 /* string representations of advertising packet type */
-static const char *ADV_TYPE_NAMES[] = {
+static const char * const ADV_TYPE_NAMES[] = {
 	"ADV_IND", "ADV_DIRECT_IND", "ADV_NONCONN_IND", "SCAN_REQ",
 	"SCAN_RSP", "CONNECT_REQ", "ADV_SCAN_IND",
 };
 
 /* source clock accuracy in a connect packet */
-static const char *CONNECT_SCA[] = {
+static const char * const CONNECT_SCA[] = {
 	"251 ppm to 500 ppm", "151 ppm to 250 ppm", "101 ppm to 150 ppm",
 	"76 ppm to 100 ppm", "51 ppm to 75 ppm", "31 ppm to 50 ppm",
 	"21 ppm to 30 ppm", "0 ppm to 20 ppm",
 };
 
 /* flags */
-static const char *FLAGS[] = {
+static const char * const FLAGS[] = {
 	"LE Limited Discoverable Mode", "LE General Discoverable Mode",
 	"BR/EDR Not Supported",
 	"Simultaneous LE and BR/EDR to Same Device Capable (Controller)",
@@ -781,7 +781,7 @@ void lell_print(const lell_packet *pkt)
 	int i, opcode, needed;
 	if (lell_packet_is_data(pkt)) {
 		int llid = pkt->symbols[4] & 0x3;
-		static const char *llid_str[] = {
+		static const char * const llid_str[] = {
 			"Reserved",
 			"LL Data PDU / empty or L2CAP continuation",
 			"LL Data PDU / L2CAP start",
@@ -805,7 +805,7 @@ void lell_print(const lell_packet *pkt)
 				break;
 			}
 			opcode = pkt->symbols[6];
-			static const char *opcode_str[] = {
+			static const char * const opcode_str[] = {
 				"LL_CONNECTION_UPDATE_REQ",
 				"LL_CHANNEL_MAP_REQ",
 				"LL_TERMINATE_IND",
