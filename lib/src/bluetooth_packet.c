@@ -320,15 +320,10 @@ const char* btbb_get_version(void) {
 
 int btbb_init(int max_ac_errors)
 {
-	/* The hop permutation table, beside the syndrome map below: both are
-	 * read-only once built, so building them here is what lets a caller
-	 * decode on several threads.
-	 *
-	 * The first statement of the function, before even the argument is
-	 * checked, because filling it cannot fail: the storage is this
-	 * library's own and filling it only computes. So however this call
-	 * comes out, the table is whole afterwards, and a caller needs no rule
-	 * about which failures leave it half done. */
+	/* The hop permutation table, first, before even the argument is
+	 * checked: filling it cannot fail, so the table is whole however this
+	 * call comes out and a caller needs no rule about which failures leave
+	 * it half done. btbb.h has the rest. */
 	perm_table_init();
 
 	/* Sanity check max_ac_errors. */

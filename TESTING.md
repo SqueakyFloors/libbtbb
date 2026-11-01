@@ -143,28 +143,41 @@ Tx Power Level read through a plain `char`, the allocation failures, and a
 
 `btbb.h` tells a caller that decodes on several threads what the library keeps
 to itself, so that list has to be the real one. What the library shares is
-exactly its writable objects of static storage duration, and the linker will
-name them, which is a check that does not depend on reading the sources:
+exactly its objects of static storage duration that live in a writable section,
+and the linker will name them, which is a check that does not depend on reading
+the sources. Read the **section**, not the symbol class: a format that has to
+relocate const data puts it in a section whose name begins `.data`
+(`.data.rel.ro`), and `nm`'s one-letter class then looks like writable data
+although it is not.
+
+On Mach-O, which is where the seven below were counted:
 
 ```sh
-cmake -S . -B build -DCMAKE_C_FLAGS=-O0 && cmake --build build --target btbb
-nm build/lib/src/CMakeFiles/btbb.dir/*.c.o |
-	awk '$2 ~ /^[bBdD]$/ && $3 !~ /^ltmp/ { print $3 }' | sort
+cmake -S . -B /tmp/btbb-statics -DCMAKE_C_FLAGS=-O0
+cmake --build /tmp/btbb-statics --target btbb
+for o in /tmp/btbb-statics/lib/src/CMakeFiles/btbb.dir/*.c.o; do
+	nm -m "$o" | grep -E '__DATA,__(data|bss|common)'
+done | awk '$NF !~ /^ltmp/ { print $NF }' | sort
 ```
 
-`b` and `B` are the zero-initialized ones and `d` and `D` the rest; read-only
-data is `r` or `R` and does not appear, and `ltmp` names belong to the Mach-O
-assembler rather than to the library.
+On ELF, the same question asked of the section names, which is
+`objdump -t` with `.data` and `.bss` kept and `.data.rel.ro`, `.rodata` and
+`.rodata.*` left out.
 
-Seven come out, and `btbb.h` describes each: the hop permutation table and its
-flag, which `btbb_init()` fills before it does anything else; the access-code
-syndrome table, which the same call builds when it is asked for error
-correction and leaves empty when it is not; the survey's mode flag, set during
-setup; and the three the header says are unguarded, the survey's table of
-addresses heard, the malformed-payload counts, and the flag that asks for their
-detail. `-O0` matters because an optimizing build merges
-small objects into one symbol and hides their names. Anything else appearing
-there is state the header does not account for.
+`-O0` matters on either: an optimizing build merges small objects into one
+symbol and hides their names.
+
+Seven come out, and `btbb.h` describes each:
+
+| object | what it is |
+|---|---|
+| `perm_table`, `perm_table_initialized` | the hop permutation table `fast_perm()` reads, and whether it has been filled. `btbb_init()` fills it before it does anything else |
+| `syndrome_map` | the access-code error correction table, which the same call builds when it is asked for error correction and leaves empty when it is not |
+| `survey_mode` | whether survey mode is on, set by `btbb_init_survey()` during setup |
+| `piconet_survey` | the survey's table of the addresses it has heard, which the header says a survey keeps on one thread |
+| `malformed_counts`, `malformed_detail_wanted` | the counts `lell_print()` keeps of payloads it could not read, and the setting that asks for their detail. The header says both are unguarded |
+
+Anything else appearing there is state the header does not account for.
 
 ## Adding a test
 

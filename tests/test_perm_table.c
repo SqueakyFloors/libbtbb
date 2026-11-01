@@ -9,8 +9,9 @@
  * and that it is complete however that call comes out: with no syndrome table
  * asked for, and with an argument the library refuses.
  *
- * The table and the flag are internal to the library, so the test compiles
- * the two translation units they live in rather than linking the library.
+ * The table and the flag are file-static, so the test includes both library
+ * sources into one translation unit of its own rather than linking the
+ * library: that is how it can read them at all.
  *
  * This file is part of libbtbb
  *
@@ -105,16 +106,26 @@ int main(void)
 	CHECK(fast_perm(0x15, 0x0a, 0x123) == perm5(0x15, 0x0a, 0x123));
 
 	/* A second btbb_init() leaves the table alone, as it leaves the
-	   syndrome map alone. */
+	   syndrome map alone. Pinned by handing it a table that is all zero
+	   with the flag already set: a call that filled it again would make
+	   these entries right, and the point is that it does not run. */
+	memset(perm_table, 0, sizeof(perm_table));
+	CHECK(perm_table_initialized == 1);
 	CHECK(btbb_init(2) == 0);
-	CHECK(entries_wrong() == 0);
+	CHECK(entries_set() == 0);
 
-	/* A call that asks for no access code error correction fills the
-	   table all the same: the two tables do not depend on each other.
-	   Whole, not one entry: a table filled part way would answer for the
-	   entry a case happened to read. */
+	/* A call that asks for no access code error correction builds no
+	   syndrome table, and fills the permutation table all the same: the
+	   two do not depend on each other. The whole table, not one entry: a
+	   table filled part way would answer for whichever entry a case
+	   happened to read. */
 	forget_the_table();
+	/* The table an earlier call built is left where it is: this process is
+	   about to end, and what matters here is that btbb_init(0) builds
+	   none of its own. */
+	syndrome_map = NULL;
 	CHECK(btbb_init(0) == 0);
+	CHECK(syndrome_map == NULL);
 	CHECK(perm_table_initialized == 1);
 	CHECK(entries_wrong() == 0);
 

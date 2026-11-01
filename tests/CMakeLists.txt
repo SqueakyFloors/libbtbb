@@ -50,9 +50,9 @@ target_compile_options(test_internal PRIVATE -std=gnu90)
 add_test(NAME internal COMMAND test_internal)
 set_tests_properties(internal PROPERTIES TIMEOUT 30)
 
-# The hop permutation table is internal too, and the test reads it before
-# anything has asked for a permutation, so it compiles both translation units
-# instead of linking the library.
+# The hop permutation table is file-static, and the test reads it before
+# anything has asked for a permutation, so it includes both library sources
+# into one translation unit of its own instead of linking the library.
 add_executable(test_perm_table test_perm_table.c)
 target_include_directories(test_perm_table PRIVATE ${PROJECT_SOURCE_DIR}/lib/src)
 target_compile_options(test_perm_table PRIVATE -std=gnu90)

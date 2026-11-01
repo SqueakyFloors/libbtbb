@@ -153,11 +153,23 @@ typedef struct btbb_packet btbb_packet;
  * btbb_piconet_set_uap() pass a value and need no such care.
  *
  * What is not safe on any thread but one: survey mode (see
- * btbb_init_survey() below), the malformed-payload counts, which
- * lell_print() keeps as it prints (see lell_malformed_count() below),
- * printing at all -- btbb_print_packet() and lell_print() write a line
- * in several calls and two threads would interleave them -- and one
- * capture file, whose handle belongs to the thread that writes it. */
+ * btbb_init_survey() below); the malformed-payload counts, which
+ * lell_print() keeps as it prints, and the setting that asks for their
+ * detail (see lell_malformed_count() and
+ * lell_set_malformed_verbose() below); one capture file, whose handle
+ * belongs to the thread that writes it; and printing.
+ *
+ * Printing needs saying twice, because it is not only the print calls.
+ * btbb_print_packet(), lell_print() and btbb_print_afh_map() write a
+ * line in several calls, so two threads interleave them. But UAP and
+ * clock discovery also writes its own progress to standard error from
+ * inside the decode -- btbb_process_packet(), btbb_uap_from_header(),
+ * btbb_winnow() and btbb_piconet_drop_clock() all report through it,
+ * and each note flushes standard output first to keep the two streams
+ * in order. So a caller decoding on several threads, one piconet each,
+ * has those notes interleaving and another thread's standard output
+ * being flushed under it. Serialize the printing, or send each
+ * thread's standard error somewhere of its own. */
 BTBB_API int btbb_init(int max_ac_errors);
 
 BTBB_API const char* btbb_get_release(void);

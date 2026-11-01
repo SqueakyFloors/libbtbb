@@ -216,8 +216,8 @@
   btbb_init() now fills it, and the header says what else a caller that
   decodes on several threads has to keep to itself.
 - Five string tables the low energy printer reads were writable where they
-  are never written; they are read-only now, which leaves the library seven
-  objects it shares between callers, all of them described in btbb.h.
+  are never written; they are read-only now. What the library does share
+  between callers is seven objects, and btbb.h describes each of them.
 
 _Russell Wagner &lt;152923636+SqueakyFloors@users.noreply.github.com&gt;, 30 Oct 2026 09:30:00 -0700_
 
