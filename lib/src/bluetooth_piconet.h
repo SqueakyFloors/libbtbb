@@ -52,6 +52,31 @@
 #define CLK27_CONFIRM_HOPS 4
 
 /*
+ * How many observed hops a CLK1-27 candidate may fail to explain and still
+ * stand.
+ *
+ * A packet reaches the search on its access code, which carries the LAP and
+ * nothing else, so a packet of some other piconet sharing this LAP - or a
+ * correlator match in noise - is taken for this piconet's and compared like
+ * any other hop.  The piconet's own channel map also moves while a capture
+ * runs, because a controller reclassifies channels as the band around it
+ * changes, and a hop that the map re-mapped before the change lands elsewhere
+ * after it.  Either way a hop arrives that the piconet's true clock cannot
+ * explain, and dropping a candidate on one disagreement drops the true clock
+ * with it: the search then has nothing left but wrong candidates, and the
+ * last of those standing is what it confirms.  Measured on a 180 s capture of
+ * an adapted link, where the clock is recoverable from the hops offline: with
+ * no misses allowed the search ends every attempt with the list emptied, and
+ * the one clock it did confirm was not the piconet's.
+ *
+ * The cost is the hops the narrowing takes.  A wrong candidate now survives a
+ * hop it cannot explain as well, so the list is longer for longer: a few more
+ * hops before one candidate is left, and the misses it was allowed are spent,
+ * so a hop it cannot explain after that ends the attempt.
+ */
+#define CLK27_ALLOWED_MISSES 2
+
+/*
  * How many packet headers in a row have to fail their HEC while following a
  * piconet before the clock the library recovered is given up.
  *
@@ -166,6 +191,11 @@ struct btbb_piconet {
 	/* CLK1-27 candidates */
 	uint32_t *clock_candidates;
 
+	/* Hops each candidate could not explain, one byte per candidate of
+	 * clock_candidates and the same length, counted against
+	 * CLK27_ALLOWED_MISSES. */
+	uint8_t *candidate_misses;
+
 	/* these values for single_hop() can be precalculated */
 	int b, e;
 
@@ -185,12 +215,26 @@ struct btbb_piconet {
 	/* number of candidates for CLK1-27 */
 	int num_candidates;
 
-	/* The hop sequence clock_candidates was chosen from: whether hop
-	 * selection was adapted to candidates_afh_map, and that map.  A
-	 * piconet whose map has moved on since would winnow against a
-	 * sequence it no longer follows. */
+	/* Whether hop selection was adapted to the piconet's map when
+	 * clock_candidates was chosen.  A piconet that has turned out to be
+	 * adapted since would winnow against the basic sequence, which it does
+	 * not follow. */
 	uint8_t candidates_afh;
-	uint8_t candidates_afh_map[10];
+
+	/* Where the last packet of this piconet was heard: the observer's
+	 * clock as CLK1-27 and the channel, with got_last_hop set once there
+	 * has been one.  The AFH test reads a channel repeated one slot later
+	 * from these, and they are kept across discovery starting over so that
+	 * a restart does not take the evidence with it. */
+	uint32_t last_hop_time;
+	uint8_t last_hop_channel;
+	uint8_t got_last_hop;
+
+	/* The last CLK1-6 offset discovery settled on, and whether it ever
+	 * has.  Kept across discovery starting over for the AFH test's slot
+	 * parity alone; see central_slot(). */
+	int settled_clk6_offset;
+	uint8_t got_settled_clk6;
 
 	/* number of packets observed during one attempt at UAP/clock discovery */
 	int packets_observed;
