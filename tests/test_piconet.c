@@ -187,6 +187,26 @@ static btbb_piconet *discovered(const uint8_t *map, int afh)
 	return pn;
 }
 
+/* The same, for another piconet's address: the hop sequence is the address's,
+ * so what the hops of one capture single out is too. */
+static btbb_piconet *discovered_as(uint32_t lap, uint8_t uap,
+				   const uint8_t *map, int afh)
+{
+	btbb_piconet *pn = btbb_piconet_new();
+
+	btbb_init_piconet(pn, lap);
+	btbb_piconet_set_uap(pn, uap);
+	btbb_piconet_set_flag(pn, BTBB_CLK6_VALID, 1);
+	btbb_piconet_set_flag(pn, BTBB_GOT_FIRST_PACKET, 1);
+	if (map != NULL)
+		memcpy(pn->afh_map, map, sizeof(pn->afh_map));
+	btbb_piconet_set_flag(pn, BTBB_IS_AFH, afh);
+	pn->got_settled_clk6 = 1;
+	precalc(pn);
+	address_precalc((((uint32_t) uap << 24) | lap) & 0xfffffff, pn);
+	return pn;
+}
+
 /* The channel a device with this piconet's address and map hops to. */
 static uint8_t channel_at(btbb_piconet *pn, uint32_t clk1_27)
 {
@@ -260,12 +280,12 @@ static void test_afh_candidates_fit_their_list(void)
 	count = btbb_init_hop_reversal(0, pn);
 	CHECK_EQ(count, pn->num_candidates);
 	CHECK(count > old_size);
-	/* The lists handed back are exactly as long as the count beside them,
-	 * whatever the sizes they grew through on the way. */
-	CHECK_EQ(sizeof(uint32_t) * (size_t) count,
-		 size_allocated(pn->clock_candidates));
-	CHECK_EQ(sizeof(struct clk27_fit) * (size_t) count,
-		 size_allocated(pn->candidate_fits));
+	/* Every candidate found is inside the lists handed back, which is
+	 * what the growing has to get right. */
+	CHECK(size_allocated(pn->clock_candidates) >=
+	      sizeof(uint32_t) * (size_t) count);
+	CHECK(size_allocated(pn->candidate_fits) >=
+	      sizeof(struct clk27_fit) * (size_t) count);
 	/*
 	 * No candidate the first hop rules out is in the list, and every one
 	 * starts with nothing to its name, so the lists were filled and not
@@ -969,10 +989,11 @@ static void test_the_clock_is_accepted_once_it_is_clearly_ahead(void)
 	}
 	CHECK(btbb_piconet_get_flag(pn, BTBB_CLK27_VALID));
 	/* Every hop agrees with the piconet's own clock and misses nothing,
-	 * so its score is the hops it has seen and it is accepted on the hop
-	 * that takes the score to CLK27_MIN_SCORE. */
-	CHECK_EQ(CLK27_MIN_SCORE, hops);
-	CHECK_EQ(CLK27_MIN_SCORE, pn->best_score);
+	 * so its score is the hops it has seen: it is clearly ahead from the
+	 * hop that takes the score to CLK27_MIN_SCORE, and accepted once the
+	 * lead has held for CLK27_LEAD_HOPS hops counted from there. */
+	CHECK_EQ(CLK27_MIN_SCORE + CLK27_LEAD_HOPS - 1, hops);
+	CHECK_EQ(CLK27_MIN_SCORE + CLK27_LEAD_HOPS - 1, pn->best_score);
 	CHECK(pn->best_score - pn->runner_up_score >= CLK27_SCORE_MARGIN);
 	CHECK_EQ(0, pn->clock_candidates[0]);
 	CHECK_EQ(0, pn->clk_offset);
@@ -1034,6 +1055,129 @@ static void test_a_wrong_clock_is_not_accepted_on_a_short_map(void)
 	CHECK_EQ(true_clock, pn->clock_candidates[0]);
 	CHECK_EQ(24, pn->used_channels);	/* the map completed on the way */
 	CHECK_EQ(0, pn->clk_offset);	/* the first packet was the true clock */
+	btbb_piconet_unref(pn);
+	btbb_piconet_unref(device);
+}
+
+/* Channels 0-39, as a device's map, and the same without channel 7, as the
+ * observer has heard it: the scenario tests/test_clock_sweep.c sweeps. */
+static const uint8_t MAP_40[10] = {0xff, 0xff, 0xff, 0xff, 0xff};
+static const uint8_t MAP_40_LESS_ONE[10] = {0x7f, 0xff, 0xff, 0xff, 0xff};
+
+/*
+ * A capture whose hops fit two clocks about equally ends with no clock, and
+ * the attempt is given up so that discovery starts over on a different first
+ * packet.
+ *
+ * Which captures those are depends on the address, the hop sequence being the
+ * address's: this LAP, UAP and clock were found by running the scenario of
+ * tests/test_clock_sweep.c over several of each.  Here the clock that leads is
+ * not the device's for long stretches, and no lead holds, so nothing is
+ * accepted - which is the whole point of the margin, a clock never confirmed
+ * being better for a caller than the wrong clock confirmed.
+ */
+static void test_hops_that_fit_two_clocks_accept_neither(void)
+{
+	const uint32_t lap = 0x9e8b33;
+	const uint8_t uap = 0x00;
+	const uint32_t true_clock = 0x1000000;
+	btbb_piconet *device = discovered_as(lap, uap, MAP_40, 1);
+	btbb_piconet *pn = discovered_as(lap, uap, MAP_40_LESS_ONE, 1);
+	uint32_t offset;
+	int a_wrong_clock_led = 0;
+	int hops = 0;
+
+	pn->first_pkt_time = true_clock;
+	pn->clk6_offset = 0;	/* so the known clock bits are true_clock's */
+	first_hop(pn, channel_at(device, true_clock));
+	CHECK(btbb_init_hop_reversal(0, pn) > 1);
+
+	/* The device's hops, four slots apart so each is a new slot pair. */
+	for (offset = 4; offset <= 4 * (CLK27_ATTEMPT_HOPS + 4); offset += 4) {
+		observe(pn, (int) offset,
+			channel_at(device, true_clock + offset));
+		hops++;
+		if (!btbb_piconet_get_flag(pn, BTBB_HOP_REVERSAL_INIT))
+			break;	/* the attempt was given up */
+		CHECK(!btbb_piconet_get_flag(pn, BTBB_CLK27_VALID));
+		if (pn->best_score > 0 && pn->best_clock != true_clock)
+			a_wrong_clock_led = 1;
+	}
+
+	/* the scenario really does put a wrong clock in front for a while */
+	CHECK(a_wrong_clock_led);
+	/* and the search ends with no clock, having given the attempt up
+	 * rather than grind on hops that cannot decide */
+	CHECK(!btbb_piconet_get_flag(pn, BTBB_CLK27_VALID));
+	CHECK(!btbb_piconet_get_flag(pn, BTBB_HOP_REVERSAL_INIT));
+	CHECK_EQ(0, pn->num_candidates);
+	/* winnowed counts the hop the candidates were chosen from, so the
+	 * attempt has one fewer observation of its own than its budget. */
+	CHECK_EQ(CLK27_ATTEMPT_HOPS - 1, hops);
+	btbb_piconet_unref(pn);
+	btbb_piconet_unref(device);
+}
+
+/*
+ * The two clocks drift apart as a capture runs, and the search follows: the
+ * clock it accepts is where the device's has moved to, not where it was when
+ * the candidates were chosen.
+ *
+ * The device here runs one slot pair fast for every CLK27_DRIFT_SLOTS of the
+ * observer's clock, up to the two pairs CLK27_MAX_DRIFT_STEPS allows, which is
+ * about the fastest drift the bound accounts for.  The hops are spaced so that
+ * the first of them arrive before any drift can be earned, and the test checks
+ * both halves of that: no candidate moves while the observation is too short
+ * to account for a move, and the clock accepted in the end has moved.
+ */
+static void test_the_search_follows_the_clocks_drifting_apart(void)
+{
+	btbb_piconet *device = discovered_as(TEST_LAP, TEST_UAP, MAP_40, 1);
+	btbb_piconet *pn = discovered_as(TEST_LAP, TEST_UAP,
+					 MAP_40_LESS_ONE, 1);
+	const uint32_t true_clock = 0x1000000;
+	const int spacing = CLK27_DRIFT_SLOTS / 16;
+	uint32_t offset;
+	int i;
+
+	pn->first_pkt_time = true_clock;
+	pn->clk6_offset = 0;
+	first_hop(pn, channel_at(device, true_clock));
+	CHECK(btbb_init_hop_reversal(0, pn) > 1);
+
+	for (offset = (uint32_t) spacing;
+	     offset <= (uint32_t) spacing * 200;
+	     offset += (uint32_t) spacing) {
+		/* where the device's clock has drifted to by now */
+		int steps = (int) (offset / CLK27_DRIFT_SLOTS);
+
+		if (steps > CLK27_MAX_DRIFT_STEPS)
+			steps = CLK27_MAX_DRIFT_STEPS;
+		observe(pn, (int) offset,
+			channel_at(device,
+				   true_clock + offset + (uint32_t) (2 * steps)));
+		if (!btbb_piconet_get_flag(pn, BTBB_HOP_REVERSAL_INIT))
+			break;	/* every candidate was dropped */
+		if (offset < CLK27_DRIFT_SLOTS) {
+			/* too early for any of them to have drifted */
+			for (i = 0; i < pn->num_candidates; i++)
+				CHECK_EQ(0, pn->candidate_fits[i].drift);
+		}
+		if (btbb_piconet_get_flag(pn, BTBB_CLK27_VALID))
+			break;
+	}
+
+	CHECK(btbb_piconet_get_flag(pn, BTBB_CLK27_VALID));
+	CHECK_EQ(1, pn->num_candidates);
+	if (pn->clock_candidates == NULL)
+		goto out;
+	/* The clock accepted is the device's as it now reads, two pairs on
+	 * from where the candidates were chosen. */
+	CHECK_EQ(true_clock + 2 * CLK27_MAX_DRIFT_STEPS,
+		 pn->clock_candidates[0]);
+	/* and the offset the caller is given says the same, in CLKN ticks */
+	CHECK_EQ(4 * CLK27_MAX_DRIFT_STEPS, pn->clk_offset);
+out:
 	btbb_piconet_unref(pn);
 	btbb_piconet_unref(device);
 }
@@ -2934,6 +3078,8 @@ int main(void)
 	test_an_allocation_failure_partway_through_the_list();
 	test_the_clock_is_accepted_once_it_is_clearly_ahead();
 	test_a_wrong_clock_is_not_accepted_on_a_short_map();
+	test_hops_that_fit_two_clocks_accept_neither();
+	test_the_search_follows_the_clocks_drifting_apart();
 	test_discovery_notes_go_to_stderr();
 	test_discovery_complaints_go_to_stderr();
 	test_aliased_hop_reversal_is_refused();

@@ -79,6 +79,22 @@
 #define CLK27_SCORE_MARGIN 4
 
 /*
+ * How many hops in a row one clock has to stay clearly ahead before it is
+ * accepted.
+ *
+ * A lead measured on one hop can be luck.  Two clocks whose predictions agree
+ * over the stretch observed so far trade places as the hops come in, and
+ * either of them can be a few agreements up at the moment the margin is
+ * looked at.  Measured over 18 address and clock combinations, a lead that was
+ * only a hop old accepted a clock that was not the device's in one of them, at
+ * a score of 15 against 11.  A lead that has held while this many further hops
+ * arrived is a different thing: each of them is another chance for the other
+ * clock to catch up, and the clock that really explains the capture pulls away
+ * instead.
+ */
+#define CLK27_LEAD_HOPS 8
+
+/*
  * How far the observer's clock and the piconet's may be taken to have drifted
  * apart since the candidates were chosen, in 625 us slot pairs.
  *
@@ -91,24 +107,34 @@
  * invisible - the same channel mechanism gives both slots of a pair the same
  * channel - so a drift that changes a prediction at all changes it by a pair.
  *
- * Each candidate carries its own drift, which starts at none and moves by one
- * pair at a time, and only when the hop in front of it does not fit without
- * moving.  Two things hold it to what a clock can really do, and both matter:
- * without them a candidate may slide a pair either way at every hop, which
- * reaches far enough to explain almost any capture.  Measured on the
- * synthetic sweep, that let a clock 0x2140400 away from the piconet's explain
- * 101 of its 101 checkable hops, exactly as many as the piconet's own.
+ * Each candidate carries its own drift, counted in steps away from where it
+ * started.  A step is one 625 us slot, or a pair of them under adapted
+ * hopping, where the same channel mechanism gives both slots of a pair one
+ * channel so a single slot changes no prediction.
  *
- * It takes CLK27_DRIFT_SLOTS of observation to earn each pair, so a candidate
+ * Three things hold the drift to what a clock can really do, and each closes
+ * a way the search would otherwise go wrong.
+ *
+ * Each step takes CLK27_DRIFT_SLOTS of observation to earn, so a candidate
  * cannot have drifted further than the capture has had time to drift.  16384
  * slots is 10 seconds, which allows about 6 slots a minute where the bench
- * measures 1, and leaves a short capture no drift at all.
+ * measures 1, and leaves a short capture no drift at all.  Without it a
+ * candidate may slide at every hop, which reaches far enough to explain almost
+ * any capture: on the synthetic sweep that let a clock 0x2140400 away from the
+ * device's explain all 101 of its checkable hops, exactly as many as the
+ * device's own.
  *
- * And the drift only ever moves away from where it started, because one of
- * the two clocks runs faster than the other and keeps doing so.  A candidate
+ * A step is taken only when two hops have agreed at it.  One hop agrees a step
+ * out by chance about once in 79, and a step is never given back, so a
+ * candidate that moved on a chance agreement misses every checkable hop
+ * afterwards and dies - which for the piconet's own clock is the search
+ * throwing away the right answer.
+ *
+ * And the drift only ever moves away from where it started, because one of the
+ * two clocks runs faster than the other and keeps doing so.  A candidate
  * cannot wander back and forth looking for a fit.
  */
-#define CLK27_MAX_DRIFT_PAIRS 2
+#define CLK27_MAX_DRIFT_STEPS 2
 #define CLK27_DRIFT_SLOTS 16384
 
 /*
@@ -229,7 +255,8 @@
 struct clk27_fit {
 	uint8_t agreements;	/* hops the candidate predicted exactly */
 	uint8_t misses;		/* hops it was definitely wrong about */
-	int8_t drift;		/* slot pairs, within CLK27_MAX_DRIFT_PAIRS */
+	int8_t drift;		/* steps, within CLK27_MAX_DRIFT_STEPS */
+	int8_t pending;		/* a step one hop has agreed at, not yet taken */
 };
 
 struct btbb_piconet {
@@ -263,11 +290,19 @@ struct btbb_piconet {
 	 *
 	 * The list is at its longest when the observer has heard little of
 	 * the piconet's map, because then most predictions land on a channel
-	 * it cannot check and almost nothing is ruled out.  The ceiling is
-	 * the whole search space, 2^21 clock values, which with the list
-	 * itself is 15 MB; a link using most of the band leaves well under a
-	 * megabyte.  Carrying those candidates is the point: that is where
-	 * the piconet's own clock is.
+	 * it cannot check and almost nothing is ruled out.  Measured: 1592763
+	 * candidates at the 20 used channels AFH is defined for, 1061611 at
+	 * 40, and 26623 where all 79 are used and every hop can be checked.
+	 * With the clock values beside them that is 12.7 MB, 8.5 MB and
+	 * 213 kB.  Carrying those candidates is the point: that is where the
+	 * piconet's own clock is.
+	 *
+	 * It costs the caller time as well as memory, in the packet callback:
+	 * about 29 ms to score one hop against a fresh 40-channel list, and
+	 * about 180 ms over a whole attempt as the list narrows, against
+	 * about 2 ms before.  The library walks 2^21 clock values once per
+	 * attempt either way, and the search now needs far fewer attempts, so
+	 * a capture costs less overall.
 	 */
 	struct clk27_fit *candidate_fits;
 
@@ -327,10 +362,15 @@ struct btbb_piconet {
 	 * candidate now stands for, its score, and the score of the best of
 	 * the others, which is what CLK27_SCORE_MARGIN is measured between.
 	 * Kept so that a caller or a test can see how close the search came
-	 * and to which clock. */
+	 * and to which clock.  They describe the state num_candidates counts,
+	 * so they mean nothing while that is zero. */
 	uint32_t best_clock;
 	int best_score;
 	int runner_up_score;
+
+	/* Hops in a row that the same clock has been clearly ahead for,
+	 * counted against CLK27_LEAD_HOPS. */
+	int lead_hops;
 
 	/* True once hop reversal has accepted a clock for this piconet, which
 	 * is the clock that can be given up again.  A caller that set the
