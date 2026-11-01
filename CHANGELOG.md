@@ -45,6 +45,9 @@
   index; the index is now bounded.
 - Manufacturer-specific data names 4133 companies from the Bluetooth SIG's
   published Assigned Numbers, where BlueZ's gave 1038, and keeps the 73.
+- New btbb_company_name() gives a program that same table: it returns the
+  name the SIG assigns a company identifier, or NULL where the identifier is
+  not assigned.
 - Fixed: LE decode complaints went into the packet dump on standard output;
   they now go to standard error, unchanged in wording.
 

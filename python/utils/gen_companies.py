@@ -90,15 +90,16 @@ def main(argv):
                     header)
 
     out = [header, "#include <stdint.h>\n", "\n",
-           "const char *bt_compidtostr(uint16_t compid)\n", "{\n",
-           "\tswitch (compid) {\n"]
+           '#include "btbb.h"\n', "\n",
+           "BTBB_API const char *btbb_company_name(uint16_t id)\n", "{\n",
+           "\tswitch (id) {\n"]
     for value in sorted(table):
         out.append("\tcase %d:\n" % value)
         out.append('\t\treturn "%s";\n' % escape(table[value]))
     out += ["\tcase %d:\n" % SPECIAL,
             '\t\treturn "internal use";\n',
             "\tdefault:\n",
-            '\t\treturn "not assigned";\n',
+            "\t\treturn NULL;\n",
             "\t}\n", "}\n"]
     with open(c_path, "w", encoding="utf-8") as f:
         f.writelines(out)

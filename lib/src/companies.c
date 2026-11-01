@@ -33,9 +33,11 @@
 
 #include <stdint.h>
 
-const char *bt_compidtostr(uint16_t compid)
+#include "btbb.h"
+
+BTBB_API const char *btbb_company_name(uint16_t id)
 {
-	switch (compid) {
+	switch (id) {
 	case 0:
 		return "Ericsson AB";
 	case 1:
@@ -8305,6 +8307,6 @@ const char *bt_compidtostr(uint16_t compid)
 	case 65535:
 		return "internal use";
 	default:
-		return "not assigned";
+		return NULL;
 	}
 }

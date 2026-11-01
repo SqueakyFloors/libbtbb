@@ -24,10 +24,7 @@ set_tests_properties(le_print PROPERTIES TIMEOUT 30)
 # through a plain char reads differently there than on the x86 and Apple
 # hosts, and CI runs on the latter, so this is how the ARM reading is
 # checked at all.
-# The company identifier table comes with it: the printer calls into it,
-# and the library does not export that function.
-add_executable(test_le_print_unsigned_char test_le_print.c
-               ${PROJECT_SOURCE_DIR}/lib/src/companies.c)
+add_executable(test_le_print_unsigned_char test_le_print.c)
 target_include_directories(test_le_print_unsigned_char
                            PRIVATE ${PROJECT_SOURCE_DIR}/lib/src)
 target_compile_options(test_le_print_unsigned_char
@@ -65,8 +62,9 @@ add_test(NAME esco COMMAND test_esco)
 # sanitizer build takes twice as long over.
 set_tests_properties(esco PROPERTIES TIMEOUT 60)
 
-# The company identifier table. Its one function is internal, so this
-# compiles the translation unit it lives in.
+# The company identifier table, which btbb_company_name() reads. This
+# compiles the translation unit it lives in, so a table built without the
+# library is covered too.
 add_executable(test_companies test_companies.c)
 target_include_directories(test_companies PRIVATE ${PROJECT_SOURCE_DIR}/lib/src)
 target_compile_options(test_companies PRIVATE -std=gnu90)

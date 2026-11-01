@@ -40,9 +40,6 @@
 typedef char le_symbol_buffer_is_the_longest_frame[
 	(MAX_LE_SYMBOLS == LE_MAX_PDU_LENGTH + LE_FRAMING_BYTES) ? 1 : -1];
 
-/* company identifier lookup */
-const char *bt_compidtostr(uint16_t compid);
-
 /* How many malformed payloads of each kind lell_print() has met. Malformed
  * advertising data arrives by the hundred in a ten-second capture, so the
  * count is what a caller reads at the end of a run; see btbb.h. */
@@ -751,7 +748,9 @@ print128:
 				printf(" (Manufacturer Specific Data)\n");
 				if (sublen - 1 >= 2) {
 					uint16_t company = (buf[pos+2] << 8) | buf[pos+1];
-					printf("           Company: %s\n", bt_compidtostr(company));
+					const char *company_name = btbb_company_name(company);
+					printf("           Company: %s\n",
+					       company_name ? company_name : "not assigned");
 					printf("           ");
 					printf("Data:");
 					for (i = 3; i < sublen; ++i)

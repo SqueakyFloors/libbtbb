@@ -120,6 +120,15 @@ BTBB_API int btbb_init(int max_ac_errors);
 BTBB_API const char* btbb_get_release(void);
 BTBB_API const char* btbb_get_version(void);
 
+/* The name the Bluetooth SIG gives a company identifier, the number that
+ * appears in Manufacturer Specific Data and in the manufacturer field of an
+ * inquiry result, or NULL where the identifier is not assigned. 0xFFFF reads
+ * "internal use", which is what the SIG reserves it for. The table holds
+ * every identifier the SIG lists, and also the ones it has since withdrawn,
+ * so that a capture of an older device still decodes by name. The string
+ * belongs to the library; the caller must not free it. */
+BTBB_API const char *btbb_company_name(uint16_t id);
+
 BTBB_API btbb_packet *btbb_packet_new(void);
 BTBB_API void btbb_packet_ref(btbb_packet *pkt);
 BTBB_API void btbb_packet_unref(btbb_packet *pkt);

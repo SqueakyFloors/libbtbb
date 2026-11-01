@@ -1,7 +1,7 @@
 /*
- * The company identifier table: that an identifier assigned since the table
- * was last taken from BlueZ decodes by name, that the names the earlier table
- * carried are still there, and that an unassigned identifier says so.
+ * btbb_company_name(): that an identifier assigned since the table was last
+ * taken from BlueZ decodes by name, that the names the earlier table carried
+ * are still there, and that an unassigned identifier comes back as NULL.
  *
  * This file is part of libbtbb
  *
@@ -30,11 +30,24 @@ static int failures = 0;
 
 #define CHECK_NAME(compid, want)                                           \
 	do {                                                               \
-		const char *got = bt_compidtostr((uint16_t)(compid));      \
-		if (strcmp(got, (want)) != 0) {                            \
-			printf("FAIL %s:%d: 0x%04X is \"%s\", wanted \"%s\"\n", \
+		const char *got = btbb_company_name((uint16_t)(compid));   \
+		if (got == NULL || strcmp(got, (want)) != 0) {              \
+			printf("FAIL %s:%d: 0x%04X is %s%s%s, wanted \"%s\"\n", \
 			       __FILE__, __LINE__, (unsigned)(compid),     \
-			       got, (want));                               \
+			       got ? "\"" : "", got ? got : "NULL",        \
+			       got ? "\"" : "", (want));                   \
+			++failures;                                        \
+		}                                                          \
+	} while (0)
+
+/* An identifier the Bluetooth SIG has not assigned has no name at all. */
+#define CHECK_UNASSIGNED(compid)                                           \
+	do {                                                               \
+		const char *got = btbb_company_name((uint16_t)(compid));   \
+		if (got != NULL) {                                         \
+			printf("FAIL %s:%d: 0x%04X is not assigned but "   \
+			       "names \"%s\"\n",                          \
+			       __FILE__, __LINE__, (unsigned)(compid), got); \
 			++failures;                                        \
 		}                                                          \
 	} while (0)
@@ -50,7 +63,7 @@ static int failures = 0;
 #define NAMED_AT_LEAST 4000
 
 /* Identifiers the Bluetooth SIG assigned after the table was last taken from
- * BlueZ, which earlier releases decoded as "not assigned". */
+ * BlueZ, which earlier releases had no name for. */
 static void test_recently_assigned_identifiers_decode_by_name(void)
 {
 	CHECK_NAME(0x113D, "Venndelta Pty Ltd");
@@ -96,11 +109,14 @@ static void test_a_name_outside_ascii_stays_intact(void)
 static void test_unassigned_and_reserved_identifiers(void)
 {
 	/* Gaps inside the assigned range, and everything above it. */
-	CHECK_NAME(0x0414, "not assigned");
-	CHECK_NAME(0x1036, "not assigned");
-	CHECK_NAME(HIGHEST_ASSIGNED + 1, "not assigned");
-	CHECK_NAME(0xFFFE, "not assigned");
+	CHECK_UNASSIGNED(0x0414);
+	CHECK_UNASSIGNED(0x1036);
+	CHECK_UNASSIGNED(HIGHEST_ASSIGNED + 1);
+	CHECK_UNASSIGNED(0xFFFE);
 
+	/* The last entry of the table, and the one identifier above the
+	 * assigned range that does have a name. */
+	CHECK_NAME(HIGHEST_ASSIGNED, "Venndelta Pty Ltd");
 	CHECK_NAME(0xFFFF, "internal use");
 }
 
@@ -116,12 +132,14 @@ static void test_the_whole_identifier_range(void)
 	int said_above = 0;
 
 	for (compid = 0; compid <= 0xFFFF; ++compid) {
-		const char *name = bt_compidtostr((uint16_t)compid);
+		const char *name = btbb_company_name((uint16_t)compid);
 
-		if (name == NULL || name[0] == '\0') {
+		if (name == NULL)
+			continue;
+		if (name[0] == '\0') {
 			if (!said_empty) {
-				printf("FAIL %s:%d: 0x%04X has no name at "
-				       "all\n",
+				printf("FAIL %s:%d: 0x%04X has an empty "
+				       "name\n",
 				       __FILE__, __LINE__, compid);
 				++failures;
 				said_empty = 1;
@@ -129,15 +147,14 @@ static void test_the_whole_identifier_range(void)
 			continue;
 		}
 		if (compid > HIGHEST_ASSIGNED && compid != 0xFFFF) {
-			if (strcmp(name, "not assigned") != 0 && !said_above) {
+			if (!said_above) {
 				printf("FAIL %s:%d: 0x%04X is above the "
 				       "assigned range but names \"%s\"\n",
 				       __FILE__, __LINE__, compid, name);
 				++failures;
 				said_above = 1;
 			}
-		} else if (compid <= HIGHEST_ASSIGNED &&
-			   strcmp(name, "not assigned") != 0) {
+		} else if (compid <= HIGHEST_ASSIGNED) {
 			++named;
 		}
 	}
