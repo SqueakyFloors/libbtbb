@@ -65,8 +65,19 @@
   failed headers, or 10 after two seconds, now give BTBB_PROCESS_LOCK_LOST.
 - New btbb_piconet_drop_clock() hands back a clock whose only symptom is
   silence; a clock given up is not chosen again, and a caller's is kept.
-- Fixed: clock recovery accepted a wrong clock too readily; it now needs
-  four further hops to agree, which accepts a wrong one a tenth as often.
+- Fixed: clock recovery accepted whichever candidate was last standing,
+  which against an adaptive piconet was often a wrong one; candidates are
+  now scored on the hops they explain and a clock is accepted only while it
+  is clearly ahead of every other, so a search that cannot tell two clocks
+  apart ends with none rather than with the wrong one.
+- Fixed: a hop predicted on a channel the observer had not yet heard ruled a
+  candidate out, and so ruled out the piconet's own clock while its map was
+  still being learned; such a hop now counts neither way, and the two clocks
+  drifting apart is followed instead of costing the clock.
+- The clock search costs more while it runs: it carries up to a few million
+  candidates where it carried tens of thousands, which is tens of megabytes
+  and up to a few hundred milliseconds of an attempt inside the caller's
+  packet callback.
 - Fixed: a piconet that nothing works for was reported on every loss; it is
   now reported once, after three clocks are given up.
 - Fixed: btbb_piconet_get_clk_offset() read 0 until the whole clock was
