@@ -830,6 +830,8 @@ int btbb_init_hop_reversal(int aliased, btbb_piconet *pn)
 	 * cannot be mistaken for one, which 0 could be. */
 	pn->best_clock = SEQUENCE_LENGTH;
 	pn->candidates_afh = (uint8_t) btbb_piconet_get_flag(pn, BTBB_IS_AFH);
+	pn->candidates_unheard = (uint8_t) (BT_NUM_CHANNELS -
+					    pn->used_channels);
 	btbb_piconet_set_flag(pn, BTBB_HOP_REVERSAL_INIT, 1);
 	btbb_piconet_set_flag(pn, BTBB_CLK27_VALID, 0);
 	/* The whole clock is being searched for again, so an offset left from
@@ -1117,19 +1119,43 @@ static int score_candidates(int offset, char channel, btbb_piconet *pn)
  * Would the piconet's hops now be predicted from a different sequence than
  * the candidates were chosen from?
  *
- * Only the basic sequence against the adapted one.  A channel the map gains
- * does not supersede the candidates: under adapted hopping a candidate is
- * only ever ruled out where the map already held the channel its hop was
- * compared against, so a comparison made under a smaller map is one the
- * larger map makes too, and the candidates that survived it still stand.
- * (Before, every new channel meant choosing them again - a walk over 2^21
- * clock values and a re-comparison of every remembered hop - and during
- * discovery a channel is heard for the first time often.)
+ * Two things do.  The basic sequence turning out to be the adapted one, which
+ * is a different sequence altogether and leaves the piconet's clock out of a
+ * list chosen from the other.
+ *
+ * And the map halving the channels the observer has not heard.  Those
+ * channels are what the search cannot check, and the list is about as long as
+ * their share of the band: candidates chosen from the first packet of a
+ * capture, when the observer has heard five channels, number two million,
+ * where the same walk under a map of seventy-six finds a hundred thousand.
+ * Carrying the two million is what keeps the piconet's clock in the list, but
+ * a hop then rules out one candidate in twenty instead of nineteen, and a
+ * capture of a few hundred packets runs out before the list does: measured on
+ * the bench, a search carrying two million candidates chosen at the second
+ * packet reached no clock in four minutes where the same packets under a
+ * learned map do.  So the list is chosen again whenever the unheard channels
+ * have halved, which halves the list with them, and the hops remembered so
+ * far are scored against the new one.
+ *
+ * A candidate is only ever ruled out on a channel the map already held, so
+ * choosing again under a larger map keeps the piconet's own clock: the hop
+ * the candidates come from either lands on a channel the piconet kept, where
+ * that clock agrees, or on one it re-mapped, which the observer can only have
+ * heard from something other than this piconet.  Halving rather than every
+ * new channel is what keeps the cost down: the walk is 2^21 clock values, and
+ * during discovery a channel is heard for the first time often.
  */
 static int candidates_superseded(btbb_piconet *pn)
 {
-	return pn->candidates_afh !=
-		(uint8_t) btbb_piconet_get_flag(pn, BTBB_IS_AFH);
+	int unheard = BT_NUM_CHANNELS - (int) pn->used_channels;
+
+	if (pn->candidates_afh !=
+	    (uint8_t) btbb_piconet_get_flag(pn, BTBB_IS_AFH))
+		return 1;
+	if (!pn->candidates_afh)
+		return 0;	/* the basic sequence, whatever the map says */
+	return pn->candidates_unheard > 0 &&
+		unheard * 2 <= (int) pn->candidates_unheard;
 }
 
 /*

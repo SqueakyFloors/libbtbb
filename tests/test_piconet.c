@@ -629,6 +629,7 @@ static void test_candidates_rechosen_only_for_a_new_sequence(void)
 	/* Channels 0-17, below the minimum AFH is defined for. */
 	static const uint8_t map_18[10] = {0xff, 0xff, 0x03};
 	btbb_piconet *pn = discovered(NULL, 0);
+	int channel;
 
 	first_hop(pn, channel_at(pn, 0));
 	CHECK(btbb_init_hop_reversal(0, pn) > 1);
@@ -656,6 +657,18 @@ static void test_candidates_rechosen_only_for_a_new_sequence(void)
 	CHECK_EQ(1, btbb_piconet_set_channel_seen(pn, 21));
 	CHECK_EQ(AFH_MIN_USED_CHANNELS, pn->used_channels);
 	CHECK(!candidates_superseded(pn));
+	/* What does is the map halving the channels the observer has not
+	 * heard, because that halves the candidates a hop cannot check: here
+	 * 61 unheard when they were chosen, so the channel that takes the
+	 * unheard down to 30 is the one that supersedes them. */
+	CHECK_EQ(61, pn->candidates_unheard);
+	for (channel = 22; channel < 22 + 28; channel++)
+		CHECK_EQ(1, btbb_piconet_set_channel_seen(pn, channel));
+	CHECK_EQ(31, BT_NUM_CHANNELS - pn->used_channels);
+	CHECK(!candidates_superseded(pn));
+	CHECK_EQ(1, btbb_piconet_set_channel_seen(pn, 50));
+	CHECK_EQ(30, BT_NUM_CHANNELS - pn->used_channels);
+	CHECK(candidates_superseded(pn));
 	btbb_piconet_unref(pn);
 
 	/* An adapted sequence, and a map differing only in the reserved bit

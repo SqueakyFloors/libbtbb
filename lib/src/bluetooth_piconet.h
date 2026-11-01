@@ -352,6 +352,13 @@ struct btbb_piconet {
 	 * only ever ruled out on a channel the map already held. */
 	uint8_t candidates_afh;
 
+	/* How many channels the observer had not heard when clock_candidates
+	 * was chosen.  Every one of them makes a hop the search cannot check,
+	 * so the list is roughly that long: the candidates are chosen again
+	 * once the map has halved the number, which halves the list with
+	 * it. */
+	uint8_t candidates_unheard;
+
 	/* Where the last packet of this piconet was heard: the observer's
 	 * clock as CLK1-27 and the channel, with got_last_hop set once there
 	 * has been one.  The adapted-hopping test reads a channel repeated
