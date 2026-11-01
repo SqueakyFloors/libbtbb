@@ -29,6 +29,7 @@
  */
 
 #include <stdio.h>
+#include <string.h>
 
 #include "bluetooth_packet.c"
 #include "bluetooth_piconet.c"
@@ -78,6 +79,16 @@ int main(void)
 	/* A second btbb_init() leaves the table alone, as it leaves the
 	   syndrome map alone. */
 	CHECK(btbb_init(2) == 0);
+	CHECK(fast_perm(0x15, 0x0a, 0x123) == perm5(0x15, 0x0a, 0x123));
+
+	/* The table does not depend on the syndrome map: a call that asks for
+	   no access code error correction builds none, and the table is
+	   filled all the same. It is filled before anything in btbb_init()
+	   can fail, so a call that reports an error has left it whole too. */
+	perm_table_initialized = 0;
+	memset(perm_table, 0, sizeof(perm_table));
+	CHECK(btbb_init(0) == 0);
+	CHECK(perm_table_initialized == 1);
 	CHECK(fast_perm(0x15, 0x0a, 0x123) == perm5(0x15, 0x0a, 0x123));
 
 	if (failures) {

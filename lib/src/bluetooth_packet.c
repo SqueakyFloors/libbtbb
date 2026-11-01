@@ -327,6 +327,16 @@ int btbb_init(int max_ac_errors)
 		return -1;
 	}
 
+	/* The hop permutation table, beside the syndrome map: both are
+	 * read-only once built, so building them here is what lets a caller
+	 * decode on several threads.
+	 *
+	 * First, because it cannot fail: the table is storage this library
+	 * already owns and filling it only computes. The syndrome map below
+	 * allocates and can leave this call reporting an error, and that must
+	 * not be the difference between a whole table and an empty one. */
+	perm_table_init();
+
 	if ((syndrome_map == NULL) && (max_ac_errors)) {
 		if (!gen_syndrome_map(max_ac_errors)) {
 			fprintf(stderr, "%s: no memory for the access code "
@@ -334,11 +344,6 @@ int btbb_init(int max_ac_errors)
 			return -1;
 		}
 	}
-
-	/* The hop permutation table, beside the syndrome map: both are
-	 * read-only once built, so building them here is what lets a caller
-	 * decode on several threads. */
-	perm_table_init();
 
 	return 0;
 }

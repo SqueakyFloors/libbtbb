@@ -120,7 +120,11 @@ typedef struct btbb_packet btbb_packet;
  * the library shares between callers is in place before any of them
  * runs. That is what a caller that decodes on more than one thread
  * needs: call this once, from one thread, and let it return before
- * starting the others. The tables are read-only from then on.
+ * starting the others. The tables are read-only from then on. The
+ * permutation table is built before anything here can fail, so a call
+ * that returns an error has still left that table whole; the error is
+ * about the syndrome table, and a caller that goes on without one
+ * decodes nothing.
  *
  * What is safe after that: one btbb_piconet per thread, and the
  * packets that belong to it. A piconet is not internally locked, so
