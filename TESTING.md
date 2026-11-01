@@ -53,10 +53,12 @@ of its seeds are runs of the specification's DH1 packet on the channels that
 piconet's hop sequence really puts it on, which is what carries a run as far
 as the follow.
 
-That target runs at tens of inputs a second where the others run at
-thousands, because choosing candidate clocks walks the whole CLK7-27 space
-once, so the minute CI gives it is a smoke test rather than a campaign. Run it
-with `-max_len=1407`, which is the 48 packet records it reads and no more.
+That target is far slower than the others, because choosing candidate clocks
+walks the whole CLK7-27 space, and a new channel seen while hopping supersedes
+the candidates and walks it again: CI's one-minute run of it manages a hundred
+or so inputs where the LE target manages a million. Treat that minute as a
+smoke test rather than a campaign, and run it with `-max_len=1407`, which is
+the 48 packet records it reads and no more.
 
 Each target is built only where the compiler can build a libFuzzer program, so
 a gcc build, or one with the clang Apple ships, is unaffected and simply has no

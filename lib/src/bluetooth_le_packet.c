@@ -29,6 +29,7 @@
 #include "bluetooth_le_packet.h"
 #include <assert.h>
 #include <ctype.h>
+#include <inttypes.h>
 #include <stdarg.h>
 #include <string.h>
 
@@ -678,10 +679,11 @@ print32:
 						(uint32_t) buf[pos+3+i] << 16 |
 						(uint32_t) buf[pos+2+i] << 8 |
 						(uint32_t) buf[pos+1+i];
-					/* %x takes an unsigned int, which a
-					 * uint32_t is not on every host */
-					printf("           %08x\n",
-					       (unsigned) uuid);
+					/* the conversion for a uint32_t, which
+					 * plain %x is only on a host where
+					 * unsigned int is 32 bits wide */
+					printf("           %08" PRIx32 "\n",
+					       uuid);
 				}
 				if ((sublen - 1) % 4 != 0) {
 					_malformed(LELL_MALFORMED_AD_FIELD_LENGTH,

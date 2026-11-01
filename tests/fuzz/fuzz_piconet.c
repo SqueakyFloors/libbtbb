@@ -31,15 +31,22 @@
  *   bytes 5-14  the AFH channel map, one bit per channel
  *   rest        a run of packet records, each PACKET_RECORD_BYTES long:
  *                 byte 0      the channel the packet arrived on
- *                 bytes 1-4   how far the observer's clock has moved on
- *                             since the packet before, in 312.5 us CLKN
- *                             ticks, least significant byte first
+ *                 bytes 1-4   the first record's own clock, in 312.5 us
+ *                             CLKN ticks; after that, how far the clock has
+ *                             moved on since the packet before, of which
+ *                             only the low 16 bits are read. Least
+ *                             significant byte first.
  *                 bytes 5-28  the symbol stream, 8 symbols to a byte
  *
- * The clock is a step rather than a value because a receiver's clock only
- * runs forward, apart from the wrap every 2^28 ticks, and recovery remembers
- * the difference between each packet's clock and the first one's. A run whose
- * clocks jumped backwards would hand it slot offsets no receiver produces.
+ * After the first packet the clock is a step rather than a value, because a
+ * receiver's clock only runs forward and recovery remembers the difference
+ * between each packet's clock and the first one's. A run whose clocks jumped
+ * backwards would hand it slot offsets no receiver produces. The step is
+ * bounded at 16 bits, about 20 seconds of CLKN, so that no single step can
+ * carry the clock past the 28-bit wrap and come out looking like a jump
+ * backwards. The first record's clock is the whole 28 bits, so a run can sit
+ * anywhere in the clock space; one that starts near the top of it still
+ * wraps part way through, as a receiver's clock does.
  *
  * Notes about how recovery is getting on go to standard error, which a run
  * leaves open so that a sanitizer's report is in the log. A long campaign
@@ -83,6 +90,10 @@
  * is not a clock a receiver could report. */
 #define CLKN_MASK 0x0fffffff
 
+/* How far one record may carry the clock on from the one before: 16 bits,
+ * about 20 seconds, which is less than the wrap above by a wide margin. */
+#define CLKN_STEP_MASK 0xffff
+
 int LLVMFuzzerInitialize(int *argc, char ***argv)
 {
 	(void) argc;
@@ -92,11 +103,17 @@ int LLVMFuzzerInitialize(int *argc, char ***argv)
 	return 0;
 }
 
-/* One packet from the record at 'record', delivered to the piconet. Takes the
- * clock of the packet before and returns this one's. */
+/*
+ * One packet from the record at 'record', delivered to the piconet. Takes the
+ * clock of the packet before and returns this one's.
+ *
+ * '*recorded' is set to whether the packet carried a header, which is the
+ * condition btbb_process_packet() takes a packet into recovery on, so it says
+ * whether this packet became one of the hops the candidate search works from.
+ */
 static uint32_t process_one(const uint8_t *record, uint32_t lap, uint8_t uap,
-			    int whitened, uint32_t clkn_before,
-			    btbb_piconet *pn)
+			    int whitened, int first, uint32_t clkn_before,
+			    int *recorded, btbb_piconet *pn)
 {
 	char symbols[MAX_SYMBOLS];
 	struct fuzz_input in;
@@ -111,15 +128,23 @@ static uint32_t process_one(const uint8_t *record, uint32_t lap, uint8_t uap,
 	/* the 79 channels and the 28-bit clock the interface defines, so that
 	 * what is fuzzed is what a receiver could report */
 	channel = (uint8_t) (fz_u8(&in) % BT_NUM_CHANNELS);
-	clkn = (clkn_before + fz_u32(&in)) & CLKN_MASK;
+	/* the whole clock for the packet that starts the run, a bounded step
+	 * forward for each one after it */
+	if (first)
+		clkn = fz_u32(&in) & CLKN_MASK;
+	else
+		clkn = (clkn_before + (fz_u32(&in) & CLKN_STEP_MASK)) &
+		       CLKN_MASK;
 	bytes = fz_rest(&in, &bytes_len);
 	symbol_count = fz_symbols(bytes, bytes_len, symbols, sizeof(symbols));
 
+	*recorded = 0;
 	pkt = fz_packet(symbols, symbol_count, lap, uap, channel, clkn,
 			whitened);
 	if (pkt == NULL)
 		return clkn;
 
+	*recorded = btbb_header_present(pkt);
 	/* The dump btbb_process_packet() makes of a followed packet goes to
 	 * standard output, which a run closes with libFuzzer's
 	 * -close_fd_mask. */
@@ -136,7 +161,7 @@ int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size)
 	size_t records_len, record;
 	uint8_t options, uap, afh_map[10];
 	uint32_t lap, clkn = 0;
-	int i, whitened, records_done = 0, dropped = 0;
+	int i, whitened, records_done = 0, dropped = 0, recovered_from = 0;
 
 	fz_start(&in, data, size);
 	options = fz_u8(&in);
@@ -161,7 +186,11 @@ int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size)
 		btbb_piconet_set_afh_map(pn, afh_map);
 	}
 	/* A tool given the UAP skips recovering it, which is a different path
-	 * through btbb_process_packet() than recovering it. */
+	 * through btbb_process_packet() than recovering it. A UAP of zero is
+	 * the exception: that path tests the UAP's value rather than the
+	 * flag, so the library goes on recovering it while the flag says it
+	 * is known, which is worth fuzzing and is why the value is not
+	 * refused here. */
 	if ((options >> 2) & 1)
 		btbb_piconet_set_uap(pn, uap);
 
@@ -169,8 +198,11 @@ int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size)
 	for (record = 0; record + PACKET_RECORD_BYTES <= records_len &&
 	     records_done < MAX_PACKET_RECORDS;
 	     record += PACKET_RECORD_BYTES, records_done++) {
+		int recorded = 0;
+
 		clkn = process_one(records + record, lap, uap, whitened,
-				   clkn, pn);
+				   records_done == 0, clkn, &recorded, pn);
+		recovered_from += recorded;
 
 		/*
 		 * Start reversing hops, which is what a tool does once it has
@@ -180,12 +212,19 @@ int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size)
 		 * narrows the candidates, which is the path to CLK1-27 and
 		 * the follow.
 		 *
+		 * It waits for a packet recovery took in as well as for the
+		 * UAP, because the UAP can come from the option bit above
+		 * instead. With no such packet the search would choose
+		 * candidates from a channel and a first-packet time still
+		 * zero from the allocation, which is not a piconet any
+		 * capture tool could hand it.
+		 *
 		 * It is behind an option bit because choosing candidates
 		 * walks the whole CLK7-27 space once, which costs about as
 		 * much as the rest of an input put together, and an input the
 		 * fuzzer did not point at the search should not pay for it.
 		 */
-		if (((options >> 4) & 1) &&
+		if (((options >> 4) & 1) && recovered_from > 0 &&
 		    btbb_piconet_get_flag(pn, BTBB_UAP_VALID) &&
 		    !btbb_piconet_get_flag(pn, BTBB_HOP_REVERSAL_INIT)) {
 			if (btbb_init_hop_reversal(0, pn) > 0)
