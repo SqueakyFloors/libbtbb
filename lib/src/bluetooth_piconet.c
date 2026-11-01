@@ -104,6 +104,12 @@ void btbb_init_piconet(btbb_piconet *pn, uint32_t lap)
 		pn->num_rejected = 0;
 		pn->lock_losses = 0;
 		pn->lock_loss_reported = 0;
+		/* So is the hop the adapted-hopping test last saw, and the
+		 * slot parity it reads a central slot from.  Those outlive
+		 * discovery starting over, being the piconet's rather than one
+		 * attempt's, but not the piconet itself. */
+		pn->got_last_hop = 0;
+		pn->got_settled_clk6 = 0;
 	}
 	pn->LAP = lap;
 	btbb_piconet_set_flag(pn, BTBB_LAP_VALID, 1);
@@ -976,8 +982,9 @@ static void acquire_clock(btbb_piconet *pn, int i)
 	/* In CLKN ticks, which is what clk_offset carries, so shift both
 	 * CLK1-27 values up by one. */
 	pn->clk_offset = (int) ((clk1_27 << 1) - (pn->first_pkt_time << 1));
-	/* Drift has moved the whole clock, CLK1-6 with it, and a header is
-	 * dewhitened with CLK1-6: the two have to say the same thing. */
+	/* Drift has moved the whole clock, CLK1-6 with it, and both offsets
+	 * describe the one clock: the slot offset follows the whole one
+	 * rather than keep the value discovery settled on. */
 	pn->clk6_offset = (int) ((clk1_27 - pn->first_pkt_time) & 0x3f);
 	/* The leading newline this line used to carry broke it out of the
 	 * dump it landed in the middle of; on stderr it is a blank line and
