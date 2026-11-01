@@ -394,13 +394,13 @@ struct btbb_piconet {
 	 * counted against CLK27_LEAD_HOPS. */
 	int lead_hops;
 
-	/* Hops this attempt has scored, counted against CLK27_ATTEMPT_HOPS.
-	 * Its own counter because the other two do not say this: winnowed
-	 * goes back to the first hop whenever the candidates are chosen
-	 * again, which would hand the attempt its budget afresh, and
-	 * packets_observed includes the packets UAP and CLK1-6 discovery took
-	 * before hop reversal began, which would spend it before the search
-	 * started. */
+	/* How far through the remembered hops this attempt has ever scored,
+	 * counted against CLK27_ATTEMPT_HOPS.  Its own counter because
+	 * neither of the other two says this: winnowed goes back to the first
+	 * hop whenever the candidates are chosen again, so it would hand the
+	 * attempt its budget afresh, and packets_observed counts the packets
+	 * UAP and CLK1-6 discovery took before hop reversal began, which the
+	 * attempt has not scored yet when it starts. */
 	int attempt_hops;
 
 	/* True once hop reversal has accepted a clock for this piconet, which

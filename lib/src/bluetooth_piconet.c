@@ -556,7 +556,9 @@ static int drift_step(const btbb_piconet *pn)
  * it has been observed, and in which direction by where its drift already is;
  * see CLK27_MAX_DRIFT_STEPS.
  */
-static void score_hop(btbb_piconet *pn, int i, int offset, uint8_t channel)
+/* Returns whether the hop said anything about this candidate: a hop that did
+ * not is no evidence for it and no chance for a rival to catch up. */
+static int score_hop(btbb_piconet *pn, int i, int offset, uint8_t channel)
 {
 	struct clk27_fit *fit = &pn->candidate_fits[i];
 	uint32_t base = (pn->clock_candidates[i] + (uint32_t) offset) &
@@ -588,14 +590,14 @@ static void score_hop(btbb_piconet *pn, int i, int offset, uint8_t channel)
 	case HOP_AGREES:
 		fit->pending = 0;	/* it has not drifted after all */
 		tally(&fit->agreements);
-		return;
+		return 1;
 	case HOP_SAYS_NOTHING:
 		/* Nothing is known about this hop, so nothing is known about
 		 * a step out of it either: the two hops that take a step have
 		 * to be the candidate's last two readable hops, or "twice" is
 		 * no stronger than "once a long time apart". */
 		fit->pending = 0;
-		return;
+		return 0;
 	case HOP_MISSES:
 		break;
 	}
@@ -623,10 +625,11 @@ static void score_hop(btbb_piconet *pn, int i, int offset, uint8_t channel)
 			fit->pending = (int8_t) drift;
 			tally(&fit->misses);
 		}
-		return;
+		return 1;
 	}
 	fit->pending = 0;
 	tally(&fit->misses);
+	return 1;
 }
 
 /*
@@ -1078,11 +1081,13 @@ static int score_candidates(int offset, char channel, btbb_piconet *pn)
 	int best = -1;		/* the best of them */
 	int best_score = 0;
 	int runner_up = 0;
+	int best_heard = 0;	/* did this hop say anything about the best? */
 
 	for (i = 0; i < pn->num_candidates; i++) {
 		int score;
+		int said_something = score_hop(pn, i, offset,
+					       (uint8_t) channel);
 
-		score_hop(pn, i, offset, (uint8_t) channel);
 		if (!candidate_stands(&pn->candidate_fits[i]))
 			continue;
 		/* Keep it by moving it down over the ones dropped, which is
@@ -1094,6 +1099,7 @@ static int score_candidates(int offset, char channel, btbb_piconet *pn)
 			runner_up = best < 0 ? 0 : best_score;
 			best = kept;
 			best_score = score;
+			best_heard = said_something;
 		} else if (score > runner_up) {
 			runner_up = score;
 		}
@@ -1111,15 +1117,31 @@ static int score_candidates(int offset, char channel, btbb_piconet *pn)
 	 * hop old can be luck, so it has to hold while CLK27_LEAD_HOPS
 	 * further hops arrive.
 	 */
-	if (best_score >= (kept == 1 ? CLK27_SOLE_SCORE : CLK27_MIN_SCORE) &&
-	    best_score - runner_up >= CLK27_SCORE_MARGIN &&
-	    /* and the caller would follow the sequence this was scored
-	     * under; see hop_fit() */
-	    (!btbb_piconet_get_flag(pn, BTBB_IS_AFH) || afh_in_use(pn)) &&
-	    candidate_clock(pn, best) == pn->best_clock)
-		pn->lead_hops++;
-	else
+	/*
+	 * Only a hop the leading candidate could be read against counts
+	 * towards its lead.  One that said nothing about it is no evidence
+	 * for it and gave no rival a chance to catch up, and under adapted
+	 * hopping on a map the observer has only part of, most hops say
+	 * nothing: a lead could otherwise be held by eight hops that read
+	 * nothing at all.  Such a hop leaves the count alone rather than
+	 * resetting it, which on a sparse map would mean no lead ever holds -
+	 * unless the clock in front has changed, which ends any lead.
+	 */
+	if (best_heard) {
+		if (best_score >= (kept == 1 ? CLK27_SOLE_SCORE :
+						CLK27_MIN_SCORE) &&
+		    best_score - runner_up >= CLK27_SCORE_MARGIN &&
+		    /* and the caller would follow the sequence this was
+		     * scored under; see hop_fit() */
+		    (!btbb_piconet_get_flag(pn, BTBB_IS_AFH) ||
+		     afh_in_use(pn)) &&
+		    candidate_clock(pn, best) == pn->best_clock)
+			pn->lead_hops++;
+		else
+			pn->lead_hops = 0;
+	} else if (candidate_clock(pn, best) != pn->best_clock) {
 		pn->lead_hops = 0;
+	}
 	pn->best_score = best_score;
 	pn->runner_up_score = runner_up;
 	pn->best_clock = candidate_clock(pn, best);
@@ -1345,7 +1367,13 @@ int btbb_winnow(btbb_piconet *pn)
 		 * next attempt is a fresh reading of the same piconet rather
 		 * than the same search again.
 		 */
-		pn->attempt_hops++;
+		/* How far through the remembered hops this attempt has ever
+		 * got, so that choosing the candidates again - which takes
+		 * the scoring back to the first of them - replays hops it has
+		 * already been charged for rather than spending the budget
+		 * twice. */
+		if (pn->winnowed > pn->attempt_hops)
+			pn->attempt_hops = pn->winnowed;
 		if (pn->attempt_hops >= CLK27_ATTEMPT_HOPS) {
 			piconet_note("no CLK1-27 is clearly ahead after %d hops (best score %d, next best %d); starting over\n",
 				     pn->attempt_hops, pn->best_score,

@@ -1148,7 +1148,9 @@ static void test_hops_that_fit_two_clocks_accept_neither(void)
 	CHECK(!btbb_piconet_get_flag(pn, BTBB_CLK27_VALID));
 	CHECK(!btbb_piconet_get_flag(pn, BTBB_HOP_REVERSAL_INIT));
 	CHECK_EQ(0, pn->num_candidates);
-	CHECK_EQ(CLK27_ATTEMPT_HOPS, hops);
+	/* The attempt counts how far through the remembered hops it got, and
+	 * the first of them was scored as the candidates were chosen. */
+	CHECK_EQ(CLK27_ATTEMPT_HOPS - 1, hops);
 	btbb_piconet_unref(pn);
 	btbb_piconet_unref(device);
 }
@@ -1322,25 +1324,53 @@ static void test_a_map_that_loses_a_channel_confirms_no_wrong_clock(void)
  */
 static void test_a_long_discovery_does_not_spend_the_attempt(void)
 {
-	btbb_piconet *pn = discovered(NULL, 0);
+	/* A device on channels 0-39 whose clock the observer cannot settle on
+	 * from one hop: the hops are the device's, so the search has work to
+	 * do rather than an answer waiting. */
+	btbb_piconet *device = discovered_as(TEST_LAP, TEST_UAP, MAP_40, 1);
+	btbb_piconet *pn = discovered_as(TEST_LAP, TEST_UAP,
+					 MAP_40_LESS_ONE, 1);
+	const uint32_t true_clock = 0x1000000;
+	char out[4096], err[8192];
+	char expected[64];
 	int i;
 
-	first_hop(pn, channel_at(pn, 0));
-	CHECK(btbb_init_hop_reversal(0, pn) > 1);
-	/* What a long UAP and CLK1-6 phase leaves behind: many packets
-	 * remembered, and the hops among them already scored. */
-	for (i = 1; i < CLK27_ATTEMPT_HOPS + 10; i++)
-		observe(pn, i * 100, channel_at(pn, (uint32_t) i * 100));
-	pn->packets_observed = CLK27_ATTEMPT_HOPS + 10;
-	pn->winnowed = pn->packets_observed;
-	pn->attempt_hops = 0;
-	btbb_piconet_set_flag(pn, BTBB_CLK27_VALID, 0);
+	pn->first_pkt_time = true_clock;
+	pn->clk6_offset = 0;
+	/* What a long UAP and CLK1-6 phase leaves behind: more packets
+	 * remembered than one attempt at CLK1-27 is given hops for, none of
+	 * them scored against a candidate list yet. */
+	for (i = 0; i < CLK27_ATTEMPT_HOPS + 10; i++) {
+		uint32_t offset = (uint32_t) i * 4;
 
-	observe(pn, (CLK27_ATTEMPT_HOPS + 10) * 100,
-		channel_at(pn, (uint32_t) (CLK27_ATTEMPT_HOPS + 10) * 100));
-	CHECK(btbb_piconet_get_flag(pn, BTBB_HOP_REVERSAL_INIT));
-	CHECK_EQ(1, pn->attempt_hops);
+		pn->pattern_indices[i] = (int) offset;
+		pn->pattern_channels[i] =
+			channel_at(device, true_clock + offset);
+		btbb_piconet_set_channel_seen(pn, pn->pattern_channels[i]);
+	}
+	pn->packets_observed = CLK27_ATTEMPT_HOPS + 10;
+
+	if (capture_or_fail() != 0) {
+		btbb_piconet_unref(pn);
+		btbb_piconet_unref(device);
+		return;
+	}
+	CHECK(btbb_init_hop_reversal(0, pn) > 1);
+	btbb_winnow(pn);
+	capture_stop(out, sizeof(out), err, sizeof(err));
+
+	/*
+	 * Either it found the clock in those hops or it used up the budget,
+	 * and what it must not do is give up after one hop because discovery
+	 * had already spent the count.
+	 */
+	if (!btbb_piconet_get_flag(pn, BTBB_CLK27_VALID)) {
+		sprintf(expected, "clearly ahead after %d hops",
+			CLK27_ATTEMPT_HOPS);
+		CHECK(strstr(err, expected) != NULL);
+	}
 	btbb_piconet_unref(pn);
+	btbb_piconet_unref(device);
 }
 
 /*
