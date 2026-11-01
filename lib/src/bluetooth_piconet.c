@@ -1408,6 +1408,54 @@ int btbb_piconet_drop_clock(btbb_piconet *pn)
 	return 1;
 }
 
+/*
+ * Read this packet at the piconet's CLK1-6 and report it, while the search
+ * for the whole clock goes on.
+ *
+ * Dewhitening a header and a payload takes CLK1-6 and nothing more (Vol 2,
+ * Part B, 7.2), so a piconet whose address part and CLK1-6 are settled can be
+ * read in full. The rest of the clock says where the piconet hops next, which
+ * is what a receiver needs to stay with it and what hop reversal is for; a
+ * packet already in hand needs none of it.
+ *
+ * Reading it here is what the capture of a piconet that is not being followed
+ * reports: before this, such a capture printed a line per packet with no type
+ * and no payload, and wrote records with no payload and nothing checked,
+ * however well the packets were received. Against an adapted-hopping piconet
+ * the whole clock may never be confirmed at all, and a reader waiting for it
+ * got nothing out of a capture the library could read all along.
+ *
+ * Only a packet whose header check passes is reported, which is the same bar
+ * the followed path uses: the access code matches on the LAP alone, so the
+ * header's check bits, computed over the piconet's address part, are what say
+ * a packet is this piconet's and that CLK1-6 is right for it.
+ *
+ * The clock the packet carries is the receiving board's, and the search keeps
+ * its difference from the piconet's in 625 us slots, so it is added here and
+ * put back afterwards: the caller gave that clock and may still be using it,
+ * and the hop pattern the search remembers is in the receiver's clock too.
+ */
+static void read_at_clk6(btbb_packet *pkt, btbb_piconet *pn)
+{
+	uint32_t board_clkn = pkt->clkn;
+
+	if (!btbb_piconet_get_flag(pn, BTBB_CLK6_VALID))
+		return;
+
+	btbb_packet_set_uap(pkt, btbb_piconet_get_uap(pn));
+	pkt->clkn = board_clkn + (uint32_t) pn->clk6_offset;
+	btbb_packet_set_flag(pkt, BTBB_CLK6_VALID, 1);
+
+	if (btbb_decode(pkt))
+		btbb_print_packet(pkt);
+
+	/* The packet keeps what it decoded, which is what the caller records,
+	 * but not the claim that its own clock is the piconet's: nothing else
+	 * may read this clock as CLK1-6. */
+	btbb_packet_set_flag(pkt, BTBB_CLK6_VALID, 0);
+	pkt->clkn = board_clkn;
+}
+
 int btbb_process_packet(btbb_packet *pkt, btbb_piconet *pn) {
 	if (survey_mode) {
 		pn = get_piconet(btbb_packet_get_lap(pkt));
@@ -1497,6 +1545,9 @@ int btbb_process_packet(btbb_packet *pkt, btbb_piconet *pn) {
 				btbb_piconet_set_flag(pn, BTBB_FOLLOWING, 1);
 				return -1;
 			}
+			/* The whole clock is not in yet, but CLK1-6 may be,
+			 * and that is all it takes to read the packet. */
+			read_at_clk6(pkt, pn);
 		}
 
 		/* Have LAP, need UAP. */
