@@ -106,6 +106,7 @@ tests do it.
 | `hop` | `single_hop()` with and without AFH, and `get_hop_pattern()`'s streams and cache | The Ubertooth project's `firmware/tests/test_bluetooth_hop.c`, an independent transcription of Vol 2, Part B, Section 2.6 computed outside either code base. Using them here pins the host's predictions and the channels the board tunes to against one source of truth |
 | `piconet` | Clock recovery (hop reversal): the CLK1-27 candidate list, winnowing it against observed hops, the AFH detector, the confirmation rule, and giving up a clock whose headers keep failing without choosing it again. Also the piconet survey: reading a piconet by its LAP while the survey runs, a LAP the survey has not heard, what a destructive walk leaves behind, and a survey that cannot allocate | The hops are produced by `single_hop()`, which `hop` and `spec_hop` pin against the specification, so a "truth" piconet standing in for the device under observation hops the way a real one does |
 | `clock_sweep` | What clock recovery does over a range of true-clock values: how often it locks the piconet's clock, a wrong one or none at all; what following each lock does with it; how long a clock whose headers all fail is kept, and whether the search that follows ends up back on it; and how often a header fails its HEC while the clock and the UAP are right | The hops come from `single_hop()`, as `piconet`'s do. The packets are built in the test and found by the library's own access code search, with bit errors applied symbol by symbol at a given rate |
+| `perm_table` | That `btbb_init()` fills the hop permutation table `fast_perm()` reads, so the table is whole before a caller starts a second thread. Every byte is zero before the first call, and all 524,288 entries are checked against `perm5()` after each of the four calls meant to fill it: one asking for no syndrome table, which checks none was built; one refused for an argument below the range and one above it; and the ordinary one, after which `fast_perm()` is checked to agree. Then a second `btbb_init()` is handed a table of zeros with the flag set, and the zeros have to survive, which is the only check that fails without the early return | Every one of the 524,288 entries against `perm5()`, the permutation the table stands for, which `spec_hop` pins against the specification's published hop tables |
 | `internal` | The FEC 2/3 code, the sync word syndrome tables, and the packet header decode through both the pieces and `btbb_decode_header()` | The 20 FEC 2/3 blocks and two syndrome values from upstream's `test_fec23.c` and `test_syndromes.c`, plus the table of 20 UAP, header and HEC rows from upstream's `test_header.c` |
 | `esco` | The length an eSCO payload is decoded at, and the HV3 voice packet that shares a type code with an EV3: a payload three lengths agree with, a payload whose own CRC ends in a zero byte so that the length one short agrees too, captures of noise and of zeros past the packet, a length the caller gives, and a voice payload with no CRC at all | Payloads built in the test, each carrying the CRC the library's own `crcgen()` computes - which `spec_bredr` pins against the specification's sample data first - so the lengths that agree are known before the decoder is asked |
 | `capture` | What reaches a capture file: block and option layout, record fields, the four snapshot lengths, header block padding, the option-space limit, and a write to a closed descriptor and to a file at `RLIMIT_FSIZE` | The pcapng specification and the published `LINKTYPE_BLUETOOTH_BREDR_BB` and `LINKTYPE_BLUETOOTH_LE_LL_WITH_PHDR` layouts. Every record is read back out of the file by a small block and option walker rather than compared with the struct that wrote it, so a field at the wrong offset shows up |
@@ -152,6 +153,76 @@ stacks rarely send, malformed input, a host out of memory, or an ARM host: the
 AUX1, DV, EV4, and EV5 payload lengths, the buffer bounds, the signedness of a
 Tx Power Level read through a plain `char`, the allocation failures, and a
 255-octet PDU at the top of the Length range.
+
+## What the library shares between callers
+
+`btbb.h` tells a caller that decodes on several threads what the library keeps
+to itself, so that list has to be the real one. The streams are shared as
+well, which no symbol table can show and which the header's own rules cover.
+What the library shares of its own state is exactly its objects of static
+storage duration that live in a writable section,
+and the linker will name them, which is a check that does not depend on reading
+the sources. Read the **section**, not the symbol class: a format that has to
+relocate const data puts it in a section whose name begins `.data`
+(`.data.rel.ro`), and `nm`'s one-letter class then looks like writable data
+although it is not. Keep the common symbols too: on Mach-O an object declared at file scope
+without `static` and without an initializer is a tentative definition and ends
+up in `(common)` rather than in a section, which is how such an object looked
+before this change. Current ELF compilers default to `-fno-common` and put it
+straight in `.bss`, which the ELF form already looks for.
+
+On Mach-O, which is where the seven below were counted:
+
+```sh
+rm -rf /tmp/btbb-statics      # a stale cache here reads another tree's objects
+cmake -S . -B /tmp/btbb-statics -DCMAKE_C_FLAGS=-O0
+cmake --build /tmp/btbb-statics --target btbb
+for o in /tmp/btbb-statics/lib/src/CMakeFiles/btbb.dir/*.c.o; do
+	nm -m "$o" | grep -E '__DATA,__(data|bss|common)|\(common\)'
+done | awk '$NF !~ /^ltmp/ { print $NF }' | sort
+```
+
+On a Linux build, the same question asked of the section names, where
+`objdump` prints them in a column whose position moves, so the section is
+looked for rather than counted to. Build into a directory of its own; run
+against the Mach-O objects above it prints nothing:
+
+```sh
+objdump -t /tmp/btbb-statics-elf/lib/src/CMakeFiles/btbb.dir/*.c.o |
+	awk '{ for (i = 2; i < NF; i++)
+	         if (($i == ".data" || $i == ".bss" || $i == "*COM*") &&
+	             $NF != $i) { print $NF; break } }' | sort -u
+```
+
+Both forms were run against the same sources, the first on a Mach-O build and
+the second on ELF objects built the same way (the shared-library target is what
+adds `-fPIC`), and both answer with the seven below. The Mach-O form prints the
+names with a leading underscore. Run on the commit before this check existed, the first form answers
+twelve: these seven and the five string tables the low energy printer reads,
+which were writable only because the arrays of pointers were not themselves
+`const`.
+
+`-O0` is the conservative default: measured on this commit, an `-O3` build of
+the library -- which is what its Release build type asks for -- merges two of
+the seven into one unnamed symbol and the command answers six, while an `-O2`
+build answers the same seven as `-O0`.
+
+Seven come out, and `btbb.h` describes each:
+
+| object | what it is |
+|---|---|
+| `perm_table`, `perm_table_initialized` | the hop permutation table `fast_perm()` reads, and whether it has been filled. `btbb_init()` fills it before it does anything else |
+| `syndrome_map` | the access-code error correction table, which the same call builds when it is asked for error correction and leaves empty when it is not |
+| `survey_mode` | whether survey mode is on, set by `btbb_init_survey()` during setup |
+| `piconet_survey` | the survey's table of the addresses it has heard, which the header says a survey keeps on one thread |
+| `malformed_counts`, `malformed_detail_wanted` | the counts `lell_print()` keeps of payloads it could not read, and the setting that asks for their detail. The header says both are unguarded |
+
+The first two checks the test makes, that the flag is clear and the table all
+zero before anything calls `btbb_init()`, record the state a process starts in
+rather than pinning anything the library does: C zero-initializes both whatever
+the code says.
+
+Anything else appearing there is state the header does not account for.
 
 ## Adding a test
 

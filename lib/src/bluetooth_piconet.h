@@ -497,6 +497,10 @@ void precalc(btbb_piconet *pnet);
 /* do precalculation that requires the address */
 void address_precalc(int address, btbb_piconet *pnet);
 
+/* Fill the 512 KB table fast_perm() reads, once. btbb_init() calls it, so
+ * that the table is whole before a caller starts any thread. */
+void perm_table_init(void);
+
 /* drop-in replacement for perm5() using lookup table */
 int fast_perm(int z, int p_high, int p_low);
 
