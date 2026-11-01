@@ -29,26 +29,26 @@
 static int failures = 0;
 
 #define CHECK_NAME(compid, want)                                           \
-	do {                                                               \
-		const char *got = btbb_company_name((uint16_t)(compid));   \
-		if (got == NULL || strcmp(got, (want)) != 0) {              \
-			printf("FAIL %s:%d: 0x%04X is %s, wanted \"%s\"\n", \
-			       __FILE__, __LINE__, (unsigned)(compid),     \
-			       got ? got : "NULL", (want));                \
-			++failures;                                        \
-		}                                                          \
+	do {                                                                      \
+		const char *got = btbb_company_name((uint16_t)(compid));                 \
+		if (got == NULL || strcmp(got, (want)) != 0) {                           \
+			printf("FAIL %s:%d: 0x%04X is %s, wanted \"%s\"\n",                     \
+			       __FILE__, __LINE__, (unsigned)(compid),                          \
+			       got ? got : "NULL", (want));                                     \
+			++failures;                                                             \
+		}                                                                        \
 	} while (0)
 
 /* An identifier the Bluetooth SIG has not assigned has no name at all. */
 #define CHECK_UNASSIGNED(compid)                                           \
-	do {                                                               \
-		const char *got = btbb_company_name((uint16_t)(compid));   \
-		if (got != NULL) {                                         \
-			printf("FAIL %s:%d: 0x%04X is not assigned but "   \
-			       "names \"%s\"\n",                          \
-			       __FILE__, __LINE__, (unsigned)(compid), got); \
-			++failures;                                        \
-		}                                                          \
+	do {                                                                      \
+		const char *got = btbb_company_name((uint16_t)(compid));                 \
+		if (got != NULL) {                                                       \
+			printf("FAIL %s:%d: 0x%04X is not assigned but "                        \
+			       "names \"%s\"\n",                                                \
+			       __FILE__, __LINE__, (unsigned)(compid), got);                    \
+			++failures;                                                             \
+		}                                                                        \
 	} while (0)
 
 /* The highest identifier the table names, and the last one in the Bluetooth

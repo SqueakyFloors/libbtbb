@@ -62,9 +62,8 @@ add_test(NAME esco COMMAND test_esco)
 # sanitizer build takes twice as long over.
 set_tests_properties(esco PROPERTIES TIMEOUT 60)
 
-# The company identifier table, which btbb_company_name() reads. This
-# compiles the translation unit it lives in, so a table built without the
-# library is covered too.
+# The company identifier table. This compiles the translation unit it lives
+# in; test_smoke calls btbb_company_name() through the linked library.
 add_executable(test_companies test_companies.c)
 target_include_directories(test_companies PRIVATE ${PROJECT_SOURCE_DIR}/lib/src)
 target_compile_options(test_companies PRIVATE -std=gnu90)

@@ -122,7 +122,7 @@ BTBB_API const char* btbb_get_version(void);
 
 /* The name the Bluetooth SIG gives a company identifier, the number that
  * appears in Manufacturer Specific Data and in the manufacturer field of an
- * inquiry result, or NULL where the identifier is not assigned. 0xFFFF reads
+ * inquiry result, or NULL where there is no name for it. 0xFFFF reads
  * "internal use", which is what the SIG reserves it for. The table holds
  * every identifier the SIG lists, and also the ones it has since withdrawn,
  * so that a capture of an older device still decodes by name. The string is
