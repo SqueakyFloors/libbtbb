@@ -29,6 +29,7 @@
 #include "bluetooth_le_packet.h"
 #include <assert.h>
 #include <ctype.h>
+#include <inttypes.h>
 #include <stdarg.h>
 #include <string.h>
 
@@ -564,7 +565,7 @@ static void _dump_32(const char *name, const uint8_t *buf, int offset) {
 				   (uint32_t) buf[offset+2] << 16 |
 				   (uint32_t) buf[offset+1] << 8 |
 				   (uint32_t) buf[offset+0];
-	printf("    %s%08x\n", name, val);
+	printf("    %s%08" PRIx32 "\n", name, val);
 }
 
 static void _dump_uuid(const uint8_t *uuid) {
@@ -658,6 +659,37 @@ print16:
 						   "note: wrong length (%d,"
 						   " must be divisible by"
 						   " 2)\n", sublen-1);
+				}
+				break;
+			case 0x04:
+				printf(" (32-bit Service UUIDs, more available)\n");
+				goto print32;
+			case 0x05:
+				printf(" (32-bit Service UUIDs)\n");
+print32:
+				/* The whole UUIDs this list holds, as above. */
+				for (i = 0; i + 4 <= sublen - 1; i += 4) {
+					/* assembled a byte at a time: the
+					 * buffer is not aligned for a
+					 * uint32_t, and the UUID is
+					 * little endian whatever the
+					 * host is */
+					uint32_t uuid =
+						(uint32_t) buf[pos+4+i] << 24 |
+						(uint32_t) buf[pos+3+i] << 16 |
+						(uint32_t) buf[pos+2+i] << 8 |
+						(uint32_t) buf[pos+1+i];
+					/* the conversion for a uint32_t, which
+					 * plain %x is only on a host where
+					 * unsigned int is 32 bits wide */
+					printf("           %08" PRIx32 "\n",
+					       uuid);
+				}
+				if ((sublen - 1) % 4 != 0) {
+					_malformed(LELL_MALFORMED_AD_FIELD_LENGTH,
+						   "note: wrong length (%d,"
+						   " must be divisible by"
+						   " 4)\n", sublen-1);
 				}
 				break;
 			case 0x06:
