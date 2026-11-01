@@ -579,8 +579,12 @@ static void sweep(const char *label, uint32_t apart, int trials, int step)
 	 * a clock that was not the device's held the best score at some point
 	 * in every attempt, so the margin had something to decline. */
 	CHECK(t.counts[TRUE_LOCK] > 0);
-	CHECK(t.wrong_clock_led > 0);
-	CHECK(t.wrong_lead_best > 0);
+	CHECK(t.wrong_clock_led > trials / 2);
+	/* And it came at least halfway to the score that would have it
+	 * accepted; the full run of 400 reaches 11 against the 8 it takes, so
+	 * what the margin and the held lead decline here really is a clock
+	 * that could otherwise have been confirmed. */
+	CHECK(t.wrong_lead_best >= CLK27_MIN_SCORE / 2);
 	/*
 	 * And not one of those was accepted.  This is what the scored search
 	 * is for: the same scenario used to confirm a wrong clock in a

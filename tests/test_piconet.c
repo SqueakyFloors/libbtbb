@@ -669,11 +669,11 @@ static void test_candidates_rechosen_only_for_a_new_sequence(void)
 	CHECK_EQ(1, btbb_piconet_set_channel_seen(pn, 50));
 	CHECK_EQ(30, BT_NUM_CHANNELS - pn->used_channels);
 	CHECK(candidates_superseded(pn));
-	/* Not once a candidate is within reach of being accepted, though:
-	 * choosing again throws every score away. */
-	pn->best_score = CLK27_MIN_SCORE;
+	/* Not once a candidate is clearly ahead, though: choosing again
+	 * throws every score away. */
+	pn->lead_hops = 1;
 	CHECK(!candidates_superseded(pn));
-	pn->best_score = CLK27_MIN_SCORE - 1;
+	pn->lead_hops = 0;
 	CHECK(candidates_superseded(pn));
 	btbb_piconet_unref(pn);
 
@@ -1130,7 +1130,7 @@ static void test_hops_that_fit_two_clocks_accept_neither(void)
 	CHECK(btbb_init_hop_reversal(0, pn) > 1);
 
 	/* The device's hops, four slots apart so each is a new slot pair. */
-	for (offset = 4; offset <= 4 * (CLK27_ATTEMPT_HOPS + 4); offset += 4) {
+	for (offset = 4; offset <= 4 * (CLK27_ATTEMPT_HOPS + 8); offset += 4) {
 		observe(pn, (int) offset,
 			channel_at(device, true_clock + offset));
 		hops++;
@@ -1148,9 +1148,7 @@ static void test_hops_that_fit_two_clocks_accept_neither(void)
 	CHECK(!btbb_piconet_get_flag(pn, BTBB_CLK27_VALID));
 	CHECK(!btbb_piconet_get_flag(pn, BTBB_HOP_REVERSAL_INIT));
 	CHECK_EQ(0, pn->num_candidates);
-	/* winnowed counts the hop the candidates were chosen from, so the
-	 * attempt has one fewer observation of its own than its budget. */
-	CHECK_EQ(CLK27_ATTEMPT_HOPS - 1, hops);
+	CHECK_EQ(CLK27_ATTEMPT_HOPS, hops);
 	btbb_piconet_unref(pn);
 	btbb_piconet_unref(device);
 }
@@ -1251,19 +1249,20 @@ out:
  * the device drops the channel it uses most of the first stretch, and the
  * search either settles on the device's clock or settles on nothing.
  */
-static void test_a_map_that_loses_a_channel_confirms_no_wrong_clock(void)
+static void a_map_that_loses_one_channel(int dropped, uint32_t changes_at)
 {
-	/* Channels 0-39, and the same without channel 3. */
-	static const uint8_t map_later[10] = {0xf7, 0xff, 0xff, 0xff, 0xff,
-					      0x00, 0x00, 0x00, 0x00, 0x00};
+	uint8_t map_later[10];
 	btbb_piconet *device = discovered_as(TEST_LAP, TEST_UAP, MAP_40, 1);
-	btbb_piconet *later = discovered_as(TEST_LAP, TEST_UAP, map_later, 1);
+	btbb_piconet *later;
 	btbb_piconet *pn = discovered_as(TEST_LAP, TEST_UAP,
 					 MAP_40_LESS_ONE, 1);
 	const uint32_t true_clock = 0x1000000;
-	const uint32_t changes_at = 4 * 40;
 	uint32_t offset;
 	int came_within_reach = 0;
+
+	memcpy(map_later, MAP_40, sizeof(map_later));
+	map_later[dropped / 8] &= (uint8_t) ~(1 << (dropped % 8));
+	later = discovered_as(TEST_LAP, TEST_UAP, map_later, 1);
 
 	pn->first_pkt_time = true_clock;
 	pn->clk6_offset = 0;
@@ -1298,6 +1297,50 @@ static void test_a_map_that_loses_a_channel_confirms_no_wrong_clock(void)
 	btbb_piconet_unref(pn);
 	btbb_piconet_unref(later);
 	btbb_piconet_unref(device);
+}
+
+/* Several channels to drop and two points to drop them at: one map change is
+ * one scenario, and the reading of an observed map as current is wrong in the
+ * same way whichever channel goes. */
+static void test_a_map_that_loses_a_channel_confirms_no_wrong_clock(void)
+{
+	static const int DROPPED[] = {3, 17, 31};
+	static const uint32_t AT[] = {4 * 40, 4 * 120};
+	size_t i, j;
+
+	for (i = 0; i < sizeof(DROPPED) / sizeof(DROPPED[0]); i++)
+		for (j = 0; j < sizeof(AT) / sizeof(AT[0]); j++)
+			a_map_that_loses_one_channel(DROPPED[i], AT[j]);
+}
+
+/*
+ * An attempt gets its own hops, not the packets UAP and CLK1-6 discovery took
+ * before it.  Counting the attempt's budget against those packets looks the
+ * same in every ordinary capture and livelocks on a quiet one: discovery that
+ * spent CLK27_ATTEMPT_HOPS packets settling leaves hop reversal to score one
+ * hop, give up, and hand the search back to discovery, forever.
+ */
+static void test_a_long_discovery_does_not_spend_the_attempt(void)
+{
+	btbb_piconet *pn = discovered(NULL, 0);
+	int i;
+
+	first_hop(pn, channel_at(pn, 0));
+	CHECK(btbb_init_hop_reversal(0, pn) > 1);
+	/* What a long UAP and CLK1-6 phase leaves behind: many packets
+	 * remembered, and the hops among them already scored. */
+	for (i = 1; i < CLK27_ATTEMPT_HOPS + 10; i++)
+		observe(pn, i * 100, channel_at(pn, (uint32_t) i * 100));
+	pn->packets_observed = CLK27_ATTEMPT_HOPS + 10;
+	pn->winnowed = pn->packets_observed;
+	pn->attempt_hops = 0;
+	btbb_piconet_set_flag(pn, BTBB_CLK27_VALID, 0);
+
+	observe(pn, (CLK27_ATTEMPT_HOPS + 10) * 100,
+		channel_at(pn, (uint32_t) (CLK27_ATTEMPT_HOPS + 10) * 100));
+	CHECK(btbb_piconet_get_flag(pn, BTBB_HOP_REVERSAL_INIT));
+	CHECK_EQ(1, pn->attempt_hops);
+	btbb_piconet_unref(pn);
 }
 
 /*
@@ -3199,6 +3242,7 @@ int main(void)
 	test_hops_that_fit_two_clocks_accept_neither();
 	test_the_search_follows_the_clocks_drifting_apart();
 	test_a_map_that_loses_a_channel_confirms_no_wrong_clock();
+	test_a_long_discovery_does_not_spend_the_attempt();
 	test_discovery_notes_go_to_stderr();
 	test_discovery_complaints_go_to_stderr();
 	test_aliased_hop_reversal_is_refused();

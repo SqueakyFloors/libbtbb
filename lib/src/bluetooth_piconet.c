@@ -101,6 +101,10 @@ void btbb_init_piconet(btbb_piconet *pn, uint32_t lap)
 	/* The clocks given up so far are this piconet's.  Another LAP is
 	 * another piconet, whose clock has nothing to do with them. */
 	if (lap != pn->LAP) {
+		/* Another piconet, so none of the discovery done for the last
+		 * one describes it: the candidates, the hops remembered, the
+		 * address part and the clock offsets all go. */
+		reset(pn);
 		pn->num_rejected = 0;
 		pn->lock_losses = 0;
 		pn->lock_loss_reported = 0;
@@ -847,6 +851,11 @@ int btbb_init_hop_reversal(int aliased, btbb_piconet *pn)
 	/* No clock yet: every real one is below SEQUENCE_LENGTH, so this
 	 * cannot be mistaken for one, which 0 could be. */
 	pn->best_clock = SEQUENCE_LENGTH;
+	/* A fresh attempt starts with its whole budget; choosing the
+	 * candidates again, which is the other way in here, is the same
+	 * attempt carrying on. */
+	if (!restarted)
+		pn->attempt_hops = 0;
 	pn->candidates_afh = (uint8_t) btbb_piconet_get_flag(pn, BTBB_IS_AFH);
 	pn->candidates_unheard = (uint8_t) (BT_NUM_CHANNELS -
 					    pn->used_channels);
@@ -979,6 +988,7 @@ static void reset(btbb_piconet *pn)
 	/* No clock yet: every real one is below SEQUENCE_LENGTH, so this
 	 * cannot be mistaken for one, which 0 could be. */
 	pn->best_clock = SEQUENCE_LENGTH;
+	pn->attempt_hops = 0;
 	pn->clk_offset = 0;
 	/* Both clocks are being searched for again, so neither offset
 	 * describes this piconet.  The slot offset is what the reported one is
@@ -1152,10 +1162,10 @@ static int score_candidates(int offset, char channel, btbb_piconet *pn)
  * hundred packets runs out before the list does.  Choosing again whenever the
  * unheard channels have halved halves the list with them.
  *
- * Only while no candidate has reached CLK27_MIN_SCORE, because choosing again
- * throws every score away: once the search has a candidate within reach of
- * being accepted, a shorter list is not worth starting over for, and on a
- * sweeping receiver the map keeps gaining channels deep into a capture.
+ * Only while no candidate is clearly ahead yet, because choosing again throws
+ * every score away: once one is, a shorter list is not worth starting over
+ * for, and on a sweeping receiver the map keeps gaining channels deep into a
+ * capture.
  *
  * A channel the map gains without halving the unheard ones does not supersede
  * them: a candidate is only ever ruled out on a channel the map already held,
@@ -1181,7 +1191,7 @@ static int candidates_superseded(btbb_piconet *pn)
 		return 1;
 	if (!pn->candidates_afh)
 		return 0;	/* the basic sequence, whatever the map says */
-	if (pn->best_score >= CLK27_MIN_SCORE)
+	if (pn->lead_hops > 0)
 		return 0;	/* too much to throw away */
 	return pn->candidates_unheard > 0 &&
 		unheard * 2 <= (int) pn->candidates_unheard;
@@ -1335,13 +1345,10 @@ int btbb_winnow(btbb_piconet *pn)
 		 * next attempt is a fresh reading of the same piconet rather
 		 * than the same search again.
 		 */
-		/* The hops this attempt has been given, not the hops scored
-		 * against the list it holds: choosing the candidates again
-		 * takes the scoring back to the first of them, and that must
-		 * not hand the attempt its budget a second time. */
-		if (pn->packets_observed >= CLK27_ATTEMPT_HOPS) {
+		pn->attempt_hops++;
+		if (pn->attempt_hops >= CLK27_ATTEMPT_HOPS) {
 			piconet_note("no CLK1-27 is clearly ahead after %d hops (best score %d, next best %d); starting over\n",
-				     pn->packets_observed, pn->best_score,
+				     pn->attempt_hops, pn->best_score,
 				     pn->runner_up_score);
 			reset(pn);
 			return 0;

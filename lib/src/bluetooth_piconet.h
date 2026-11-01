@@ -113,19 +113,14 @@
 
 /*
  * How far the observer's clock and the piconet's may be taken to have drifted
- * apart since the candidates were chosen, in 625 us slot pairs.
+ * apart since the candidates were chosen.
  *
  * The two clocks run at their own rates, so a prediction made from a
  * candidate slowly moves away from the piconet's real hop.  Measured on the
  * bench, the two are within a part per million of each other, which is about
- * a slot a minute: ±2 pairs covers a capture of several minutes.
- *
- * Slot pairs, not slots, because under adapted hopping a single slot is
- * invisible - the same channel mechanism gives both slots of a pair the same
- * channel - so a drift that changes a prediction at all changes it by a pair.
- *
- * Each candidate carries its own drift, counted in steps away from where it
- * started.  A step is one 625 us slot, or a pair of them under adapted
+ * a slot a minute, so two steps cover a capture of several minutes.  Each
+ * candidate carries its own drift, counted in steps away from where it
+ * started; a step is one 625 us slot, or a pair of them under adapted
  * hopping, where the same channel mechanism gives both slots of a pair one
  * channel so a single slot changes no prediction.
  *
@@ -398,6 +393,15 @@ struct btbb_piconet {
 	/* Hops in a row that the same clock has been clearly ahead for,
 	 * counted against CLK27_LEAD_HOPS. */
 	int lead_hops;
+
+	/* Hops this attempt has scored, counted against CLK27_ATTEMPT_HOPS.
+	 * Its own counter because the other two do not say this: winnowed
+	 * goes back to the first hop whenever the candidates are chosen
+	 * again, which would hand the attempt its budget afresh, and
+	 * packets_observed includes the packets UAP and CLK1-6 discovery took
+	 * before hop reversal began, which would spend it before the search
+	 * started. */
+	int attempt_hops;
 
 	/* True once hop reversal has accepted a clock for this piconet, which
 	 * is the clock that can be given up again.  A caller that set the
