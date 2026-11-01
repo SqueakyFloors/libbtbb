@@ -4,11 +4,11 @@ libbtbb was built by volunteers and has decoded Bluetooth traffic for Ubertooth
 and other projects for many years. It came with a few test programs; this fork
 adds to that foundation with a test suite in the normal build.
 
-There are 23 tests, and five more where the compiler can build a fuzz target,
+There are 23 tests, and six more where the compiler can build a fuzz target,
 driven in large part by the Bluetooth Core Specification's own published sample
 data; the vectors of the original test programs were kept and ported.
-Malformed radio packets are this library's normal input, so the decoders and
-the capture writers are fuzzed as well. The fixes the suite found and holds
+Malformed radio packets are this library's normal input, so the decoders,
+clock and UAP recovery, and the capture writers are fuzzed as well. The fixes the suite found and holds
 down are listed in [CHANGELOG.md](CHANGELOG.md), one entry per release, with
 the pull request that made each one.
 
@@ -41,11 +41,14 @@ each fuzz target for a minute.
 
 ## Fuzzing
 
-The decoders take whatever the radio gave them, so five libFuzzer targets in
+The decoders take whatever the radio gave them, so six libFuzzer targets in
 `tests/fuzz/` feed them bytes: the access code search, the BR/EDR header and
-payload decoders with the packet dump, the LE decoder with its dump, the PCAP
-writers, and the PCAPNG writers. The writer targets decode a frame first and
-write the packet that came out, which is what a capture tool does.
+payload decoders with the packet dump, clock and UAP recovery over a run of
+packets, the LE decoder with its dump, the PCAP writers, and the PCAPNG
+writers. The writer targets decode a frame first and write the packet that
+came out, which is what a capture tool does. The recovery target delivers a
+whole run of packets to one piconet, because recovering the UAP, narrowing the
+candidate clocks, and following the piconet all need more than one packet.
 
 Each target is built only where the compiler can build a libFuzzer program, so
 a gcc build, or one with the clang Apple ships, is unaffected and simply has no
@@ -103,7 +106,7 @@ tests do it.
 | `release_version` | That `cmake/set_release.cmake` produces the version the build claims | The script itself |
 | `py_generators` | The tables committed in the library's source against the scripts in `python/utils` that produced them: the four sync word syndrome tables, `BARKER_DISTANCE` and `barker_correct`, and `DEFAULT_CODEWORD`, `DEFAULT_AC` and `sw_matrix` over 28 LAPs. `le_whitening.py` has no committed table of its own, so its 40 channel offsets are checked against the specification and the run they index into against the BR/EDR `WHITENING_DATA` the library does carry | The generators themselves, re-run. The LE offsets come from Vol 6, Part B, Section 3.2, written out in the test as a shift register rather than taken from the script, and loaded the way that section's own worked example for channel index 23 loads it. The whole of the sync word path is pinned by one LAP with no bits set and one per LAP bit, which between them fix all 25 committed values |
 | `btaptap` | The keystroke decoder end to end, run as a user runs it: keystrokes out of baseband and HCI captures, modifier keys, a held key, `-c`, `-h` beside a capture, a frame cut short, and every way a run can fail, each one an `error:` line on stderr and a non-zero exit. Also the `pcapdump` module the README offers on its own, which writes a capture file and reads it back | The Ellisys export recorded in `python/pcaptools/tests`, 864 keyboard reports of someone typing, and captures the test builds itself from the HID boot-mode report layout |
-| `fuzz_find_ac_corpus`, `fuzz_bredr_corpus`, `fuzz_le_corpus`, `fuzz_pcap_corpus`, `fuzz_pcapng_corpus` | The seed corpus of each fuzz target replayed through it: the access code search, the BR/EDR header and payload decoders, the LE decoder, and the PCAP and PCAPNG writers fed packets that were decoded from the same bytes. Present only where the compiler builds a libFuzzer program | The suite's own sample packets, with the parameter bytes each target reads in front of them, plus any input a run of that target once failed on. [Fuzzing](#fuzzing) says how to run a target for longer |
+| `fuzz_find_ac_corpus`, `fuzz_bredr_corpus`, `fuzz_piconet_corpus`, `fuzz_le_corpus`, `fuzz_pcap_corpus`, `fuzz_pcapng_corpus` | The seed corpus of each fuzz target replayed through it: the access code search, the BR/EDR header and payload decoders, clock and UAP recovery over a run of packets, the LE decoder, and the PCAP and PCAPNG writers fed packets that were decoded from the same bytes. Present only where the compiler builds a libFuzzer program | The suite's own sample packets, with the parameter bytes each target reads in front of them, plus any input a run of that target once failed on. [Fuzzing](#fuzzing) says how to run a target for longer |
 | `library_config` | The library configurations and install directories the build offers: that one building neither library is refused while configuring, that a static-only build builds a test program, that the library, the header and `libbtbb.pc` land in the directories the build was given - `CMAKE_INSTALL_LIBDIR`, `CMAKE_INSTALL_INCLUDEDIR`, `LIB_SUFFIX`, each empty, a path, an absolute path, and the precedence between them - that the two directories `libbtbb.pc` names hold the library and the header, including after the install is staged into a second prefix, and that a directory leading out of the prefix is refused | Configures, builds and installs trees of its own, because a build is in one configuration and one prefix only |
 | `uthash_oom` | What the library's two hash tables do when they cannot be allocated: each of the three allocations uthash makes for the piconet survey's table - the table, its bucket array, and a larger bucket array once a bucket chain has grown - and the table `btbb_init()` builds, with the message, the stream it goes on and the exit status checked, and the survey keeping its piconet while the allocator serves every request | An allocator of the test's own under `uthash_malloc`, so that only the tables' own allocations fail and the entries the library allocates and checks are left working. Each failure runs in a child process, since the library is expected to exit |
 | `abi_surface` | What the shared library exports, against `btbb.h`: that every function the header declares is in the library, so a program including it links; that nothing else is exported, so no helper of the library's own reads as part of the interface; and that every declaration carries the `BTBB_API` macro, which is what gives a function default visibility in a library compiled with `-fvisibility=hidden` | The header and the built library, read with `nm`, where the build found one. Names beginning with an underscore are the linker's own and are left out |
