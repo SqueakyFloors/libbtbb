@@ -43,6 +43,8 @@
   counted by lell_malformed_count(); lell_set_malformed_verbose() asks for it.
 - Fixed: a service UUID list whose length is not a whole number of UUIDs
   printed none of them; the whole ones now print, and the leftover is counted.
+- A 32-bit Service UUID list (AD types 0x04 and 0x05) now prints as UUIDs;
+  earlier releases showed its bytes under an unrecognized type.
 - Fixed: lell_print() reported a Tx Power Level of -12 dBm as 244 dBm; it
   now prints the signed value the specification defines, on every host.
 - Fixed: an advertising PDU too short for the fields read from it now says
@@ -53,6 +55,9 @@
   index; the index is now bounded.
 - Manufacturer-specific data names 4133 companies from the Bluetooth SIG's
   published Assigned Numbers, where BlueZ's gave 1038, and keeps the 73.
+- New btbb_company_name() gives a program that same table: it returns the
+  name the SIG assigns a company identifier, or NULL where the identifier is
+  not assigned.
 - Fixed: LE decode complaints went into the packet dump on standard output;
   they now go to standard error, unchanged in wording.
 
@@ -68,8 +73,19 @@
   failed headers, or 10 after two seconds, now give BTBB_PROCESS_LOCK_LOST.
 - New btbb_piconet_drop_clock() hands back a clock whose only symptom is
   silence; a clock given up is not chosen again, and a caller's is kept.
-- Fixed: clock recovery accepted a wrong clock too readily; it now needs
-  four further hops to agree, which accepts a wrong one a tenth as often.
+- Fixed: clock recovery accepted whichever candidate was last standing,
+  which against an adaptive piconet was often a wrong one; candidates are
+  now scored on the hops they explain and a clock is accepted only while it
+  is clearly ahead of every other, so a search that cannot tell two clocks
+  apart ends with none rather than with the wrong one.
+- Fixed: a hop predicted on a channel the observer had not yet heard ruled a
+  candidate out, and so ruled out the piconet's own clock while its map was
+  still being learned; such a hop now counts neither way, and the two clocks
+  drifting apart is followed instead of costing the clock.
+- The clock search costs more while it runs: it carries up to a few million
+  candidates where it carried tens of thousands, which is tens of megabytes
+  and up to a few hundred milliseconds of an attempt inside the caller's
+  packet callback.
 - Fixed: a piconet that nothing works for was reported on every loss; it is
   now reported once, after three clocks are given up.
 - Fixed: btbb_piconet_get_clk_offset() read 0 until the whole clock was
@@ -82,6 +98,13 @@
   whole hopping sequence took; it now answers hops one at a time.
 - The hopping sequence is gone, with its notes on standard output and the
   exported hop(), gen_hop_pattern() and get_hop_pattern().
+- Fixed: the hop permutation table was filled the first time a hop was
+  predicted, so two threads reaching it together could read half-written
+  entries; btbb_init() fills it now. The 524,288 permutations are computed
+  there rather than on a first hop, so every caller of btbb_init() pays for
+  them where only one that went on to predict a hop paid before. A caller
+  that never calls btbb_init() still gets the fill on its first hop
+  prediction, and has to decode on one thread.
 
 ### Capture files
 
@@ -155,11 +178,11 @@
   looks in lib64 and a multiarch directory, and finds the pkg-config file, a
   static archive, a .dylib and btbb.h.
 - Fixed: the library exported 128 names, one of which, bt_compidtostr(),
-  clashed with BlueZ's; it now exports only the 96 btbb.h declares.
+  clashed with BlueZ's; it now exports only the 99 btbb.h declares.
 - Fixed: on Windows the BTBB_API macro each declaration in btbb.h carries
   was not the dllexport or dllimport declaration a shared library needs.
 - The soname stays libbtbb.so.1 and the library version is 1.3, where
-  2020-12-R1's was 1.0; abidiff finds nine functions gained, none lost.
+  2020-12-R1's was 1.0; abidiff finds ten functions gained, none lost.
 - Existing callers see three changes behind that interface: two functions
   answer a positive value where they answered 0, the writers report a write
   that missed the file, and a decode says less where it knows less.
@@ -219,6 +242,10 @@
 - A capture file name already in use was reported as a failed write; it is
   now reported as the name being taken, and the reason a write did fail is
   no longer lost while the file is closed and removed.
+- Five string tables the low energy printer reads were writable where they
+  are never written; they are read-only now. perm_table and its flag stopped
+  being external symbols, which the shared library already hid and the static
+  library did not.
 
 _Russell Wagner &lt;152923636+SqueakyFloors@users.noreply.github.com&gt;, 30 Oct 2026 09:30:00 -0700_
 

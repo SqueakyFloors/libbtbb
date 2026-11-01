@@ -5,23 +5,6 @@
  * It works through the public API in btbb.h, except that it reads a couple of
  * packet fields the public API has no getter for straight out of the
  * internal header.
- *
- * This file is part of libbtbb
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2, or (at your option)
- * any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with libbtbb; see the file COPYING.  If not, write to
- * the Free Software Foundation, Inc., 51 Franklin Street,
- * Boston, MA 02110-1301, USA.
  */
 
 #include <stdio.h>
@@ -257,6 +240,16 @@ static void test_esco_length_accessors(void)
 	btbb_packet_unref(pkt);
 }
 
+/* The company identifier lookup, called through the library rather than by
+ * compiling its table in, which is what a program linking libbtbb does. */
+static void test_company_names(void)
+{
+	const char *name = btbb_company_name(1447);
+
+	CHECK(name != NULL && strcmp(name, "Sonos Inc") == 0);
+	CHECK(btbb_company_name(0xFFFE) == NULL);
+}
+
 static void test_version_strings(void)
 {
 	CHECK(btbb_get_version() != NULL && btbb_get_version()[0] != '\0');
@@ -266,6 +259,7 @@ static void test_version_strings(void)
 int main(void)
 {
 	test_version_strings();
+	test_company_names();
 	test_le_advertising_packet();
 	test_le_channel_index();
 	test_bredr_syncword();

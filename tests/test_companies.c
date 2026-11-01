@@ -1,24 +1,7 @@
 /*
- * The company identifier table: that an identifier assigned since the table
- * was last taken from BlueZ decodes by name, that the names the earlier table
- * carried are still there, and that an unassigned identifier says so.
- *
- * This file is part of libbtbb
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2, or (at your option)
- * any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with libbtbb; see the file COPYING.  If not, write to
- * the Free Software Foundation, Inc., 51 Franklin Street,
- * Boston, MA 02110-1301, USA.
+ * btbb_company_name(): that an identifier assigned since the table was last
+ * taken from BlueZ decodes by name, that the names the earlier table carried
+ * are still there, and that an unassigned identifier comes back as NULL.
  */
 
 #include <stdio.h>
@@ -29,14 +12,26 @@
 static int failures = 0;
 
 #define CHECK_NAME(compid, want)                                           \
-	do {                                                               \
-		const char *got = bt_compidtostr((uint16_t)(compid));      \
-		if (strcmp(got, (want)) != 0) {                            \
-			printf("FAIL %s:%d: 0x%04X is \"%s\", wanted \"%s\"\n", \
-			       __FILE__, __LINE__, (unsigned)(compid),     \
-			       got, (want));                               \
-			++failures;                                        \
-		}                                                          \
+	do {                                                                      \
+		const char *got = btbb_company_name((uint16_t)(compid));                 \
+		if (got == NULL || strcmp(got, (want)) != 0) {                           \
+			printf("FAIL %s:%d: 0x%04X is %s, wanted \"%s\"\n",                     \
+			       __FILE__, __LINE__, (unsigned)(compid),                          \
+			       got ? got : "NULL", (want));                                     \
+			++failures;                                                             \
+		}                                                                        \
+	} while (0)
+
+/* An identifier the Bluetooth SIG has not assigned has no name at all. */
+#define CHECK_UNASSIGNED(compid)                                           \
+	do {                                                                      \
+		const char *got = btbb_company_name((uint16_t)(compid));                 \
+		if (got != NULL) {                                                       \
+			printf("FAIL %s:%d: 0x%04X is not assigned but "                        \
+			       "names \"%s\"\n",                                                \
+			       __FILE__, __LINE__, (unsigned)(compid), got);                    \
+			++failures;                                                             \
+		}                                                                        \
 	} while (0)
 
 /* The highest identifier the table names, and the last one in the Bluetooth
@@ -50,10 +45,10 @@ static int failures = 0;
 #define NAMED_AT_LEAST 4000
 
 /* Identifiers the Bluetooth SIG assigned after the table was last taken from
- * BlueZ, which earlier releases decoded as "not assigned". */
+ * BlueZ, which earlier releases had no name for. */
 static void test_recently_assigned_identifiers_decode_by_name(void)
 {
-	CHECK_NAME(0x113D, "Venndelta Pty Ltd");
+	CHECK_NAME(0x113D, "Venndelta Pty Ltd");	/* the last entry */
 	CHECK_NAME(0x113B, "ONiO AS");
 	CHECK_NAME(0x1101, "Nearfaces UG (haftungsbeschr\xc3\xa4nkt)");
 	CHECK_NAME(0x0BB8, "INNOVAG PTY. LTD.");
@@ -96,11 +91,12 @@ static void test_a_name_outside_ascii_stays_intact(void)
 static void test_unassigned_and_reserved_identifiers(void)
 {
 	/* Gaps inside the assigned range, and everything above it. */
-	CHECK_NAME(0x0414, "not assigned");
-	CHECK_NAME(0x1036, "not assigned");
-	CHECK_NAME(HIGHEST_ASSIGNED + 1, "not assigned");
-	CHECK_NAME(0xFFFE, "not assigned");
+	CHECK_UNASSIGNED(0x0414);
+	CHECK_UNASSIGNED(0x1036);
+	CHECK_UNASSIGNED(HIGHEST_ASSIGNED + 1);
+	CHECK_UNASSIGNED(0xFFFE);
 
+	/* The one identifier above the assigned range that has a name. */
 	CHECK_NAME(0xFFFF, "internal use");
 }
 
@@ -116,12 +112,14 @@ static void test_the_whole_identifier_range(void)
 	int said_above = 0;
 
 	for (compid = 0; compid <= 0xFFFF; ++compid) {
-		const char *name = bt_compidtostr((uint16_t)compid);
+		const char *name = btbb_company_name((uint16_t)compid);
 
-		if (name == NULL || name[0] == '\0') {
+		if (name == NULL)
+			continue;
+		if (name[0] == '\0') {
 			if (!said_empty) {
-				printf("FAIL %s:%d: 0x%04X has no name at "
-				       "all\n",
+				printf("FAIL %s:%d: 0x%04X has an empty "
+				       "name\n",
 				       __FILE__, __LINE__, compid);
 				++failures;
 				said_empty = 1;
@@ -129,15 +127,14 @@ static void test_the_whole_identifier_range(void)
 			continue;
 		}
 		if (compid > HIGHEST_ASSIGNED && compid != 0xFFFF) {
-			if (strcmp(name, "not assigned") != 0 && !said_above) {
+			if (!said_above) {
 				printf("FAIL %s:%d: 0x%04X is above the "
 				       "assigned range but names \"%s\"\n",
 				       __FILE__, __LINE__, compid, name);
 				++failures;
 				said_above = 1;
 			}
-		} else if (compid <= HIGHEST_ASSIGNED &&
-			   strcmp(name, "not assigned") != 0) {
+		} else if (compid <= HIGHEST_ASSIGNED) {
 			++named;
 		}
 	}

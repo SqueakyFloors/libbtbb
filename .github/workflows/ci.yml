@@ -173,7 +173,7 @@ jobs:
       - name: Build
         run: >
           cmake --build build -j
-          --target fuzz_find_ac fuzz_bredr fuzz_le fuzz_pcap fuzz_pcapng
+          --target fuzz_find_ac fuzz_bredr fuzz_piconet fuzz_le fuzz_pcap fuzz_pcapng
 
       # A minute each, from the seed corpus in the tree, which is long enough
       # to tell that a target still reaches into the library and short enough
@@ -184,7 +184,7 @@ jobs:
           UBSAN_OPTIONS: print_stacktrace=1
         shell: bash
         run: |
-          for target in find_ac bredr le pcap pcapng; do
+          for target in find_ac bredr piconet le pcap pcapng; do
             corpus="$RUNNER_TEMP/corpus/$target"
             mkdir -p "$corpus"
             cp tests/fuzz/corpus/"$target"/* "$corpus/"

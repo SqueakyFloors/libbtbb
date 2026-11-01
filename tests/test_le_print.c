@@ -5,23 +5,6 @@
  * packets the decode cannot read as what they claim to be, which are counted
  * by kind and say nothing until a caller asks for the detail - and then on
  * stderr, with the dump on stdout either way.
- *
- * This file is part of libbtbb
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2, or (at your option)
- * any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with libbtbb; see the file COPYING.  If not, write to
- * the Free Software Foundation, Inc., 51 Franklin Street,
- * Boston, MA 02110-1301, USA.
  */
 
 #include <stdio.h>
@@ -103,6 +86,35 @@ static const uint8_t ADV_IND_UUID16_PACKET[MAX_LE_SYMBOLS] = {
 	0x66, 0x55, 0x44, 0x33, 0x22, 0x11,	/* AdvA */
 	0x02, 0x01, 0x1a,			/* flags */
 	0x05, 0x03, 0x0d, 0x18, 0x0f, 0x18,	/* UUIDs 0x180d and 0x180f */
+	0xde, 0xad, 0xbe,			/* CRC, unchecked */
+};
+
+/* A 32-bit Service UUID list holding no UUID at all: the element is its type
+ * byte and nothing else, which is a whole number of UUIDs, namely none. */
+static const uint8_t EMPTY_UUID32_LIST_PACKET[MAX_LE_SYMBOLS] = {
+	0xd6, 0xbe, 0x89, 0x8e,
+	0x00,					/* ADV_IND */
+	8,					/* 6 + 2 bytes */
+	0x66, 0x55, 0x44, 0x33, 0x22, 0x11,	/* AdvA */
+	0x01, 0x05,				/* 32-bit UUIDs, 0 bytes */
+	0xde, 0xad, 0xbe,			/* CRC, unchecked */
+};
+
+/*
+ * One list of each kind of 32-bit Service UUID element: 0x04, the incomplete
+ * list, and 0x05, the complete one. As with the 16-bit lists, a flags element
+ * in front puts them on an odd offset.
+ */
+static const uint8_t ADV_IND_UUID32_PACKET[MAX_LE_SYMBOLS] = {
+	0xd6, 0xbe, 0x89, 0x8e,			/* advertising access address */
+	0x00,					/* ADV_IND, TxAdd public */
+	25,					/* 6 + 19 bytes */
+	0x66, 0x55, 0x44, 0x33, 0x22, 0x11,	/* AdvA */
+	0x02, 0x01, 0x1a,			/* flags */
+	0x05, 0x04, 0x0d, 0x18, 0x00, 0x00,	/* UUID 0000180d, more */
+	0x09, 0x05,				/* and a complete list of two: */
+	0x0f, 0x18, 0x00, 0x00,			/* 0000180f */
+	0x78, 0x56, 0x34, 0x12,			/* 12345678 */
 	0xde, 0xad, 0xbe,			/* CRC, unchecked */
 };
 
@@ -355,6 +367,16 @@ static const uint8_t BAD_UUID16_PACKET[MAX_LE_SYMBOLS] = {
 	0xde, 0xad, 0xbe,			/* CRC, unchecked */
 };
 
+/* A 32-bit Service UUID list too short to hold even one UUID. */
+static const uint8_t BAD_UUID32_PACKET[MAX_LE_SYMBOLS] = {
+	0xd6, 0xbe, 0x89, 0x8e,
+	0x00,					/* ADV_IND */
+	10,					/* 6 + 4 bytes */
+	0x66, 0x55, 0x44, 0x33, 0x22, 0x11,	/* AdvA */
+	0x03, 0x05, 0x0d, 0x18,			/* 32-bit UUIDs, 2 bytes */
+	0xde, 0xad, 0xbe,			/* CRC, unchecked */
+};
+
 static const uint8_t BAD_UUID128_PACKET[MAX_LE_SYMBOLS] = {
 	0xd6, 0xbe, 0x89, 0x8e,
 	0x00,					/* ADV_IND */
@@ -387,6 +409,9 @@ static const struct {
 	{ BAD_UUID16_PACKET,
 	  "note: wrong length (3, must be divisible by 2)\n",
 	  "Type 03 (16-bit Service UUIDs)", LELL_MALFORMED_AD_FIELD_LENGTH },
+	{ BAD_UUID32_PACKET,
+	  "note: wrong length (2, must be divisible by 4)\n",
+	  "Type 05 (32-bit Service UUIDs)", LELL_MALFORMED_AD_FIELD_LENGTH },
 	{ BAD_UUID128_PACKET,
 	  "note: wrong length (2, must be divisible by 16)\n",
 	  "Type 07 (128-bit Service UUIDs)", LELL_MALFORMED_AD_FIELD_LENGTH },
@@ -453,6 +478,48 @@ static void test_malformed_payloads_are_counted_not_printed(void)
 	}
 }
 
+/*
+ * Both kinds of 32-bit Service UUID list read as UUIDs rather than as an
+ * unrecognized type whose bytes are all the dump can show.
+ */
+static void test_uuid32_advertising_data(void)
+{
+	char out[8192], err[1024];
+
+	reset_malformed_counts();
+
+	if (decode_and_capture(ADV_IND_UUID32_PACKET, out, sizeof(out),
+			       err, sizeof(err)) != 0)
+		return;
+
+	CHECK_CONTAINS(out, "Type 04 (32-bit Service UUIDs, more available)");
+	CHECK_CONTAINS(out, "Type 05 (32-bit Service UUIDs)");
+	/* UUIDs are little endian on air, whatever the host is */
+	CHECK_CONTAINS(out, "\n           0000180d\n");
+	CHECK_CONTAINS(out, "\n           0000180f\n           12345678\n");
+	/* an unrecognized type ends its line after the number and dumps the
+	 * bytes, so neither type reads that way any more */
+	CHECK_LACKS(out, "Type 04\n");
+	CHECK_LACKS(out, "Type 05\n");
+	CHECK_EQUALS(err, "");
+	check_count(LELL_MALFORMED_ANY, 0, "two well-formed lists");
+
+	/* A list holding no UUID is a whole number of them, so it prints its
+	 * heading, no value line, and counts as nothing wrong - which is what
+	 * the 16-bit and 128-bit lists do with the same length. */
+	reset_malformed_counts();
+
+	if (decode_and_capture(EMPTY_UUID32_LIST_PACKET, out, sizeof(out),
+			       err, sizeof(err)) != 0)
+		return;
+
+	/* the heading and then the blank line that ends the advertising data,
+	 * so no value line of any kind can hide between them */
+	CHECK_CONTAINS(out, "Type 05 (32-bit Service UUIDs)\n\n");
+	CHECK_EQUALS(err, "");
+	check_count(LELL_MALFORMED_ANY, 0, "a list of no UUIDs");
+}
+
 /* A Service UUID list whose length is not a whole number of UUIDs. Each
  * holds more than one whole UUID, so a loop reading one element too far
  * shows up as a value line too many. */
@@ -463,6 +530,18 @@ static const uint8_t ODD_UUID16_LIST_PACKET[MAX_LE_SYMBOLS] = {
 	0x66, 0x55, 0x44, 0x33, 0x22, 0x11,	/* AdvA */
 	0x06, 0x03, 0x0d, 0x18, 0x0f, 0x18,	/* 16-bit UUIDs, 5 bytes: */
 	0x0f,					/* two of them and a byte over */
+	0xde, 0xad, 0xbe,			/* CRC, unchecked */
+};
+
+static const uint8_t ODD_UUID32_LIST_PACKET[MAX_LE_SYMBOLS] = {
+	0xd6, 0xbe, 0x89, 0x8e,
+	0x00,					/* ADV_IND */
+	17,					/* 6 + 11 bytes */
+	0x66, 0x55, 0x44, 0x33, 0x22, 0x11,	/* AdvA */
+	0x0a, 0x05,				/* 32-bit UUIDs, 9 bytes: */
+	0x0d, 0x18, 0x00, 0x00,			/* 0000180d */
+	0x0f, 0x18, 0x00, 0x00,			/* 0000180f */
+	0x78,					/* and a byte over */
 	0xde, 0xad, 0xbe,			/* CRC, unchecked */
 };
 
@@ -499,6 +578,24 @@ static void test_odd_uuid_lists_print_the_uuids_they_hold(void)
 	CHECK_CONTAINS(out, "\n           180d\n           180f\n");
 	/* and no third value line, since one byte is not a UUID */
 	CHECK_LACKS(out, "180f\n           ");
+	CHECK_EQUALS(err, "");
+	check_count(LELL_MALFORMED_AD_FIELD_LENGTH, 1, "the odd byte");
+
+	reset_malformed_counts();
+
+	if (decode_and_capture(ODD_UUID32_LIST_PACKET, out, sizeof(out),
+			       err, sizeof(err)) != 0)
+		return;
+
+	/* Nine bytes of list: the UUIDs 0000180d and 0000180f, one byte over.
+	 * The whole block is checked, up to the blank line that ends the
+	 * advertising data, so a loop reading one element too far shows up as
+	 * a third value line rather than relying on what comes next. */
+	CHECK_CONTAINS(out,
+		       "Type 05 (32-bit Service UUIDs)\n"
+		       "           0000180d\n"
+		       "           0000180f\n"
+		       "\n");
 	CHECK_EQUALS(err, "");
 	check_count(LELL_MALFORMED_AD_FIELD_LENGTH, 1, "the odd byte");
 
@@ -645,6 +742,32 @@ static void test_well_formed_values_keep_their_indent(void)
 	CHECK_CONTAINS(out, "\n           UUID: 180d, Additional: 5a\n");
 	CHECK_CONTAINS(out, "\n           Company: Apple, Inc.\n");
 	CHECK_CONTAINS(out, "\n           Data: 01 02\n");
+}
+
+/*
+ * Manufacturer-specific data quoting a company identifier the Bluetooth SIG
+ * has not assigned. There is no name to print, and the line says so rather
+ * than being left out or printing nothing after the colon.
+ */
+static void test_an_unassigned_company_identifier_says_so(void)
+{
+	static const uint8_t UNKNOWN_COMPANY_PACKET[MAX_LE_SYMBOLS] = {
+		0xd6, 0xbe, 0x89, 0x8e,
+		0x00,				/* ADV_IND */
+		11,				/* 6 + 5 bytes */
+		0x66, 0x55, 0x44, 0x33, 0x22, 0x11,	/* AdvA */
+		0x04, 0xff, 0xfe, 0xff, 0x7a,	/* company 0xfffe, one byte */
+		0xde, 0xad, 0xbe,		/* CRC, unchecked */
+	};
+	char out[8192], err[1024];
+
+	if (decode_and_capture(UNKNOWN_COMPANY_PACKET, out, sizeof(out),
+			       err, sizeof(err)) != 0)
+		return;
+
+	CHECK_EQUALS(err, "");
+	CHECK_CONTAINS(out, "\n           Company: not assigned\n");
+	CHECK_CONTAINS(out, "\n           Data: 7a\n");
 }
 
 /*
@@ -878,11 +1001,13 @@ int main(void)
 	test_connect_req();
 	test_tx_power_level_is_signed();
 	test_uuid16_advertising_data();
+	test_uuid32_advertising_data();
 	test_malformed_payloads_are_counted_not_printed();
 	test_odd_uuid_lists_print_the_uuids_they_hold();
 	test_verbose_prints_the_detail();
 	test_counts_add_up_and_reset();
 	test_well_formed_values_keep_their_indent();
+	test_an_unassigned_company_identifier_says_so();
 	test_an_over_claimed_advertising_length();
 	test_an_extended_advertising_length();
 	test_a_payload_too_short_for_its_type();

@@ -1,25 +1,10 @@
+/* SPDX-License-Identifier: GPL-2.0-or-later */
+
 /*
  * The library's settings for uthash, the hash table macros in uthash.h.
  * Include this file instead of uthash.h: uthash reads its settings from
  * whatever is defined before it, so a source that included uthash.h directly
  * would get the defaults.
- *
- * This file is part of libbtbb
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2, or (at your option)
- * any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with libbtbb; see the file COPYING.  If not, write to
- * the Free Software Foundation, Inc., 51 Franklin Street,
- * Boston, MA 02110-1301, USA.
  */
 /* uthash reads its settings when it is included, so a source that has already
  * included it is running on the defaults and the settings below would come too

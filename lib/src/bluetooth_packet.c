@@ -25,6 +25,7 @@
 #include <string.h>
 
 #include "bluetooth_packet.h"
+#include "bluetooth_piconet.h"
 #include "btbb_uthash.h"
 #include "sw_check_tables.h"
 
@@ -319,6 +320,12 @@ const char* btbb_get_version(void) {
 
 int btbb_init(int max_ac_errors)
 {
+	/* The hop permutation table, first, before even the argument is
+	 * checked: filling it cannot fail, so the table is whole however this
+	 * call comes out and a caller needs no rule about which failures leave
+	 * it half done. btbb.h has the rest. */
+	perm_table_init();
+
 	/* Sanity check max_ac_errors. */
 	if ( (max_ac_errors < 0) || (max_ac_errors > AC_ERROR_LIMIT) ) {
 		fprintf(stderr, "%s: max_ac_errors out of range\n",

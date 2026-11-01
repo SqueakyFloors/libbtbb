@@ -29,6 +29,7 @@
 #include "bluetooth_le_packet.h"
 #include <assert.h>
 #include <ctype.h>
+#include <inttypes.h>
 #include <stdarg.h>
 #include <string.h>
 
@@ -39,9 +40,6 @@
  * capture writers' record length is derived from. */
 typedef char le_symbol_buffer_is_the_longest_frame[
 	(MAX_LE_SYMBOLS == LE_MAX_PDU_LENGTH + LE_FRAMING_BYTES) ? 1 : -1];
-
-/* company identifier lookup */
-const char *bt_compidtostr(uint16_t compid);
 
 /* How many malformed payloads of each kind lell_print() has met. Malformed
  * advertising data arrives by the hundred in a ten-second capture, so the
@@ -111,20 +109,20 @@ static void _malformed(lell_malformed_kind kind, const char *fmt, ...)
 }
 
 /* string representations of advertising packet type */
-static const char *ADV_TYPE_NAMES[] = {
+static const char * const ADV_TYPE_NAMES[] = {
 	"ADV_IND", "ADV_DIRECT_IND", "ADV_NONCONN_IND", "SCAN_REQ",
 	"SCAN_RSP", "CONNECT_REQ", "ADV_SCAN_IND",
 };
 
 /* source clock accuracy in a connect packet */
-static const char *CONNECT_SCA[] = {
+static const char * const CONNECT_SCA[] = {
 	"251 ppm to 500 ppm", "151 ppm to 250 ppm", "101 ppm to 150 ppm",
 	"76 ppm to 100 ppm", "51 ppm to 75 ppm", "31 ppm to 50 ppm",
 	"21 ppm to 30 ppm", "0 ppm to 20 ppm",
 };
 
 /* flags */
-static const char *FLAGS[] = {
+static const char * const FLAGS[] = {
 	"LE Limited Discoverable Mode", "LE General Discoverable Mode",
 	"BR/EDR Not Supported",
 	"Simultaneous LE and BR/EDR to Same Device Capable (Controller)",
@@ -564,7 +562,7 @@ static void _dump_32(const char *name, const uint8_t *buf, int offset) {
 				   (uint32_t) buf[offset+2] << 16 |
 				   (uint32_t) buf[offset+1] << 8 |
 				   (uint32_t) buf[offset+0];
-	printf("    %s%08x\n", name, val);
+	printf("    %s%08" PRIx32 "\n", name, val);
 }
 
 static void _dump_uuid(const uint8_t *uuid) {
@@ -660,6 +658,37 @@ print16:
 						   " 2)\n", sublen-1);
 				}
 				break;
+			case 0x04:
+				printf(" (32-bit Service UUIDs, more available)\n");
+				goto print32;
+			case 0x05:
+				printf(" (32-bit Service UUIDs)\n");
+print32:
+				/* The whole UUIDs this list holds, as above. */
+				for (i = 0; i + 4 <= sublen - 1; i += 4) {
+					/* assembled a byte at a time: the
+					 * buffer is not aligned for a
+					 * uint32_t, and the UUID is
+					 * little endian whatever the
+					 * host is */
+					uint32_t uuid =
+						(uint32_t) buf[pos+4+i] << 24 |
+						(uint32_t) buf[pos+3+i] << 16 |
+						(uint32_t) buf[pos+2+i] << 8 |
+						(uint32_t) buf[pos+1+i];
+					/* the conversion for a uint32_t, which
+					 * plain %x is only on a host where
+					 * unsigned int is 32 bits wide */
+					printf("           %08" PRIx32 "\n",
+					       uuid);
+				}
+				if ((sublen - 1) % 4 != 0) {
+					_malformed(LELL_MALFORMED_AD_FIELD_LENGTH,
+						   "note: wrong length (%d,"
+						   " must be divisible by"
+						   " 4)\n", sublen-1);
+				}
+				break;
 			case 0x06:
 				printf(" (128-bit Service UUIDs, more available)\n");
 				goto print128;
@@ -751,7 +780,9 @@ print128:
 				printf(" (Manufacturer Specific Data)\n");
 				if (sublen - 1 >= 2) {
 					uint16_t company = (buf[pos+2] << 8) | buf[pos+1];
-					printf("           Company: %s\n", bt_compidtostr(company));
+					const char *company_name = btbb_company_name(company);
+					printf("           Company: %s\n",
+					       company_name ? company_name : "not assigned");
 					printf("           ");
 					printf("Data:");
 					for (i = 3; i < sublen; ++i)
@@ -781,7 +812,7 @@ void lell_print(const lell_packet *pkt)
 	int i, opcode, needed;
 	if (lell_packet_is_data(pkt)) {
 		int llid = pkt->symbols[4] & 0x3;
-		static const char *llid_str[] = {
+		static const char * const llid_str[] = {
 			"Reserved",
 			"LL Data PDU / empty or L2CAP continuation",
 			"LL Data PDU / L2CAP start",
@@ -805,7 +836,7 @@ void lell_print(const lell_packet *pkt)
 				break;
 			}
 			opcode = pkt->symbols[6];
-			static const char *opcode_str[] = {
+			static const char * const opcode_str[] = {
 				"LL_CONNECTION_UPDATE_REQ",
 				"LL_CHANNEL_MAP_REQ",
 				"LL_TERMINATE_IND",
