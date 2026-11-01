@@ -129,15 +129,20 @@ typedef struct btbb_packet btbb_packet;
  * caller on a small machine may care about.
  *
  * What is safe after that: one btbb_piconet per thread, and the
- * packets that belong to it. Nothing here is internally locked, so two
- * threads must not call any function that takes a btbb_piconet* it can
- * write -- btbb_process_packet(), btbb_uap_from_header(),
- * btbb_winnow(), btbb_init_piconet(), the setters, and
- * btbb_piconet_ref() and btbb_piconet_unref(), whose reference count
- * is a plain int -- on the same piconet. The same goes for
- * btbb_packet_ref() and btbb_packet_unref() on one packet. A miscount
- * there frees the object twice or leaks it, where the rest of this
- * paragraph costs a wrong answer.
+ * packets that belong to it. Nothing here is internally locked, so a
+ * piconet belongs to one thread at a time: no two threads may touch it
+ * at once if either of them can write it. These can write it --
+ * btbb_init_piconet(), btbb_process_packet(), btbb_uap_from_header(),
+ * btbb_winnow(), btbb_init_hop_reversal(), btbb_piconet_drop_clock(),
+ * btbb_piconet_set_uap(), btbb_piconet_set_clk_offset(),
+ * btbb_piconet_set_flag(), btbb_piconet_set_channel_seen(),
+ * btbb_piconet_clear_channel_seen(), btbb_piconet_set_afh_map(),
+ * btbb_piconet_ref() and btbb_piconet_unref() -- and the ones that
+ * only read are safe just while no thread is inside one of those. The
+ * reference count is a plain int, as btbb_packet_ref() and
+ * btbb_packet_unref() keep for one packet, so a miscount there frees
+ * the object twice or leaks it, where the rest of this paragraph costs
+ * a wrong answer.
  *
  * A thread that wants another thread's result passes it over the
  * accessors while it owns both piconets. btbb_piconet_get_afh_map()

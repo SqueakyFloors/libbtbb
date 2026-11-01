@@ -47,57 +47,57 @@ static int failures = 0;
 		}                                                          \
 	} while (0)
 
-int main(void)
+/* How many of the 524,288 entries are not the permutation they stand for. A
+   half-filled table reads as zero where it was not reached, and perm5()
+   answers zero for only a few of its inputs, so a gap shows up here. */
+static int entries_wrong(void)
 {
-	int z, p_high, p_low;
-	int wrong = 0;
+	int z, p_high, p_low, wrong = 0;
 
-	/* Nothing has asked for a permutation yet, so the flag says so and
-	   every byte of the table is still zero. */
-	CHECK(perm_table_initialized == 0);
-	for (z = 0; z < 0x20; z++)
-		for (p_high = 0; p_high < 0x20; p_high++)
-			for (p_low = 0; p_low < 0x200; p_low++)
-				if (perm_table[z][p_high][p_low] != 0)
-					++wrong;
-	CHECK(wrong == 0);
-
-	/* A call that asks for no access code error correction builds no
-	   syndrome table, and fills the permutation table all the same: the
-	   two do not depend on each other. This case comes first, while no
-	   syndrome table has been built, or the one already there would be
-	   what skipped the build. */
-	CHECK(btbb_init(0) == 0);
-	CHECK(perm_table_initialized == 1);
-	CHECK(fast_perm(0x15, 0x0a, 0x123) == perm5(0x15, 0x0a, 0x123));
-
-	/* And an argument the library refuses leaves the table whole, because
-	   it is filled before the argument is looked at. */
-	perm_table_initialized = 0;
-	memset(perm_table, 0, sizeof(perm_table));
-	CHECK(btbb_init(-1) == -1);
-	CHECK(perm_table_initialized == 1);
-	CHECK(fast_perm(0x15, 0x0a, 0x123) == perm5(0x15, 0x0a, 0x123));
-
-	/* Back to nothing filled, for the whole-table check below. */
-	perm_table_initialized = 0;
-	memset(perm_table, 0, sizeof(perm_table));
-	CHECK(btbb_init(2) == 0);
-
-	/* btbb_init() filled it, so fast_perm() answers without filling
-	   anything itself. */
-	CHECK(perm_table_initialized == 1);
-
-	/* Every entry, against the permutation it stands for. A half-filled
-	   table reads as zero where it was not reached, and perm5() returns
-	   zero for only a few of its 524288 inputs, so this catches one. */
 	for (z = 0; z < 0x20; z++)
 		for (p_high = 0; p_high < 0x20; p_high++)
 			for (p_low = 0; p_low < 0x200; p_low++)
 				if (perm_table[z][p_high][p_low] !=
 				    perm5(z, p_high, p_low))
 					++wrong;
-	CHECK(wrong == 0);
+	return wrong;
+}
+
+/* How many entries are not zero, for the state before anything has filled
+   the table. */
+static int entries_set(void)
+{
+	int z, p_high, p_low, set = 0;
+
+	for (z = 0; z < 0x20; z++)
+		for (p_high = 0; p_high < 0x20; p_high++)
+			for (p_low = 0; p_low < 0x200; p_low++)
+				if (perm_table[z][p_high][p_low] != 0)
+					++set;
+	return set;
+}
+
+/* Back to the state a process starts in, so the next case fills the table
+   itself rather than reading what the last one left. */
+static void forget_the_table(void)
+{
+	perm_table_initialized = 0;
+	memset(perm_table, 0, sizeof(perm_table));
+}
+
+int main(void)
+{
+	/* Nothing has asked for a permutation yet, so the flag says so and
+	   every byte of the table is still zero. */
+	CHECK(perm_table_initialized == 0);
+	CHECK(entries_set() == 0);
+
+	/* btbb_init() fills it, so fast_perm() answers without filling
+	   anything itself, and every entry is the permutation it stands
+	   for. */
+	CHECK(btbb_init(2) == 0);
+	CHECK(perm_table_initialized == 1);
+	CHECK(entries_wrong() == 0);
 
 	/* The same answers through the reader. */
 	CHECK(fast_perm(0, 0, 0) == perm5(0, 0, 0));
@@ -107,7 +107,30 @@ int main(void)
 	/* A second btbb_init() leaves the table alone, as it leaves the
 	   syndrome map alone. */
 	CHECK(btbb_init(2) == 0);
-	CHECK(fast_perm(0x15, 0x0a, 0x123) == perm5(0x15, 0x0a, 0x123));
+	CHECK(entries_wrong() == 0);
+
+	/* A call that asks for no access code error correction fills the
+	   table all the same: the two tables do not depend on each other.
+	   Whole, not one entry: a table filled part way would answer for the
+	   entry a case happened to read. */
+	forget_the_table();
+	CHECK(btbb_init(0) == 0);
+	CHECK(perm_table_initialized == 1);
+	CHECK(entries_wrong() == 0);
+
+	/* And so does a call whose argument the library refuses, because the
+	   table is filled before the argument is looked at. */
+	forget_the_table();
+	CHECK(btbb_init(-1) == -1);
+	CHECK(perm_table_initialized == 1);
+	CHECK(entries_wrong() == 0);
+
+	/* The same for a value above what the library accepts, which is the
+	   other way the argument check refuses one. */
+	forget_the_table();
+	CHECK(btbb_init(AC_ERROR_LIMIT + 1) == -1);
+	CHECK(perm_table_initialized == 1);
+	CHECK(entries_wrong() == 0);
 
 	if (failures) {
 		printf("%d failure%s\n", failures, failures == 1 ? "" : "s");
