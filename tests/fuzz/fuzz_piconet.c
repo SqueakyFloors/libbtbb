@@ -12,8 +12,9 @@
  * The library starts the candidate search itself only on a narrow path, so an
  * option bit starts it the way a capture tool does, once the piconet has its
  * UAP. From then on btbb_process_packet() narrows the candidates packet by
- * packet, which is how a run reaches CLK1-27, the follow, and giving a clock
- * up again.
+ * packet, which is how a run reaches CLK1-27 and the follow. Another bit
+ * gives the followed clock up again once there is one, so a run also covers
+ * the discovery that starts over after that.
  *
  * btbb_init_survey() is deliberately not called: it turns the library's
  * survey mode on for the whole process and there is no call that turns it
@@ -30,9 +31,15 @@
  *   bytes 5-14  the AFH channel map, one bit per channel
  *   rest        a run of packet records, each PACKET_RECORD_BYTES long:
  *                 byte 0      the channel the packet arrived on
- *                 bytes 1-4   the observer's clock, least significant byte
- *                             first, in 312.5 us CLKN ticks
+ *                 bytes 1-4   how far the observer's clock has moved on
+ *                             since the packet before, in 312.5 us CLKN
+ *                             ticks, least significant byte first
  *                 bytes 5-28  the symbol stream, 8 symbols to a byte
+ *
+ * The clock is a step rather than a value because a receiver's clock only
+ * runs forward, apart from the wrap every 2^28 ticks, and recovery remembers
+ * the difference between each packet's clock and the first one's. A run whose
+ * clocks jumped backwards would hand it slot offsets no receiver produces.
  *
  * Notes about how recovery is getting on go to standard error, which a run
  * leaves open so that a sanitizer's report is in the log. A long campaign
@@ -85,9 +92,11 @@ int LLVMFuzzerInitialize(int *argc, char ***argv)
 	return 0;
 }
 
-/* One packet from the record at 'record', delivered to the piconet. */
-static void process_one(const uint8_t *record, uint32_t lap, uint8_t uap,
-			int whitened, btbb_piconet *pn)
+/* One packet from the record at 'record', delivered to the piconet. Takes the
+ * clock of the packet before and returns this one's. */
+static uint32_t process_one(const uint8_t *record, uint32_t lap, uint8_t uap,
+			    int whitened, uint32_t clkn_before,
+			    btbb_piconet *pn)
 {
 	char symbols[MAX_SYMBOLS];
 	struct fuzz_input in;
@@ -102,20 +111,21 @@ static void process_one(const uint8_t *record, uint32_t lap, uint8_t uap,
 	/* the 79 channels and the 28-bit clock the interface defines, so that
 	 * what is fuzzed is what a receiver could report */
 	channel = (uint8_t) (fz_u8(&in) % BT_NUM_CHANNELS);
-	clkn = fz_u32(&in) & CLKN_MASK;
+	clkn = (clkn_before + fz_u32(&in)) & CLKN_MASK;
 	bytes = fz_rest(&in, &bytes_len);
 	symbol_count = fz_symbols(bytes, bytes_len, symbols, sizeof(symbols));
 
 	pkt = fz_packet(symbols, symbol_count, lap, uap, channel, clkn,
 			whitened);
 	if (pkt == NULL)
-		return;
+		return clkn;
 
 	/* The dump btbb_process_packet() makes of a followed packet goes to
 	 * standard output, which a run closes with libFuzzer's
 	 * -close_fd_mask. */
 	(void) btbb_process_packet(pkt, pn);
 	btbb_packet_unref(pkt);
+	return clkn;
 }
 
 int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size)
@@ -125,8 +135,8 @@ int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size)
 	const uint8_t *records;
 	size_t records_len, record;
 	uint8_t options, uap, afh_map[10];
-	uint32_t lap;
-	int i, whitened, records_done = 0;
+	uint32_t lap, clkn = 0;
+	int i, whitened, records_done = 0, dropped = 0;
 
 	fz_start(&in, data, size);
 	options = fz_u8(&in);
@@ -159,13 +169,8 @@ int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size)
 	for (record = 0; record + PACKET_RECORD_BYTES <= records_len &&
 	     records_done < MAX_PACKET_RECORDS;
 	     record += PACKET_RECORD_BYTES, records_done++) {
-		process_one(records + record, lap, uap, whitened, pn);
-
-		/* Give up the clock, as a tool does when the follow has gone
-		 * quiet, so that discovery runs again over the packets that
-		 * follow. */
-		if (records_done == 0 && ((options >> 3) & 1))
-			(void) btbb_piconet_drop_clock(pn);
+		clkn = process_one(records + record, lap, uap, whitened,
+				   clkn, pn);
 
 		/*
 		 * Start reversing hops, which is what a tool does once it has
@@ -185,6 +190,20 @@ int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size)
 		    !btbb_piconet_get_flag(pn, BTBB_HOP_REVERSAL_INIT)) {
 			if (btbb_init_hop_reversal(0, pn) > 0)
 				(void) btbb_winnow(pn);
+		}
+
+		/*
+		 * Give up the followed clock, as a tool does when the follow
+		 * has gone quiet, so that discovery runs again over the
+		 * packets that come after. It waits for the follow because
+		 * btbb_piconet_drop_clock() has nothing to give up before a
+		 * clock has been recovered, and it happens once, so the rest
+		 * of the run is the discovery that follows.
+		 */
+		if (!dropped && ((options >> 3) & 1) &&
+		    btbb_piconet_get_flag(pn, BTBB_FOLLOWING)) {
+			(void) btbb_piconet_drop_clock(pn);
+			dropped = 1;
 		}
 	}
 

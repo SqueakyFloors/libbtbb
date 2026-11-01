@@ -8,9 +8,9 @@ There are 23 tests, and six more where the compiler can build a fuzz target,
 driven in large part by the Bluetooth Core Specification's own published sample
 data; the vectors of the original test programs were kept and ported.
 Malformed radio packets are this library's normal input, so the decoders,
-clock and UAP recovery, and the capture writers are fuzzed as well. The fixes the suite found and holds
-down are listed in [CHANGELOG.md](CHANGELOG.md), one entry per release, with
-the pull request that made each one.
+clock and UAP recovery, and the capture writers are fuzzed as well. The fixes
+the suite found and holds down are listed in [CHANGELOG.md](CHANGELOG.md), one
+entry per release, with the pull request that made each one.
 
 ## How to run them
 
@@ -53,10 +53,10 @@ of its seeds are runs of the specification's DH1 packet on the channels that
 piconet's hop sequence really puts it on, which is what carries a run as far
 as the follow.
 
-The recovery target is much slower than the other five, because choosing
-candidate clocks walks the whole CLK7-27 space once. An option bit in its
-input decides whether an input starts that search, so only the inputs pointed
-at it pay for it.
+That target runs at tens of inputs a second where the others run at
+thousands, because choosing candidate clocks walks the whole CLK7-27 space
+once, so the minute CI gives it is a smoke test rather than a campaign. Run it
+with `-max_len=1407`, which is the 48 packet records it reads and no more.
 
 Each target is built only where the compiler can build a libFuzzer program, so
 a gcc build, or one with the clang Apple ships, is unaffected and simply has no

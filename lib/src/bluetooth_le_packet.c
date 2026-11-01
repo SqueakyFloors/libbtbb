@@ -678,7 +678,10 @@ print32:
 						(uint32_t) buf[pos+3+i] << 16 |
 						(uint32_t) buf[pos+2+i] << 8 |
 						(uint32_t) buf[pos+1+i];
-					printf("           %08x\n", uuid);
+					/* %x takes an unsigned int, which a
+					 * uint32_t is not on every host */
+					printf("           %08x\n",
+					       (unsigned) uuid);
 				}
 				if ((sublen - 1) % 4 != 0) {
 					_malformed(LELL_MALFORMED_AD_FIELD_LENGTH,

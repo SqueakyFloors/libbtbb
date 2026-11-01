@@ -530,8 +530,9 @@ static void test_uuid32_advertising_data(void)
 			       err, sizeof(err)) != 0)
 		return;
 
-	CHECK_CONTAINS(out, "Type 05 (32-bit Service UUIDs)\n");
-	CHECK_LACKS(out, "\n           0");
+	/* the heading and then the blank line that ends the advertising data,
+	 * so no value line of any kind can hide between them */
+	CHECK_CONTAINS(out, "Type 05 (32-bit Service UUIDs)\n\n");
 	CHECK_EQUALS(err, "");
 	check_count(LELL_MALFORMED_ANY, 0, "a list of no UUIDs");
 }
