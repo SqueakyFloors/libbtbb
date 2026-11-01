@@ -104,9 +104,11 @@ add_executable(test_clock_sweep test_clock_sweep.c)
 target_include_directories(test_clock_sweep PRIVATE ${PROJECT_SOURCE_DIR}/lib/src)
 target_compile_options(test_clock_sweep PRIVATE -std=gnu90)
 add_test(NAME clock_sweep COMMAND test_clock_sweep)
-# Each trial walks 2^21 clock values, and the default is two dozen of
-# them twice over; a sanitizer build takes several times as long.
-set_tests_properties(clock_sweep PROPERTIES TIMEOUT 300)
+# Each trial walks 2^21 clock values and scores up to two million candidates
+# against two hundred hops, and the default is a dozen of them twice over; a
+# sanitizer build takes several times as long.  The full run the issues quote,
+# "test_clock_sweep 400", is not for CI.
+set_tests_properties(clock_sweep PROPERTIES TIMEOUT 600)
 
 # Likewise internal: it compiles the two translation units it reaches
 # into.

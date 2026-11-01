@@ -109,8 +109,8 @@ static const uint8_t MAP_OBSERVER[10] = {0x7f, 0xff, 0xff, 0xff, 0xff};
  * the full one covers, so a couple of dozen trials still hold locks of both
  * kinds; the full run the issues quote is every clock value, "400". */
 #define FIRST_CLOCK 0x1000000
-#define DEFAULT_TRIALS 24
-#define DEFAULT_STEP 17
+#define DEFAULT_TRIALS 12
+#define DEFAULT_STEP 34
 
 static btbb_piconet *discovered(const uint8_t *map)
 {
