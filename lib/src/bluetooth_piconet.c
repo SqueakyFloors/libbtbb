@@ -1430,10 +1430,12 @@ int btbb_piconet_drop_clock(btbb_piconet *pn)
  * header's check bits, computed over the piconet's address part, are what say
  * a packet is this piconet's and that CLK1-6 is right for it.
  *
- * The clock the packet carries is the receiving board's, and the search keeps
- * its difference from the piconet's in 625 us slots, so it is added here and
- * put back afterwards: the caller gave that clock and may still be using it,
- * and the hop pattern the search remembers is in the receiver's clock too.
+ * The clock the packet carries is the receiving board's, and the offset to
+ * the piconet's is in 625 us slots while only CLK1-6 is in, so it is added
+ * here and put back afterwards: the caller gave that clock and may still be
+ * using it, and the hop pattern the search remembers is in the receiver's
+ * clock too. A CLK1-6 the caller set itself is in those same slots, so it
+ * works here as well.
  */
 static void read_at_clk6(btbb_packet *pkt, btbb_piconet *pn)
 {
@@ -1443,7 +1445,7 @@ static void read_at_clk6(btbb_packet *pkt, btbb_piconet *pn)
 		return;
 
 	btbb_packet_set_uap(pkt, btbb_piconet_get_uap(pn));
-	pkt->clkn = board_clkn + (uint32_t) pn->clk6_offset;
+	pkt->clkn = board_clkn + (uint32_t) btbb_piconet_get_clk_offset(pn);
 	btbb_packet_set_flag(pkt, BTBB_CLK6_VALID, 1);
 
 	if (btbb_decode(pkt))

@@ -1669,6 +1669,110 @@ static void test_a_header_that_checks_out_ends_the_run(void)
 }
 
 /*
+ * A packet of a piconet whose address part and CLK1-6 are known is read in
+ * full, with its payload and its CRC checked, while the search for the whole
+ * clock is still going. Dewhitening takes CLK1-6 and nothing more, so the
+ * rest of the clock -- which says where the piconet hops next -- is not
+ * needed to read a packet already received. Against an adapted-hopping
+ * piconet that rest may never be confirmed at all.
+ */
+static void test_a_packet_is_read_before_the_whole_clock_is_in(void)
+{
+	/* The piconet's CLK1-6 and the board's own clock run a fixed number
+	 * of slots apart, so a fixture whose clocks agreed would not notice
+	 * the offset being dropped. */
+	const int first_clk6 = 0x25;
+	const uint32_t first_clkn = 10;
+	char first[MAX_SYMBOLS], second[MAX_SYMBOLS];
+	btbb_piconet *pn = btbb_piconet_new();
+	btbb_packet *settling, *pkt;
+	int length;
+
+	CHECK(pn != NULL);
+	if (pn == NULL)
+		return;
+	btbb_init_piconet(pn, SPEC_DH1_LAP);
+
+	/* The first packet settles the address part and CLK1-6; it is the
+	 * path through btbb_uap_from_header() and has its own cases above. */
+	length = spec_dh1_symbols(first, first_clk6);
+	settling = spec_dh1_packet(first, length, first_clkn);
+	CHECK(settling != NULL);
+	if (settling == NULL) {
+		btbb_piconet_unref(pn);
+		return;
+	}
+	CHECK_EQ(0, btbb_process_packet(settling, pn));
+	CHECK(btbb_piconet_get_flag(pn, BTBB_UAP_VALID));
+	CHECK(btbb_piconet_get_flag(pn, BTBB_CLK6_VALID));
+	btbb_packet_unref(settling);
+
+	/* The next packet, two slots later on both clocks, goes through the
+	 * branch that is still looking for the whole clock. */
+	length = spec_dh1_symbols(second, first_clk6 + 2);
+	pkt = spec_dh1_packet(second, length, first_clkn + 4);
+	CHECK(pkt != NULL);
+	if (pkt == NULL) {
+		btbb_piconet_unref(pn);
+		return;
+	}
+	CHECK_EQ(0, btbb_process_packet(pkt, pn));
+	CHECK(!btbb_piconet_get_flag(pn, BTBB_FOLLOWING));
+	CHECK(!btbb_piconet_get_flag(pn, BTBB_CLK27_VALID));
+
+	/* and it comes back read: the header, the payload, and the two checks
+	 * a reader of a capture file goes by */
+	CHECK(btbb_packet_get_flag(pkt, BTBB_HEC_CHECKED));
+	CHECK(btbb_packet_get_flag(pkt, BTBB_HEC_VALID));
+	CHECK_EQ(PACKET_TYPE_DH1, btbb_packet_get_type(pkt));
+	CHECK(btbb_packet_get_flag(pkt, BTBB_HAS_PAYLOAD));
+	CHECK(btbb_packet_get_payload_length(pkt) > 0);
+	CHECK(btbb_packet_get_flag(pkt, BTBB_CRC_CHECKED));
+	CHECK(btbb_packet_get_flag(pkt, BTBB_CRC_CORRECT));
+
+	/* The packet's own clock is still the board's, and it does not claim
+	 * otherwise: nothing else may read that clock as the piconet's. */
+	CHECK_EQ((first_clkn + 4) >> 1, pkt->clkn);
+	CHECK(!btbb_packet_get_flag(pkt, BTBB_CLK6_VALID));
+
+	btbb_packet_unref(pkt);
+	btbb_piconet_unref(pn);
+}
+
+/*
+ * A packet whose header does not check out under the piconet's address part
+ * is not reported. The access code goes by the LAP alone, so a match out of
+ * noise reaches here; the header's check bits, computed over the address
+ * part, are what say a packet is this piconet's, and the followed path uses
+ * the same bar.
+ */
+static void test_a_packet_whose_header_fails_is_not_read(void)
+{
+	btbb_piconet *pn = discovered(NULL, 0);
+	/* An unwhitened header, so every trial clock reads the same one, with
+	 * check bits that hold under another piconet's address part and not
+	 * under this one's. */
+	btbb_packet *pkt = packet_of(TEST_LAP, 0, FOLLOWED_DM1_HEADER,
+				     hec_for(FOLLOWED_DM1_HEADER, OTHER_UAP),
+				     400);
+
+	CHECK(pn != NULL);
+	CHECK(pkt != NULL);
+	if (pn == NULL || pkt == NULL) {
+		if (pn != NULL)
+			btbb_piconet_unref(pn);
+		if (pkt != NULL)
+			btbb_packet_unref(pkt);
+		return;
+	}
+	CHECK_EQ(0, btbb_process_packet(pkt, pn));
+	CHECK(!btbb_packet_get_flag(pkt, BTBB_HAS_PAYLOAD));
+
+	btbb_packet_unref(pkt);
+	btbb_piconet_unref(pn);
+}
+
+/*
  * A payload that will not decode is a packet lost to bit errors, not evidence
  * about the clock: its header checked out under that clock and the piconet's
  * UAP. Counting those would throw away a good clock on any link noisy enough
@@ -2899,6 +3003,8 @@ int main(void)
 	test_the_clocks_of_the_device_and_the_observer_differ();
 	test_every_candidate_agrees_on_clk1_6();
 	test_the_settled_offset_reads_the_packets_own_header();
+	test_a_packet_is_read_before_the_whole_clock_is_in();
+	test_a_packet_whose_header_fails_is_not_read();
 	test_the_settling_packet_carries_its_own_header();
 	test_a_clock_settled_by_elimination_records_the_header();
 	test_a_run_of_header_failures_gives_up_the_clock();
