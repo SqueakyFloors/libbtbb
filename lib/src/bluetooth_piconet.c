@@ -1050,8 +1050,22 @@ static int score_candidates(int offset, char channel, btbb_piconet *pn)
 		return 0;
 	}
 	if (best_score >= CLK27_MIN_SCORE &&
-	    best_score - runner_up >= CLK27_SCORE_MARGIN)
+	    best_score - runner_up >= CLK27_SCORE_MARGIN) {
 		acquire_clock(pn, best);
+		return pn->num_candidates;
+	}
+
+	/*
+	 * How the search is getting on, now and then.  A search that is
+	 * working narrows and pulls one candidate ahead, and a reader with no
+	 * other window on it cannot tell that from a search going nowhere.
+	 * Rare enough to be quiet on a short capture: once every quarter of
+	 * the hops an attempt is given.
+	 */
+	if (pn->winnowed > 0 && pn->winnowed % (CLK27_ATTEMPT_HOPS / 4) == 0)
+		piconet_note("%d CLK1-27 candidates after %d hops, best score %d against %d\n",
+			     pn->num_candidates, pn->winnowed, best_score,
+			     runner_up);
 
 	return pn->num_candidates;
 }
