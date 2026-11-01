@@ -160,9 +160,20 @@ for o in /tmp/btbb-statics/lib/src/CMakeFiles/btbb.dir/*.c.o; do
 done | awk '$NF !~ /^ltmp/ { print $NF }' | sort
 ```
 
-On ELF, the same question asked of the section names, which is
-`objdump -t` with `.data` and `.bss` kept and `.data.rel.ro`, `.rodata` and
-`.rodata.*` left out.
+On ELF, the same question asked of the section names, where `objdump` prints
+them in a column whose position moves, so the section is looked for rather
+than counted to:
+
+```sh
+objdump -t /tmp/btbb-statics/lib/src/CMakeFiles/btbb.dir/*.c.o |
+	awk '{ for (i = 2; i < NF; i++)
+	         if (($i == ".data" || $i == ".bss") && $NF != $i)
+	                 { print $NF; break } }' | sort -u
+```
+
+Both forms were run against the same sources, the first on a Mach-O build
+and the second on ELF objects compiled `-O0 -fPIC`, and both answer with the
+seven below.
 
 `-O0` matters on either: an optimizing build merges small objects into one
 symbol and hides their names.
@@ -176,6 +187,11 @@ Seven come out, and `btbb.h` describes each:
 | `survey_mode` | whether survey mode is on, set by `btbb_init_survey()` during setup |
 | `piconet_survey` | the survey's table of the addresses it has heard, which the header says a survey keeps on one thread |
 | `malformed_counts`, `malformed_detail_wanted` | the counts `lell_print()` keeps of payloads it could not read, and the setting that asks for their detail. The header says both are unguarded |
+
+The first two checks the test makes, that the flag is clear and the table all
+zero before anything calls `btbb_init()`, record the state a process starts in
+rather than pinning anything the library does: C zero-initializes both whatever
+the code says.
 
 Anything else appearing there is state the header does not account for.
 

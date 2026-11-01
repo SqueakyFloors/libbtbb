@@ -126,10 +126,14 @@ int main(void)
 	CHECK(perm_table_initialized == 1);
 	CHECK(entries_wrong() == 0);
 
-	/* The same answers through the reader. */
+	/* The same answers through the reader, which with the table filled
+	   only reads it: the flag is what it would have to clear and set to
+	   fill it again, and it does not move. */
 	CHECK(fast_perm(0, 0, 0) == perm5(0, 0, 0));
 	CHECK(fast_perm(0x1f, 0x1f, 0x1ff) == perm5(0x1f, 0x1f, 0x1ff));
 	CHECK(fast_perm(0x15, 0x0a, 0x123) == perm5(0x15, 0x0a, 0x123));
+	CHECK(perm_table_initialized == 1);
+	CHECK(entries_wrong() == 0);
 
 	/* A second btbb_init() leaves the table alone, as it leaves the
 	   syndrome map alone. Pinned by handing that call a table of zeros

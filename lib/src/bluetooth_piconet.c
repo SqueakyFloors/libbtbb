@@ -344,9 +344,9 @@ void perm_table_init(void)
 int fast_perm(int z, int p_high, int p_low)
 {
 	/* btbb_init() has normally filled the table already. The fallback is
-	 * for a caller that never called it, and runs on one thread by the
-	 * rule btbb.h gives: two threads filling the table together would let
-	 * a third read half-written entries and predict hops wrongly with
+	 * for a caller that never called it, which btbb.h tells to decode on
+	 * one thread only: two threads filling the table together would let a
+	 * third read half-written entries and predict hops wrongly with
 	 * nothing to say so. */
 	if (!perm_table_initialized)
 		perm_table_init();

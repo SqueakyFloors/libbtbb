@@ -116,17 +116,25 @@ typedef struct btbb_packet btbb_packet;
  * error and exits with status 1. The entries are allocated by this
  * library, and a failure there returns -1 as above.
  *
- * This call also builds the hop permutation table, so that everything
- * the library shares between callers is in place before any of them
- * runs. That is what a caller that decodes on more than one thread
- * needs: call this once, from one thread, and let it return before
- * starting the others. The tables are read-only from then on. The
- * permutation table is built by the first statement of the call,
- * before the argument is even checked, so the table is whole whatever
- * this returns and there is no rule to learn about which failures
- * leave it half done. It costs 512 KB of this library's own storage
- * and about half a millisecond to fill, once per process, which a
- * caller on a small machine may care about.
+ * This call also builds the hop permutation table, so that both of the
+ * tables it owns are in place before any caller runs, and read-only
+ * from then on. That is what a caller that decodes on more than one
+ * thread needs of this call: make it once, from one thread, and let it
+ * return before starting the others. The permutation table is built by
+ * the first statement, before the argument is even checked, so the
+ * table is whole whatever this returns and there is no rule to learn
+ * about which failures leave it half done.
+ *
+ * It costs 512 KB of this library's own storage, and the fill is
+ * 524,288 permutations: measured on a current desktop, half a
+ * millisecond in a -O3 build, about 18 ms at -O2 and about 55 ms
+ * unoptimized, once per process. A caller on a small machine, or one
+ * that never predicts a hop, may care about both figures.
+ *
+ * A caller that never calls this at all gets the table filled on its
+ * first hop prediction instead, and must then decode on one thread
+ * only: that fill is the one piece of shared state this library writes
+ * outside the call below.
  *
  * What is safe after that: one btbb_piconet per thread, and the
  * packets that belong to it. Nothing here is internally locked, so a
@@ -164,12 +172,14 @@ typedef struct btbb_packet btbb_packet;
  * line in several calls, so two threads interleave them. But UAP and
  * clock discovery also writes its own progress to standard error from
  * inside the decode -- btbb_process_packet(), btbb_uap_from_header(),
- * btbb_winnow() and btbb_piconet_drop_clock() all report through it,
- * and each note flushes standard output first to keep the two streams
- * in order. So a caller decoding on several threads, one piconet each,
- * has those notes interleaving and another thread's standard output
- * being flushed under it. Serialize the printing, or send each
- * thread's standard error somewhere of its own. */
+ * btbb_winnow(), btbb_init_hop_reversal() and btbb_piconet_drop_clock()
+ * all report through it -- and btbb_piconet_new() and btbb_packet_new()
+ * report an allocation they could not make. Each of those notes flushes
+ * standard output first, to keep the two streams in order. So a caller
+ * decoding on several threads, one piconet each, has those notes
+ * interleaving and another thread's standard output being flushed under
+ * it. Serialize the printing, or send each thread's standard error
+ * somewhere of its own. */
 BTBB_API int btbb_init(int max_ac_errors);
 
 BTBB_API const char* btbb_get_release(void);
