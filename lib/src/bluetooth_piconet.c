@@ -804,13 +804,19 @@ static int init_candidates(char channel, int known_clock_bits,
 	return count;
 }
 
-/* initialize the hop reversal process */
-int btbb_init_hop_reversal(int aliased, btbb_piconet *pn)
+/*
+ * Choose the CLK1-27 candidates and the state they are scored under.
+ *
+ * rechoosing says the library is choosing them again for a search already
+ * running, which is one attempt carrying on under a sequence or a map it has
+ * learned more about.  A caller asking for hop reversal is asking for a new
+ * search instead, however many times it asks, so it gets a fresh attempt.
+ */
+static int init_hop_reversal(int aliased, btbb_piconet *pn, int rechoosing)
 {
 	uint32_t address;
 	uint32_t clock;
 	int count;
-	int restarted = btbb_piconet_get_flag(pn, BTBB_HOP_REVERSAL_INIT);
 
 	/*
 	 * An aliased receiver observes the 79 channels folded into 25, so the
@@ -855,9 +861,8 @@ int btbb_init_hop_reversal(int aliased, btbb_piconet *pn)
 	 * cannot be mistaken for one, which 0 could be. */
 	pn->best_clock = SEQUENCE_LENGTH;
 	/* A fresh attempt starts with its whole budget; choosing the
-	 * candidates again, which is the other way in here, is the same
-	 * attempt carrying on. */
-	if (!restarted)
+	 * candidates again is the same attempt carrying on. */
+	if (!rechoosing)
 		pn->attempt_hops = 0;
 	pn->candidates_afh = (uint8_t) btbb_piconet_get_flag(pn, BTBB_IS_AFH);
 	pn->candidates_unheard = (uint8_t) (BT_NUM_CHANNELS -
@@ -885,7 +890,7 @@ int btbb_init_hop_reversal(int aliased, btbb_piconet *pn)
 	if (count > 0)
 		pn->num_candidates = count;
 
-	if (restarted)
+	if (rechoosing)
 		piconet_note("%d CLK1-27 candidates for the new hop sequence\n",
 			     pn->num_candidates);
 	else
@@ -893,6 +898,12 @@ int btbb_init_hop_reversal(int aliased, btbb_piconet *pn)
 			     pn->num_candidates);
 
 	return pn->num_candidates;
+}
+
+/* initialize the hop reversal process */
+int btbb_init_hop_reversal(int aliased, btbb_piconet *pn)
+{
+	return init_hop_reversal(aliased, pn, 0);
 }
 
 void try_hop(btbb_packet *pkt, btbb_piconet *pn)
@@ -1120,6 +1131,18 @@ static int score_candidates(int offset, char channel, btbb_piconet *pn)
 		return 0;
 	}
 	/*
+	 * The runner-up as this hop leaves it, which is what the margin below
+	 * is measured against.  A rival that gains a point on the very hop
+	 * the leader would be accepted on has closed the gap by that point,
+	 * so it has to be counted first: measured against the hop before's
+	 * value the rule enforced would be CLK27_SCORE_MARGIN - 1.
+	 *
+	 * With nothing else standing there is no runner-up to measure to, so
+	 * the margin is measured to a score of zero; CLK27_SOLE_SCORE is what
+	 * that case really turns on.
+	 */
+	runner_up = seen_other ? runner_up : 0;
+	/*
 	 * Clearly ahead, and the same clock as on the hop before: a lead one
 	 * hop old can be luck, so it has to hold while CLK27_LEAD_HOPS
 	 * further hops arrive.
@@ -1137,7 +1160,7 @@ static int score_candidates(int offset, char channel, btbb_piconet *pn)
 	if (best_heard) {
 		if (best_score >= (kept == 1 ? CLK27_SOLE_SCORE :
 						CLK27_MIN_SCORE) &&
-		    best_score - pn->runner_up_score >= CLK27_SCORE_MARGIN &&
+		    best_score - runner_up >= CLK27_SCORE_MARGIN &&
 		    /* and the caller would follow the sequence this was
 		     * scored under; see hop_fit() */
 		    (!btbb_piconet_get_flag(pn, BTBB_IS_AFH) ||
@@ -1150,27 +1173,12 @@ static int score_candidates(int offset, char channel, btbb_piconet *pn)
 		pn->lead_hops = 0;
 	}
 	pn->best_score = best_score;
-	/* With nothing else standing there is no runner-up to report, and the
-	 * margin is measured to a score of zero; CLK27_SOLE_SCORE is what
-	 * that case really turns on. */
-	pn->runner_up_score = seen_other ? runner_up : 0;
+	pn->runner_up_score = runner_up;
 	pn->best_clock = candidate_clock(pn, best);
 	if (pn->lead_hops >= CLK27_LEAD_HOPS) {
 		acquire_clock(pn, best);
 		return pn->num_candidates;
 	}
-
-	/*
-	 * How the search is getting on, now and then.  A search that is
-	 * working narrows and pulls one candidate ahead, and a reader with no
-	 * other window on it cannot tell that from a search going nowhere.
-	 * Rare enough to be quiet on a short capture: once every quarter of
-	 * the hops an attempt is given.
-	 */
-	if (pn->winnowed > 0 && pn->winnowed % (CLK27_ATTEMPT_HOPS / 4) == 0)
-		piconet_note("%d CLK1-27 candidates after %d hops, best score %d against %d\n",
-			     pn->num_candidates, pn->winnowed, best_score,
-			     pn->runner_up_score);
 
 	return pn->num_candidates;
 }
@@ -1238,7 +1246,7 @@ static int candidates_superseded(btbb_piconet *pn)
  */
 static int rechoose_candidates(btbb_piconet *pn)
 {
-	int count = btbb_init_hop_reversal(0, pn);
+	int count = init_hop_reversal(0, pn, 1);
 
 	if (count == 0)
 		reset(pn);
@@ -1384,6 +1392,29 @@ int btbb_winnow(btbb_piconet *pn)
 		 * twice. */
 		if (pn->winnowed > pn->attempt_hops)
 			pn->attempt_hops = pn->winnowed;
+
+		/*
+		 * How the search is getting on, now and then.  A search that
+		 * is working narrows and pulls one candidate ahead, and a
+		 * reader with no other window on it cannot tell that from a
+		 * search going nowhere.  Rare enough to be quiet on a short
+		 * capture: once every quarter of the hops an attempt is
+		 * given.
+		 *
+		 * Counted in the attempt's own hops, the number the give-up
+		 * note below also reports, and only while the attempt is at
+		 * the furthest hop it has reached - so one attempt's notes
+		 * read as one attempt, where counting the hops scored would
+		 * print the same figure again for every replay the candidates
+		 * being chosen again costs.
+		 */
+		if (pn->attempt_hops > 0 &&
+		    pn->attempt_hops % (CLK27_ATTEMPT_HOPS / 4) == 0 &&
+		    pn->winnowed == pn->attempt_hops)
+			piconet_note("%d CLK1-27 candidates after %d hops, best score %d against %d\n",
+				     pn->num_candidates, pn->attempt_hops,
+				     pn->best_score, pn->runner_up_score);
+
 		if (pn->attempt_hops >= CLK27_ATTEMPT_HOPS) {
 			piconet_note("no CLK1-27 is clearly ahead after %d hops (best score %d, next best %d); starting over\n",
 				     pn->attempt_hops, pn->best_score,
