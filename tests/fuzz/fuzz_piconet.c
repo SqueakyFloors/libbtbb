@@ -94,6 +94,11 @@
  * about 20 seconds, which is less than the wrap above by a wide margin. */
 #define CLKN_STEP_MASK 0xffff
 
+/* How many times one input may start the candidate search. Discovery can
+ * start over several times in a run, and each search walks the whole CLK7-27
+ * space, so a cap keeps the worst input's time close to the usual one's. */
+#define MAX_SEARCH_STARTS 4
+
 int LLVMFuzzerInitialize(int *argc, char ***argv)
 {
 	(void) argc;
@@ -162,6 +167,7 @@ int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size)
 	uint8_t options, uap, afh_map[10];
 	uint32_t lap, clkn = 0;
 	int i, whitened, records_done = 0, dropped = 0, recovered_from = 0;
+	int searches = 0;
 
 	fz_start(&in, data, size);
 	options = fz_u8(&in);
@@ -212,12 +218,15 @@ int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size)
 		 * narrows the candidates, which is the path to CLK1-27 and
 		 * the follow.
 		 *
-		 * It waits for a packet recovery took in as well as for the
-		 * UAP, because the UAP can come from the option bit above
-		 * instead. With no such packet the search would choose
-		 * candidates from a channel and a first-packet time still
-		 * zero from the allocation, which is not a piconet any
-		 * capture tool could hand it.
+		 * The conditions are the ones the library's own call site in
+		 * try_hop() reaches it under: a packet recovery took in, and
+		 * a CLK1-6 settled from a header. The UAP alone is not
+		 * enough, because the option bit above can set it, and
+		 * neither is a packet alone, because a packet that ruled out
+		 * the last candidate starts discovery over - and in both of
+		 * those states the candidates would be chosen against a
+		 * channel and a first-packet time that the hops winnowed
+		 * afterwards are not measured from.
 		 *
 		 * It is behind an option bit because choosing candidates
 		 * walks the whole CLK7-27 space once, which costs about as
@@ -225,8 +234,11 @@ int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size)
 		 * fuzzer did not point at the search should not pay for it.
 		 */
 		if (((options >> 4) & 1) && recovered_from > 0 &&
+		    searches < MAX_SEARCH_STARTS &&
 		    btbb_piconet_get_flag(pn, BTBB_UAP_VALID) &&
+		    btbb_piconet_get_flag(pn, BTBB_CLK6_VALID) &&
 		    !btbb_piconet_get_flag(pn, BTBB_HOP_REVERSAL_INIT)) {
+			searches++;
 			if (btbb_init_hop_reversal(0, pn) > 0)
 				(void) btbb_winnow(pn);
 		}

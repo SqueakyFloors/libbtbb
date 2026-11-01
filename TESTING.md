@@ -48,17 +48,19 @@ packets, the LE decoder with its dump, the PCAP writers, and the PCAPNG
 writers. The writer targets decode a frame first and write the packet that
 came out, which is what a capture tool does. The recovery target delivers a
 whole run of packets to one piconet, because recovering the UAP, narrowing the
-candidate clocks, and following the piconet all need more than one packet; two
-of its seeds are runs of the specification's DH1 packet on the channels that
-piconet's hop sequence really puts it on, which is what carries a run as far
-as the follow.
+candidate clocks, and following the piconet all need more than one packet;
+three of its seeds are runs of the specification's DH1 packet on the channels
+that piconet's hop sequence really puts it on, which is what carries a run as
+far as the follow, one of them on a map of 40 channels so that the adaptive
+hop sequence is searched too.
 
 That target is far slower than the others, because choosing candidate clocks
 walks the whole CLK7-27 space, and a new channel seen while hopping supersedes
 the candidates and walks it again: CI's one-minute run of it manages a hundred
 or so inputs where the LE target manages a million. Treat that minute as a
-smoke test rather than a campaign, and run it with `-max_len=1407`, which is
-the 48 packet records it reads and no more.
+smoke test rather than a campaign. CI runs every target at `-max_len=512`,
+which is all a seed here needs; a campaign on this one is worth
+`-max_len=1407`, the 48 packet records it reads and no more.
 
 Each target is built only where the compiler can build a libFuzzer program, so
 a gcc build, or one with the clang Apple ships, is unaffected and simply has no
