@@ -47,6 +47,9 @@
   index; the index is now bounded.
 - Manufacturer-specific data names 4133 companies from the Bluetooth SIG's
   published Assigned Numbers, where BlueZ's gave 1038, and keeps the 73.
+- New btbb_company_name() gives a program that same table: it returns the
+  name the SIG assigns a company identifier, or NULL where the identifier is
+  not assigned.
 - Fixed: LE decode complaints went into the packet dump on standard output;
   they now go to standard error, unchanged in wording.
 
@@ -149,11 +152,11 @@
   looks in lib64 and a multiarch directory, and finds the pkg-config file, a
   static archive, a .dylib and btbb.h.
 - Fixed: the library exported 128 names, one of which, bt_compidtostr(),
-  clashed with BlueZ's; it now exports only the 96 btbb.h declares.
+  clashed with BlueZ's; it now exports only the 99 btbb.h declares.
 - Fixed: on Windows the BTBB_API macro each declaration in btbb.h carries
   was not the dllexport or dllimport declaration a shared library needs.
 - The soname stays libbtbb.so.1 and the library version is 1.3, where
-  2020-12-R1's was 1.0; abidiff finds nine functions gained, none lost.
+  2020-12-R1's was 1.0; abidiff finds ten functions gained, none lost.
 - Existing callers see three changes behind that interface: two functions
   answer a positive value where they answered 0, the writers report a write
   that missed the file, and a decode says less where it knows less.
