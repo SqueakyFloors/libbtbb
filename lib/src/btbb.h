@@ -125,8 +125,9 @@ BTBB_API const char* btbb_get_version(void);
  * inquiry result, or NULL where the identifier is not assigned. 0xFFFF reads
  * "internal use", which is what the SIG reserves it for. The table holds
  * every identifier the SIG lists, and also the ones it has since withdrawn,
- * so that a capture of an older device still decodes by name. The string
- * belongs to the library; the caller must not free it. */
+ * so that a capture of an older device still decodes by name. The string is
+ * UTF-8, as the SIG publishes the names, and belongs to the library; the
+ * caller must not free it. */
 BTBB_API const char *btbb_company_name(uint16_t id);
 
 BTBB_API btbb_packet *btbb_packet_new(void);

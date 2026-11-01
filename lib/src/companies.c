@@ -35,7 +35,7 @@
 
 #include "btbb.h"
 
-BTBB_API const char *btbb_company_name(uint16_t id)
+const char *btbb_company_name(uint16_t id)
 {
 	switch (id) {
 	case 0:

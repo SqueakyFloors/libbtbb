@@ -32,10 +32,9 @@ static int failures = 0;
 	do {                                                               \
 		const char *got = btbb_company_name((uint16_t)(compid));   \
 		if (got == NULL || strcmp(got, (want)) != 0) {              \
-			printf("FAIL %s:%d: 0x%04X is %s%s%s, wanted \"%s\"\n", \
+			printf("FAIL %s:%d: 0x%04X is %s, wanted \"%s\"\n", \
 			       __FILE__, __LINE__, (unsigned)(compid),     \
-			       got ? "\"" : "", got ? got : "NULL",        \
-			       got ? "\"" : "", (want));                   \
+			       got ? got : "NULL", (want));                \
 			++failures;                                        \
 		}                                                          \
 	} while (0)
@@ -66,7 +65,7 @@ static int failures = 0;
  * BlueZ, which earlier releases had no name for. */
 static void test_recently_assigned_identifiers_decode_by_name(void)
 {
-	CHECK_NAME(0x113D, "Venndelta Pty Ltd");
+	CHECK_NAME(0x113D, "Venndelta Pty Ltd");	/* the last entry */
 	CHECK_NAME(0x113B, "ONiO AS");
 	CHECK_NAME(0x1101, "Nearfaces UG (haftungsbeschr\xc3\xa4nkt)");
 	CHECK_NAME(0x0BB8, "INNOVAG PTY. LTD.");
@@ -114,9 +113,7 @@ static void test_unassigned_and_reserved_identifiers(void)
 	CHECK_UNASSIGNED(HIGHEST_ASSIGNED + 1);
 	CHECK_UNASSIGNED(0xFFFE);
 
-	/* The last entry of the table, and the one identifier above the
-	 * assigned range that does have a name. */
-	CHECK_NAME(HIGHEST_ASSIGNED, "Venndelta Pty Ltd");
+	/* The one identifier above the assigned range that has a name. */
 	CHECK_NAME(0xFFFF, "internal use");
 }
 

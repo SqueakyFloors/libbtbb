@@ -648,6 +648,32 @@ static void test_well_formed_values_keep_their_indent(void)
 }
 
 /*
+ * Manufacturer-specific data quoting a company identifier the Bluetooth SIG
+ * has not assigned. There is no name to print, and the line says so rather
+ * than being left out or printing nothing after the colon.
+ */
+static void test_an_unassigned_company_identifier_says_so(void)
+{
+	static const uint8_t UNKNOWN_COMPANY_PACKET[MAX_LE_SYMBOLS] = {
+		0xd6, 0xbe, 0x89, 0x8e,
+		0x00,				/* ADV_IND */
+		11,				/* 6 + 5 bytes */
+		0x66, 0x55, 0x44, 0x33, 0x22, 0x11,	/* AdvA */
+		0x04, 0xff, 0xfe, 0xff, 0x7a,	/* company 0xfffe, one byte */
+		0xde, 0xad, 0xbe,		/* CRC, unchecked */
+	};
+	char out[8192], err[1024];
+
+	if (decode_and_capture(UNKNOWN_COMPANY_PACKET, out, sizeof(out),
+			       err, sizeof(err)) != 0)
+		return;
+
+	CHECK_EQUALS(err, "");
+	CHECK_CONTAINS(out, "\n           Company: not assigned\n");
+	CHECK_CONTAINS(out, "\n           Data: 7a\n");
+}
+
+/*
  * An advertising PDU may claim a longer payload than the capture holds: here
  * 63 bytes, where a 64-byte capture can hold 55 after the access address,
  * the header and the CRC.  The claim used to be taken at face value, and the
@@ -883,6 +909,7 @@ int main(void)
 	test_verbose_prints_the_detail();
 	test_counts_add_up_and_reset();
 	test_well_formed_values_keep_their_indent();
+	test_an_unassigned_company_identifier_says_so();
 	test_an_over_claimed_advertising_length();
 	test_an_extended_advertising_length();
 	test_a_payload_too_short_for_its_type();

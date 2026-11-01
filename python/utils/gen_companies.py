@@ -91,7 +91,7 @@ def main(argv):
 
     out = [header, "#include <stdint.h>\n", "\n",
            '#include "btbb.h"\n', "\n",
-           "BTBB_API const char *btbb_company_name(uint16_t id)\n", "{\n",
+           "const char *btbb_company_name(uint16_t id)\n", "{\n",
            "\tswitch (id) {\n"]
     for value in sorted(table):
         out.append("\tcase %d:\n" % value)
