@@ -29,6 +29,7 @@
 #include "bluetooth_le_packet.h"
 #include <assert.h>
 #include <ctype.h>
+#include <inttypes.h>
 #include <stdarg.h>
 #include <string.h>
 
@@ -39,9 +40,6 @@
  * capture writers' record length is derived from. */
 typedef char le_symbol_buffer_is_the_longest_frame[
 	(MAX_LE_SYMBOLS == LE_MAX_PDU_LENGTH + LE_FRAMING_BYTES) ? 1 : -1];
-
-/* company identifier lookup */
-const char *bt_compidtostr(uint16_t compid);
 
 /* How many malformed payloads of each kind lell_print() has met. Malformed
  * advertising data arrives by the hundred in a ten-second capture, so the
@@ -564,7 +562,7 @@ static void _dump_32(const char *name, const uint8_t *buf, int offset) {
 				   (uint32_t) buf[offset+2] << 16 |
 				   (uint32_t) buf[offset+1] << 8 |
 				   (uint32_t) buf[offset+0];
-	printf("    %s%08x\n", name, val);
+	printf("    %s%08" PRIx32 "\n", name, val);
 }
 
 static void _dump_uuid(const uint8_t *uuid) {
@@ -660,6 +658,37 @@ print16:
 						   " 2)\n", sublen-1);
 				}
 				break;
+			case 0x04:
+				printf(" (32-bit Service UUIDs, more available)\n");
+				goto print32;
+			case 0x05:
+				printf(" (32-bit Service UUIDs)\n");
+print32:
+				/* The whole UUIDs this list holds, as above. */
+				for (i = 0; i + 4 <= sublen - 1; i += 4) {
+					/* assembled a byte at a time: the
+					 * buffer is not aligned for a
+					 * uint32_t, and the UUID is
+					 * little endian whatever the
+					 * host is */
+					uint32_t uuid =
+						(uint32_t) buf[pos+4+i] << 24 |
+						(uint32_t) buf[pos+3+i] << 16 |
+						(uint32_t) buf[pos+2+i] << 8 |
+						(uint32_t) buf[pos+1+i];
+					/* the conversion for a uint32_t, which
+					 * plain %x is only on a host where
+					 * unsigned int is 32 bits wide */
+					printf("           %08" PRIx32 "\n",
+					       uuid);
+				}
+				if ((sublen - 1) % 4 != 0) {
+					_malformed(LELL_MALFORMED_AD_FIELD_LENGTH,
+						   "note: wrong length (%d,"
+						   " must be divisible by"
+						   " 4)\n", sublen-1);
+				}
+				break;
 			case 0x06:
 				printf(" (128-bit Service UUIDs, more available)\n");
 				goto print128;
@@ -751,7 +780,9 @@ print128:
 				printf(" (Manufacturer Specific Data)\n");
 				if (sublen - 1 >= 2) {
 					uint16_t company = (buf[pos+2] << 8) | buf[pos+1];
-					printf("           Company: %s\n", bt_compidtostr(company));
+					const char *company_name = btbb_company_name(company);
+					printf("           Company: %s\n",
+					       company_name ? company_name : "not assigned");
 					printf("           ");
 					printf("Data:");
 					for (i = 3; i < sublen; ++i)
