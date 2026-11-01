@@ -6,8 +6,9 @@
  * what a capture tool does with a stream of them: btbb_process_packet() for
  * each, which recovers the UAP and CLK1-6 from headers, narrows candidate
  * CLK1-27 values against the channels the packets arrived on, and then
- * follows the piconet, decoding each packet at the clock it found. That last
- * step is where crc_check() sits.
+ * follows the piconet, decoding each packet at the clock it found. The trial
+ * loop that recovers the address part is where crc_check() sits, and the
+ * follow is where each packet's own payload is decoded and its CRC checked.
  *
  * The library starts the candidate search itself only on a narrow path, so an
  * option bit starts it the way a capture tool does, once the piconet has its
@@ -94,9 +95,13 @@
  * about 20 seconds, which is less than the wrap above by a wide margin. */
 #define CLKN_STEP_MASK 0xffff
 
-/* How many times one input may start the candidate search. Discovery can
- * start over several times in a run, and each search walks the whole CLK7-27
- * space, so a cap keeps the worst input's time close to the usual one's. */
+/* How many times one input may start the candidate search from here.
+ * Discovery can start over several times in a run and each search walks the
+ * whole CLK7-27 space, so this keeps a run from spending the whole input on
+ * it. It bounds only the starts this target asks for: while hop reversal is
+ * running, a channel seen for the first time makes btbb_winnow() choose the
+ * candidates again by itself, as often as there are records. The record cap
+ * below is what bounds that, and it is the longest input's cost. */
 #define MAX_SEARCH_STARTS 4
 
 int LLVMFuzzerInitialize(int *argc, char ***argv)
@@ -239,8 +244,11 @@ int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size)
 		    btbb_piconet_get_flag(pn, BTBB_CLK6_VALID) &&
 		    !btbb_piconet_get_flag(pn, BTBB_HOP_REVERSAL_INIT)) {
 			searches++;
-			if (btbb_init_hop_reversal(0, pn) > 0)
-				(void) btbb_winnow(pn);
+			(void) btbb_init_hop_reversal(0, pn);
+			/* unconditionally, as try_hop() does: a winnow with
+			 * no candidate left is how the library starts
+			 * discovery over */
+			(void) btbb_winnow(pn);
 		}
 
 		/*

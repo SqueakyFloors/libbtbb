@@ -565,7 +565,7 @@ static void _dump_32(const char *name, const uint8_t *buf, int offset) {
 				   (uint32_t) buf[offset+2] << 16 |
 				   (uint32_t) buf[offset+1] << 8 |
 				   (uint32_t) buf[offset+0];
-	printf("    %s%08x\n", name, val);
+	printf("    %s%08" PRIx32 "\n", name, val);
 }
 
 static void _dump_uuid(const uint8_t *uuid) {
