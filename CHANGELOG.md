@@ -69,6 +69,10 @@
   candidate out, and so ruled out the piconet's own clock while its map was
   still being learned; such a hop now counts neither way, and the two clocks
   drifting apart is followed instead of costing the clock.
+- The clock search costs more while it runs: it carries up to a few million
+  candidates where it carried tens of thousands, which is tens of megabytes
+  and up to a few hundred milliseconds of an attempt inside the caller's
+  packet callback.
 - Fixed: a piconet that nothing works for was reported on every loss; it is
   now reported once, after three clocks are given up.
 - Fixed: btbb_piconet_get_clk_offset() read 0 until the whole clock was

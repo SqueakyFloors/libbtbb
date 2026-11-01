@@ -2423,10 +2423,26 @@ static void test_rejected_clocks_are_forgotten_with_the_lap(void)
 	CHECK_EQ(1, pn->num_rejected);
 	CHECK_EQ(1, pn->lock_losses);
 
-	/* a different one */
+	/* a different one, which takes the whole of the last piconet's
+	 * discovery with it: its candidates, the hops remembered, the address
+	 * part, the clock offsets and what its hops said about its hopping */
 	btbb_init_piconet(pn, TEST_LAP ^ 0xff);
 	CHECK_EQ(0, pn->num_rejected);
 	CHECK_EQ(0, pn->lock_losses);
+	CHECK(pn->clock_candidates == NULL);
+	CHECK(pn->candidate_fits == NULL);
+	CHECK_EQ(0, pn->num_candidates);
+	CHECK_EQ(0, pn->attempt_hops);
+	CHECK_EQ(0, pn->packets_observed);
+	CHECK_EQ(0, pn->clk6_offset);
+	CHECK_EQ(0, btbb_piconet_get_uap(pn));
+	CHECK_EQ(0, pn->got_last_hop);
+	CHECK_EQ(0, pn->got_settled_clk6);
+	CHECK(!btbb_piconet_get_flag(pn, BTBB_UAP_VALID));
+	CHECK(!btbb_piconet_get_flag(pn, BTBB_CLK6_VALID));
+	CHECK(!btbb_piconet_get_flag(pn, BTBB_CLK27_VALID));
+	CHECK(!btbb_piconet_get_flag(pn, BTBB_IS_AFH));
+	CHECK(!btbb_piconet_get_flag(pn, BTBB_LOOKS_LIKE_AFH));
 	btbb_packet_unref(pkt);
 	btbb_piconet_unref(pn);
 }

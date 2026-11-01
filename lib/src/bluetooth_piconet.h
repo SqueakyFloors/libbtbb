@@ -147,6 +147,12 @@
  * And the drift only ever moves away from where it started, because one of the
  * two clocks runs faster than the other and keeps doing so.  A candidate
  * cannot wander back and forth looking for a fit.
+ *
+ * Together those make this a quiet-link mechanism, and deliberately: on a busy
+ * link an attempt is over in a couple of seconds and neither clock has moved,
+ * so no step is ever earned; on a link of a packet or two a second an attempt
+ * spans minutes, which is where the clocks do move and where a step pays for
+ * itself.
  */
 #define CLK27_MAX_DRIFT_STEPS 2
 #define CLK27_DRIFT_SLOTS 16384
@@ -308,7 +314,9 @@ struct btbb_piconet {
 	 * candidates at the 20 used channels AFH is defined for, 1061611 at
 	 * 40, and 26623 where all 79 are used and every hop can be checked.
 	 * With the clock values beside them that is 12.7 MB, 8.5 MB and
-	 * 213 kB.  Carrying those candidates is the point: that is where the
+	 * 213 kB.  The walk that finds them doubles the lists as it goes and
+	 * holds the old pair while it copies, so the peak is about half again
+	 * as much.  Carrying those candidates is the point: that is where the
 	 * piconet's own clock is.
 	 *
 	 * It costs the caller time as well as memory, in the packet callback:

@@ -1082,6 +1082,7 @@ static int score_candidates(int offset, char channel, btbb_piconet *pn)
 	int best_score = 0;
 	int runner_up = 0;
 	int best_heard = 0;	/* did this hop say anything about the best? */
+	int seen_other = 0;	/* is runner_up a candidate's score yet? */
 
 	for (i = 0; i < pn->num_candidates; i++) {
 		int score;
@@ -1096,12 +1097,18 @@ static int score_candidates(int offset, char channel, btbb_piconet *pn)
 		pn->candidate_fits[kept] = pn->candidate_fits[i];
 		score = candidate_score(&pn->candidate_fits[kept]);
 		if (best < 0 || score > best_score) {
-			runner_up = best < 0 ? 0 : best_score;
+			/* the one it displaces is the best of the rest */
+			if (best >= 0 && (!seen_other ||
+					  best_score > runner_up)) {
+				runner_up = best_score;
+				seen_other = 1;
+			}
 			best = kept;
 			best_score = score;
 			best_heard = said_something;
-		} else if (score > runner_up) {
+		} else if (!seen_other || score > runner_up) {
 			runner_up = score;
+			seen_other = 1;
 		}
 		kept++;
 	}
@@ -1130,7 +1137,7 @@ static int score_candidates(int offset, char channel, btbb_piconet *pn)
 	if (best_heard) {
 		if (best_score >= (kept == 1 ? CLK27_SOLE_SCORE :
 						CLK27_MIN_SCORE) &&
-		    best_score - runner_up >= CLK27_SCORE_MARGIN &&
+		    best_score - pn->runner_up_score >= CLK27_SCORE_MARGIN &&
 		    /* and the caller would follow the sequence this was
 		     * scored under; see hop_fit() */
 		    (!btbb_piconet_get_flag(pn, BTBB_IS_AFH) ||
@@ -1143,7 +1150,10 @@ static int score_candidates(int offset, char channel, btbb_piconet *pn)
 		pn->lead_hops = 0;
 	}
 	pn->best_score = best_score;
-	pn->runner_up_score = runner_up;
+	/* With nothing else standing there is no runner-up to report, and the
+	 * margin is measured to a score of zero; CLK27_SOLE_SCORE is what
+	 * that case really turns on. */
+	pn->runner_up_score = seen_other ? runner_up : 0;
 	pn->best_clock = candidate_clock(pn, best);
 	if (pn->lead_hops >= CLK27_LEAD_HOPS) {
 		acquire_clock(pn, best);
@@ -1160,7 +1170,7 @@ static int score_candidates(int offset, char channel, btbb_piconet *pn)
 	if (pn->winnowed > 0 && pn->winnowed % (CLK27_ATTEMPT_HOPS / 4) == 0)
 		piconet_note("%d CLK1-27 candidates after %d hops, best score %d against %d\n",
 			     pn->num_candidates, pn->winnowed, best_score,
-			     runner_up);
+			     pn->runner_up_score);
 
 	return pn->num_candidates;
 }
