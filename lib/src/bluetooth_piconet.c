@@ -1418,17 +1418,16 @@ int btbb_piconet_drop_clock(btbb_piconet *pn)
  * is what a receiver needs to stay with it and what hop reversal is for; a
  * packet already in hand needs none of it.
  *
- * Reading it here is what the capture of a piconet that is not being followed
- * reports: before this, such a capture printed a line per packet with no type
- * and no payload, and wrote records with no payload and nothing checked,
- * however well the packets were received. Against an adapted-hopping piconet
- * the whole clock may never be confirmed at all, and a reader waiting for it
- * got nothing out of a capture the library could read all along.
+ * What this gets the caller is a packet it can record: before this, a capture
+ * of a piconet that was not being followed wrote records with no type, no
+ * payload and nothing checked, however well the packets were received.
+ * Against an adapted-hopping piconet the whole clock may never be confirmed
+ * at all, and a reader waiting for it got nothing out of a capture the
+ * library could read all along.
  *
- * Only a packet whose header check passes is reported, which is the same bar
- * the followed path uses: the access code matches on the LAP alone, so the
- * header's check bits, computed over the piconet's address part, are what say
- * a packet is this piconet's and that CLK1-6 is right for it.
+ * Nothing is printed. The followed path prints what it decodes, and whether
+ * discovery should as well is a question for the tools: this is a library,
+ * and a caller that wants the packet reported has btbb_print_packet().
  *
  * The clock the packet carries is the receiving board's, and the offset to
  * the piconet's is in 625 us slots while only CLK1-6 is in, so it is added
@@ -1448,8 +1447,7 @@ static void read_at_clk6(btbb_packet *pkt, btbb_piconet *pn)
 	pkt->clkn = board_clkn + (uint32_t) btbb_piconet_get_clk_offset(pn);
 	btbb_packet_set_flag(pkt, BTBB_CLK6_VALID, 1);
 
-	if (btbb_decode(pkt))
-		btbb_print_packet(pkt);
+	btbb_decode(pkt);
 
 	/* The packet keeps what it decoded, which is what the caller records,
 	 * but not the claim that its own clock is the piconet's: nothing else

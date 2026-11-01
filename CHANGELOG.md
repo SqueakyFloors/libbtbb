@@ -4,14 +4,14 @@
 
 ### Decoding (BR/EDR)
 
-- Fixed: a capture of a piconet whose address part was known reported no
-  type and no payload, and wrote records with nothing checked, until hop
-  reversal confirmed the whole clock. Those packets are now read as soon as
-  CLK1-6 is settled, which is all that dewhitening takes; the rest of the
-  clock says where the piconet hops next, which a packet already received
-  does not need. Against an adapted-hopping piconet the whole clock may
-  never be confirmed, so a reader waiting for it got nothing out of a
-  capture the library could read.
+- Fixed: a capture of a piconet whose address part was known wrote records
+  with no type, no payload and nothing checked, until hop reversal confirmed
+  the whole clock. Those packets are now decoded as soon as CLK1-6 is
+  settled, which is all that dewhitening takes; the rest of the clock says
+  where the piconet hops next, which a packet already received does not
+  need. Against an adapted-hopping piconet the whole clock may never be
+  confirmed, so a reader waiting for it got nothing out of a capture the
+  library could read.
 - Fixed: AUX1, EV3, EV4, and EV5 payloads did not decode; they now do, each
   at the longest length its type allows.
 - Fixed: a DV packet's data field was dewhitened as the voice field; it now

@@ -1741,7 +1741,7 @@ static void test_a_packet_is_read_before_the_whole_clock_is_in(void)
 
 /*
  * A packet whose header does not check out under the piconet's address part
- * is not reported. The access code goes by the LAP alone, so a match out of
+ * is not decoded. The access code goes by the LAP alone, so a match out of
  * noise reaches here; the header's check bits, computed over the address
  * part, are what say a packet is this piconet's, and the followed path uses
  * the same bar.
