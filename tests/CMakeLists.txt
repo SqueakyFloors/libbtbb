@@ -38,11 +38,11 @@ target_link_libraries(test_le_print_unsigned_char ${btbb_library})
 add_test(NAME le_print_unsigned_char COMMAND test_le_print_unsigned_char)
 set_tests_properties(le_print_unsigned_char PROPERTIES TIMEOUT 30)
 
+# Three of the test programs below compile bluetooth_packet.c into themselves,
+# and btbb_init() fills the hop permutation table, which lives in the piconet
+# translation unit, so each of those three builds that one too.
 # The functions this one covers are internal, so it compiles the library
 # source itself rather than linking the library.
-# btbb_init() fills the hop permutation table, which lives in the piconet
-# translation unit, so a test that compiles bluetooth_packet.c needs that one
-# too.
 add_executable(test_internal test_internal.c ${PROJECT_SOURCE_DIR}/lib/src/bluetooth_piconet.c)
 target_include_directories(test_internal PRIVATE ${PROJECT_SOURCE_DIR}/lib/src)
 # the library source is built the way the library builds it
@@ -61,9 +61,6 @@ set_tests_properties(perm_table PROPERTIES TIMEOUT 30)
 
 # The Bluetooth Core specification's own sample data. These also reach
 # library internals, so they compile the translation unit under test.
-# btbb_init() fills the hop permutation table, which lives in the piconet
-# translation unit, so a test that compiles bluetooth_packet.c needs that one
-# too.
 add_executable(test_spec_bredr test_spec_bredr.c ${PROJECT_SOURCE_DIR}/lib/src/bluetooth_piconet.c)
 target_include_directories(test_spec_bredr PRIVATE ${PROJECT_SOURCE_DIR}/lib/src)
 target_compile_options(test_spec_bredr PRIVATE -std=gnu90)
@@ -72,9 +69,6 @@ set_tests_properties(spec_bredr PROPERTIES TIMEOUT 30)
 
 # The eSCO length decision, also internal: it compiles the translation
 # unit the payload decoders live in.
-# btbb_init() fills the hop permutation table, which lives in the piconet
-# translation unit, so a test that compiles bluetooth_packet.c needs that one
-# too.
 add_executable(test_esco test_esco.c ${PROJECT_SOURCE_DIR}/lib/src/bluetooth_piconet.c)
 target_include_directories(test_esco PRIVATE ${PROJECT_SOURCE_DIR}/lib/src)
 target_compile_options(test_esco PRIVATE -std=gnu90)

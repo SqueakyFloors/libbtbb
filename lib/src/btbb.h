@@ -121,23 +121,38 @@ typedef struct btbb_packet btbb_packet;
  * runs. That is what a caller that decodes on more than one thread
  * needs: call this once, from one thread, and let it return before
  * starting the others. The tables are read-only from then on. The
- * permutation table is built before anything here can fail, so a call
- * that returns an error has still left that table whole; the error is
- * about the syndrome table, and a caller that goes on without one
- * decodes nothing.
+ * permutation table is built by the first statement of the call,
+ * before the argument is even checked, so the table is whole whatever
+ * this returns and there is no rule to learn about which failures
+ * leave it half done. It costs 512 KB of this library's own storage
+ * and about half a millisecond to fill, once per process, which a
+ * caller on a small machine may care about.
  *
  * What is safe after that: one btbb_piconet per thread, and the
- * packets that belong to it. A piconet is not internally locked, so
- * two threads must not call btbb_process_packet(),
- * btbb_uap_from_header(), btbb_winnow() or the setters on the same
- * piconet; a thread that wants another thread's result passes it over
- * the accessors (btbb_piconet_get_afh_map(),
- * btbb_piconet_set_afh_map(), btbb_piconet_get_uap(),
- * btbb_piconet_set_uap()) while it owns both.
+ * packets that belong to it. Nothing here is internally locked, so two
+ * threads must not call any function that takes a btbb_piconet* it can
+ * write -- btbb_process_packet(), btbb_uap_from_header(),
+ * btbb_winnow(), btbb_init_piconet(), the setters, and
+ * btbb_piconet_ref() and btbb_piconet_unref(), whose reference count
+ * is a plain int -- on the same piconet. The same goes for
+ * btbb_packet_ref() and btbb_packet_unref() on one packet. A miscount
+ * there frees the object twice or leaks it, where the rest of this
+ * paragraph costs a wrong answer.
+ *
+ * A thread that wants another thread's result passes it over the
+ * accessors while it owns both piconets. btbb_piconet_get_afh_map()
+ * hands back the piconet's own ten bytes rather than a copy, and the
+ * thread that owns that piconet writes them as it decodes, so copy the
+ * ten bytes out and hand the copy to btbb_piconet_set_afh_map(); do
+ * not keep the pointer. btbb_piconet_get_uap() and
+ * btbb_piconet_set_uap() pass a value and need no such care.
  *
  * What is not safe on any thread but one: survey mode (see
- * btbb_init_survey() below) and the malformed-payload counts (see
- * lell_malformed_count() below). */
+ * btbb_init_survey() below), the malformed-payload counts, which
+ * lell_print() keeps as it prints (see lell_malformed_count() below),
+ * printing at all -- btbb_print_packet() and lell_print() write a line
+ * in several calls and two threads would interleave them -- and one
+ * capture file, whose handle belongs to the thread that writes it. */
 BTBB_API int btbb_init(int max_ac_errors);
 
 BTBB_API const char* btbb_get_release(void);

@@ -5,7 +5,9 @@
  * fills it so that it is whole before a caller starts a second thread; two
  * threads filling it together would let a third read half-written entries and
  * predict hops wrongly with nothing to say so. This test pins that the table
- * is complete when btbb_init() returns, with no fast_perm() call to fill it.
+ * is complete when btbb_init() returns, with no fast_perm() call to fill it,
+ * and that it is complete however that call comes out: with no syndrome table
+ * asked for, and with an argument the library refuses.
  *
  * The table and the flag are internal to the library, so the test compiles
  * the two translation units they live in rather than linking the library.
@@ -50,10 +52,36 @@ int main(void)
 	int z, p_high, p_low;
 	int wrong = 0;
 
-	/* Nothing has asked for a permutation yet, so the table is empty and
-	   the flag says so. */
+	/* Nothing has asked for a permutation yet, so the flag says so and
+	   every byte of the table is still zero. */
 	CHECK(perm_table_initialized == 0);
+	for (z = 0; z < 0x20; z++)
+		for (p_high = 0; p_high < 0x20; p_high++)
+			for (p_low = 0; p_low < 0x200; p_low++)
+				if (perm_table[z][p_high][p_low] != 0)
+					++wrong;
+	CHECK(wrong == 0);
 
+	/* A call that asks for no access code error correction builds no
+	   syndrome table, and fills the permutation table all the same: the
+	   two do not depend on each other. This case comes first, while no
+	   syndrome table has been built, or the one already there would be
+	   what skipped the build. */
+	CHECK(btbb_init(0) == 0);
+	CHECK(perm_table_initialized == 1);
+	CHECK(fast_perm(0x15, 0x0a, 0x123) == perm5(0x15, 0x0a, 0x123));
+
+	/* And an argument the library refuses leaves the table whole, because
+	   it is filled before the argument is looked at. */
+	perm_table_initialized = 0;
+	memset(perm_table, 0, sizeof(perm_table));
+	CHECK(btbb_init(-1) == -1);
+	CHECK(perm_table_initialized == 1);
+	CHECK(fast_perm(0x15, 0x0a, 0x123) == perm5(0x15, 0x0a, 0x123));
+
+	/* Back to nothing filled, for the whole-table check below. */
+	perm_table_initialized = 0;
+	memset(perm_table, 0, sizeof(perm_table));
 	CHECK(btbb_init(2) == 0);
 
 	/* btbb_init() filled it, so fast_perm() answers without filling
@@ -79,16 +107,6 @@ int main(void)
 	/* A second btbb_init() leaves the table alone, as it leaves the
 	   syndrome map alone. */
 	CHECK(btbb_init(2) == 0);
-	CHECK(fast_perm(0x15, 0x0a, 0x123) == perm5(0x15, 0x0a, 0x123));
-
-	/* The table does not depend on the syndrome map: a call that asks for
-	   no access code error correction builds none, and the table is
-	   filled all the same. It is filled before anything in btbb_init()
-	   can fail, so a call that reports an error has left it whole too. */
-	perm_table_initialized = 0;
-	memset(perm_table, 0, sizeof(perm_table));
-	CHECK(btbb_init(0) == 0);
-	CHECK(perm_table_initialized == 1);
 	CHECK(fast_perm(0x15, 0x0a, 0x123) == perm5(0x15, 0x0a, 0x123));
 
 	if (failures) {
