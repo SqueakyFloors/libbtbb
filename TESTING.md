@@ -48,7 +48,15 @@ packets, the LE decoder with its dump, the PCAP writers, and the PCAPNG
 writers. The writer targets decode a frame first and write the packet that
 came out, which is what a capture tool does. The recovery target delivers a
 whole run of packets to one piconet, because recovering the UAP, narrowing the
-candidate clocks, and following the piconet all need more than one packet.
+candidate clocks, and following the piconet all need more than one packet; two
+of its seeds are runs of the specification's DH1 packet on the channels that
+piconet's hop sequence really puts it on, which is what carries a run as far
+as the follow.
+
+The recovery target is much slower than the other five, because choosing
+candidate clocks walks the whole CLK7-27 space once. An option bit in its
+input decides whether an input starts that search, so only the inputs pointed
+at it pay for it.
 
 Each target is built only where the compiler can build a libFuzzer program, so
 a gcc build, or one with the clang Apple ships, is unaffected and simply has no

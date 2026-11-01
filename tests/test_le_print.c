@@ -106,6 +106,17 @@ static const uint8_t ADV_IND_UUID16_PACKET[MAX_LE_SYMBOLS] = {
 	0xde, 0xad, 0xbe,			/* CRC, unchecked */
 };
 
+/* A 32-bit Service UUID list holding no UUID at all: the element is its type
+ * byte and nothing else, which is a whole number of UUIDs, namely none. */
+static const uint8_t EMPTY_UUID32_LIST_PACKET[MAX_LE_SYMBOLS] = {
+	0xd6, 0xbe, 0x89, 0x8e,
+	0x00,					/* ADV_IND */
+	8,					/* 6 + 2 bytes */
+	0x66, 0x55, 0x44, 0x33, 0x22, 0x11,	/* AdvA */
+	0x01, 0x05,				/* 32-bit UUIDs, 0 bytes */
+	0xde, 0xad, 0xbe,			/* CRC, unchecked */
+};
+
 /*
  * One list of each kind of 32-bit Service UUID element: 0x04, the incomplete
  * list, and 0x05, the complete one. As with the 16-bit lists, a flags element
@@ -509,6 +520,20 @@ static void test_uuid32_advertising_data(void)
 	CHECK_LACKS(out, "Type 05\n");
 	CHECK_EQUALS(err, "");
 	check_count(LELL_MALFORMED_ANY, 0, "two well-formed lists");
+
+	/* A list holding no UUID is a whole number of them, so it prints its
+	 * heading, no value line, and counts as nothing wrong - which is what
+	 * the 16-bit and 128-bit lists do with the same length. */
+	reset_malformed_counts();
+
+	if (decode_and_capture(EMPTY_UUID32_LIST_PACKET, out, sizeof(out),
+			       err, sizeof(err)) != 0)
+		return;
+
+	CHECK_CONTAINS(out, "Type 05 (32-bit Service UUIDs)\n");
+	CHECK_LACKS(out, "\n           0");
+	CHECK_EQUALS(err, "");
+	check_count(LELL_MALFORMED_ANY, 0, "a list of no UUIDs");
 }
 
 /* A Service UUID list whose length is not a whole number of UUIDs. Each
@@ -578,11 +603,15 @@ static void test_odd_uuid_lists_print_the_uuids_they_hold(void)
 			       err, sizeof(err)) != 0)
 		return;
 
-	/* nine bytes of list: the UUIDs 0000180d and 0000180f, one byte over */
-	CHECK_CONTAINS(out, "Type 05 (32-bit Service UUIDs)");
-	CHECK_CONTAINS(out, "\n           0000180d\n           0000180f\n");
-	/* and no third value line, since one byte is not a UUID */
-	CHECK_LACKS(out, "0000180f\n           ");
+	/* Nine bytes of list: the UUIDs 0000180d and 0000180f, one byte over.
+	 * The whole block is checked, up to the blank line that ends the
+	 * advertising data, so a loop reading one element too far shows up as
+	 * a third value line rather than relying on what comes next. */
+	CHECK_CONTAINS(out,
+		       "Type 05 (32-bit Service UUIDs)\n"
+		       "           0000180d\n"
+		       "           0000180f\n"
+		       "\n");
 	CHECK_EQUALS(err, "");
 	check_count(LELL_MALFORMED_AD_FIELD_LENGTH, 1, "the odd byte");
 
