@@ -211,6 +211,10 @@
 - A capture file name already in use was reported as a failed write; it is
   now reported as the name being taken, and the reason a write did fail is
   no longer lost while the file is closed and removed.
+- The hop permutation table was filled the first time a hop was predicted,
+  so two threads reaching it together could read half-written entries;
+  btbb_init() now fills it, and the header says what else a caller that
+  decodes on several threads has to keep to itself.
 
 _Russell Wagner &lt;152923636+SqueakyFloors@users.noreply.github.com&gt;, 30 Oct 2026 09:30:00 -0700_
 

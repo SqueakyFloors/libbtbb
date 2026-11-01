@@ -25,6 +25,7 @@
 #include <string.h>
 
 #include "bluetooth_packet.h"
+#include "bluetooth_piconet.h"
 #include "btbb_uthash.h"
 #include "sw_check_tables.h"
 
@@ -333,6 +334,11 @@ int btbb_init(int max_ac_errors)
 			return -1;
 		}
 	}
+
+	/* The hop permutation table, beside the syndrome map: both are
+	 * read-only once built, so building them here is what lets a caller
+	 * decode on several threads. */
+	perm_table_init();
 
 	return 0;
 }

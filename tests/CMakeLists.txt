@@ -40,16 +40,31 @@ set_tests_properties(le_print_unsigned_char PROPERTIES TIMEOUT 30)
 
 # The functions this one covers are internal, so it compiles the library
 # source itself rather than linking the library.
-add_executable(test_internal test_internal.c)
+# btbb_init() fills the hop permutation table, which lives in the piconet
+# translation unit, so a test that compiles bluetooth_packet.c needs that one
+# too.
+add_executable(test_internal test_internal.c ${PROJECT_SOURCE_DIR}/lib/src/bluetooth_piconet.c)
 target_include_directories(test_internal PRIVATE ${PROJECT_SOURCE_DIR}/lib/src)
 # the library source is built the way the library builds it
 target_compile_options(test_internal PRIVATE -std=gnu90)
 add_test(NAME internal COMMAND test_internal)
 set_tests_properties(internal PROPERTIES TIMEOUT 30)
 
+# The hop permutation table is internal too, and the test reads it before
+# anything has asked for a permutation, so it compiles both translation units
+# instead of linking the library.
+add_executable(test_perm_table test_perm_table.c)
+target_include_directories(test_perm_table PRIVATE ${PROJECT_SOURCE_DIR}/lib/src)
+target_compile_options(test_perm_table PRIVATE -std=gnu90)
+add_test(NAME perm_table COMMAND test_perm_table)
+set_tests_properties(perm_table PROPERTIES TIMEOUT 30)
+
 # The Bluetooth Core specification's own sample data. These also reach
 # library internals, so they compile the translation unit under test.
-add_executable(test_spec_bredr test_spec_bredr.c)
+# btbb_init() fills the hop permutation table, which lives in the piconet
+# translation unit, so a test that compiles bluetooth_packet.c needs that one
+# too.
+add_executable(test_spec_bredr test_spec_bredr.c ${PROJECT_SOURCE_DIR}/lib/src/bluetooth_piconet.c)
 target_include_directories(test_spec_bredr PRIVATE ${PROJECT_SOURCE_DIR}/lib/src)
 target_compile_options(test_spec_bredr PRIVATE -std=gnu90)
 add_test(NAME spec_bredr COMMAND test_spec_bredr)
@@ -57,7 +72,10 @@ set_tests_properties(spec_bredr PROPERTIES TIMEOUT 30)
 
 # The eSCO length decision, also internal: it compiles the translation
 # unit the payload decoders live in.
-add_executable(test_esco test_esco.c)
+# btbb_init() fills the hop permutation table, which lives in the piconet
+# translation unit, so a test that compiles bluetooth_packet.c needs that one
+# too.
+add_executable(test_esco test_esco.c ${PROJECT_SOURCE_DIR}/lib/src/bluetooth_piconet.c)
 target_include_directories(test_esco PRIVATE ${PROJECT_SOURCE_DIR}/lib/src)
 target_compile_options(test_esco PRIVATE -std=gnu90)
 add_test(NAME esco COMMAND test_esco)

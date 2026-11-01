@@ -114,7 +114,26 @@ typedef struct btbb_packet btbb_packet;
  * end the process: they are made inside macros with no error path, so
  * a failed one prints "error: libbtbb: out of memory" on standard
  * error and exits with status 1. The entries are allocated by this
- * library, and a failure there returns -1 as above. */
+ * library, and a failure there returns -1 as above.
+ *
+ * This call also builds the hop permutation table, so that everything
+ * the library shares between callers is in place before any of them
+ * runs. That is what a caller that decodes on more than one thread
+ * needs: call this once, from one thread, and let it return before
+ * starting the others. The tables are read-only from then on.
+ *
+ * What is safe after that: one btbb_piconet per thread, and the
+ * packets that belong to it. A piconet is not internally locked, so
+ * two threads must not call btbb_process_packet(),
+ * btbb_uap_from_header(), btbb_winnow() or the setters on the same
+ * piconet; a thread that wants another thread's result passes it over
+ * the accessors (btbb_piconet_get_afh_map(),
+ * btbb_piconet_set_afh_map(), btbb_piconet_get_uap(),
+ * btbb_piconet_set_uap()) while it owns both.
+ *
+ * What is not safe on any thread but one: survey mode (see
+ * btbb_init_survey() below) and the malformed-payload counts (see
+ * lell_malformed_count() below). */
 BTBB_API int btbb_init(int max_ac_errors);
 
 BTBB_API const char* btbb_get_release(void);
@@ -428,7 +447,15 @@ BTBB_API int btbb_winnow(btbb_piconet *pn);
  * exits with status 1, as the table btbb_init() builds does. The
  * allocations the survey makes itself for a LAP it has just heard -
  * its entry for that LAP, and the piconet - are checked, and the
- * packet is dropped instead. */
+ * packet is dropped instead.
+ *
+ * Both the mode and the table belong to the process and neither is
+ * guarded, so a survey runs on one thread. Turn it on before starting
+ * any other thread, and call btbb_process_packet(),
+ * btbb_next_survey_result() and btbb_survey_piconet() from one thread
+ * only: two threads adding a LAP at once corrupt the table or leave
+ * two entries for one LAP. A caller that wants several receivers in
+ * survey mode drains them in one loop instead. */
 BTBB_API int btbb_init_survey(void);
 
 /* Take the next piconet out of the survey, or NULL once none is left.
