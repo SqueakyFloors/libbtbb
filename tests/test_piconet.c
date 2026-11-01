@@ -218,6 +218,11 @@ static uint8_t channel_at(btbb_piconet *pn, uint32_t clk1_27)
 static void observe(btbb_piconet *pn, int offset, uint8_t channel)
 {
 	btbb_piconet_set_channel_seen(pn, channel);
+	/* The library bounds its own writes into these arrays; this helper
+	 * writes them directly, so it has to bound its own. */
+	CHECK(pn->packets_observed < MAX_PATTERN_LENGTH);
+	if (pn->packets_observed >= MAX_PATTERN_LENGTH)
+		return;
 	pn->pattern_indices[pn->packets_observed] = offset;
 	pn->pattern_channels[pn->packets_observed] = channel;
 	pn->packets_observed++;
@@ -242,6 +247,17 @@ static int capture_or_fail(void)
 		return 0;
 	printf("FAIL: could not capture the output\n");
 	++failures;
+	return -1;
+}
+
+/* Where a candidate sits in the list, or -1 if it is not in it. */
+static int candidate_index(btbb_piconet *pn, uint32_t clk1_27)
+{
+	int i;
+
+	for (i = 0; i < pn->num_candidates; i++)
+		if (pn->clock_candidates[i] == clk1_27)
+			return i;
 	return -1;
 }
 
@@ -1061,8 +1077,10 @@ static void test_a_wrong_clock_is_not_accepted_on_a_short_map(void)
 
 /* Channels 0-39, as a device's map, and the same without channel 7, as the
  * observer has heard it: the scenario tests/test_clock_sweep.c sweeps. */
-static const uint8_t MAP_40[10] = {0xff, 0xff, 0xff, 0xff, 0xff};
-static const uint8_t MAP_40_LESS_ONE[10] = {0x7f, 0xff, 0xff, 0xff, 0xff};
+static const uint8_t MAP_40[10] = {0xff, 0xff, 0xff, 0xff, 0xff,
+				   0x00, 0x00, 0x00, 0x00, 0x00};
+static const uint8_t MAP_40_LESS_ONE[10] = {0x7f, 0xff, 0xff, 0xff, 0xff,
+					    0x00, 0x00, 0x00, 0x00, 0x00};
 
 /*
  * A capture whose hops fit two clocks about equally ends with no clock, and
@@ -1138,6 +1156,7 @@ static void test_the_search_follows_the_clocks_drifting_apart(void)
 	const uint32_t true_clock = 0x1000000;
 	const int spacing = CLK27_DRIFT_SLOTS / 16;
 	uint32_t offset;
+	int steps_taken = 0;	/* drift steps the true clock's entry took */
 	int i;
 
 	pn->first_pkt_time = true_clock;
@@ -1150,6 +1169,12 @@ static void test_the_search_follows_the_clocks_drifting_apart(void)
 	     offset += (uint32_t) spacing) {
 		/* where the device's clock has drifted to by now */
 		int steps = (int) (offset / CLK27_DRIFT_SLOTS);
+		int before = candidate_index(pn, true_clock);
+		int8_t was_pending = before < 0 ? 0 :
+			pn->candidate_fits[before].pending;
+		int8_t was_drift = before < 0 ? 0 :
+			pn->candidate_fits[before].drift;
+		int after;
 
 		if (steps > CLK27_MAX_DRIFT_STEPS)
 			steps = CLK27_MAX_DRIFT_STEPS;
@@ -1163,12 +1188,25 @@ static void test_the_search_follows_the_clocks_drifting_apart(void)
 			for (i = 0; i < pn->num_candidates; i++)
 				CHECK_EQ(0, pn->candidate_fits[i].drift);
 		}
+		/*
+		 * A step is never taken on one hop: where the entry moved,
+		 * the hop before it had already remembered that same step.
+		 */
+		after = candidate_index(pn, true_clock);
+		if (before >= 0 && after >= 0 &&
+		    pn->candidate_fits[after].drift != was_drift) {
+			CHECK_EQ(pn->candidate_fits[after].drift,
+				 was_pending);
+			steps_taken++;
+		}
 		if (btbb_piconet_get_flag(pn, BTBB_CLK27_VALID))
 			break;
 	}
 
 	CHECK(btbb_piconet_get_flag(pn, BTBB_CLK27_VALID));
 	CHECK_EQ(1, pn->num_candidates);
+	/* and it got there one step at a time, each one corroborated */
+	CHECK_EQ(CLK27_MAX_DRIFT_STEPS, steps_taken);
 	if (pn->clock_candidates == NULL)
 		goto out;
 	/* The clock accepted is the device's as it now reads, two pairs on
@@ -1179,6 +1217,60 @@ static void test_the_search_follows_the_clocks_drifting_apart(void)
 	CHECK_EQ(4 * CLK27_MAX_DRIFT_STEPS, pn->clk_offset);
 out:
 	btbb_piconet_unref(pn);
+	btbb_piconet_unref(device);
+}
+
+/*
+ * A piconet that drops a channel partway through a capture does not get a
+ * wrong clock confirmed.
+ *
+ * An observer cannot tell a channel it heard earlier from one still in use, so
+ * after the device reclassifies, hops the device now re-maps are checked
+ * against a channel it has stopped using and read as misses - against the
+ * device's own clock as much as any other.  What must not happen is that the
+ * right clock falls behind far enough for a wrong one to be accepted.  Here
+ * the device drops the channel it uses most of the first stretch, and the
+ * search either settles on the device's clock or settles on nothing.
+ */
+static void test_a_map_that_loses_a_channel_confirms_no_wrong_clock(void)
+{
+	/* Channels 0-39, and the same without channel 3. */
+	static const uint8_t map_later[10] = {0xf7, 0xff, 0xff, 0xff, 0xff,
+					      0x00, 0x00, 0x00, 0x00, 0x00};
+	btbb_piconet *device = discovered_as(TEST_LAP, TEST_UAP, MAP_40, 1);
+	btbb_piconet *later = discovered_as(TEST_LAP, TEST_UAP, map_later, 1);
+	btbb_piconet *pn = discovered_as(TEST_LAP, TEST_UAP,
+					 MAP_40_LESS_ONE, 1);
+	const uint32_t true_clock = 0x1000000;
+	const uint32_t changes_at = 4 * 40;
+	uint32_t offset;
+
+	pn->first_pkt_time = true_clock;
+	pn->clk6_offset = 0;
+	first_hop(pn, channel_at(device, true_clock));
+	CHECK(btbb_init_hop_reversal(0, pn) > 1);
+
+	for (offset = 4; offset <= 4 * (CLK27_ATTEMPT_HOPS - 1); offset += 4) {
+		/* the device's own map, before and after it drops a channel */
+		btbb_piconet *hopping = offset < changes_at ? device : later;
+
+		observe(pn, (int) offset,
+			channel_at(hopping, true_clock + offset));
+		if (!btbb_piconet_get_flag(pn, BTBB_HOP_REVERSAL_INIT))
+			break;	/* the attempt ended; nothing was accepted */
+		if (btbb_piconet_get_flag(pn, BTBB_CLK27_VALID))
+			break;
+	}
+
+	/* Whatever it did, it did not confirm a clock that is not the
+	 * device's. */
+	if (btbb_piconet_get_flag(pn, BTBB_CLK27_VALID)) {
+		CHECK_EQ(1, pn->num_candidates);
+		if (pn->clock_candidates != NULL)
+			CHECK_EQ(true_clock, pn->clock_candidates[0]);
+	}
+	btbb_piconet_unref(pn);
+	btbb_piconet_unref(later);
 	btbb_piconet_unref(device);
 }
 
@@ -3080,6 +3172,7 @@ int main(void)
 	test_a_wrong_clock_is_not_accepted_on_a_short_map();
 	test_hops_that_fit_two_clocks_accept_neither();
 	test_the_search_follows_the_clocks_drifting_apart();
+	test_a_map_that_loses_a_channel_confirms_no_wrong_clock();
 	test_discovery_notes_go_to_stderr();
 	test_discovery_complaints_go_to_stderr();
 	test_aliased_hop_reversal_is_refused();

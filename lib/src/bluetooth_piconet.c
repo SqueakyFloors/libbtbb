@@ -452,6 +452,15 @@ static char observed_channel(uint32_t clk1_27, btbb_piconet *pn)
  * piconet's own clock in the list while the map is still being learned.  The
  * cost is that fewer wrong clocks go with each hop, so the list takes more
  * hops to narrow; the gain is that it narrows towards the right clock.
+ *
+ * Whether the piconet is adapted decides this, not how many channels the
+ * observer has heard: an adapted piconet answers a central slot on its own
+ * channel whatever an observer knows of its map.  single_hop(), which the
+ * caller hops a receiver by, does take the count, because below Nmin the
+ * specification has no adapted sequence to follow.  While the two disagree -
+ * an adapted piconet with fewer than Nmin channels heard - a clock would be
+ * scored under one sequence and followed under another, so score_candidates()
+ * accepts none until the map has caught up.
  */
 enum hop_fit { HOP_AGREES, HOP_SAYS_NOTHING, HOP_MISSES };
 
@@ -531,10 +540,17 @@ static void score_hop(btbb_piconet *pn, int i, int offset, uint8_t channel)
 	uint32_t base = (pn->clock_candidates[i] + (uint32_t) offset) &
 			(SEQUENCE_LENGTH - 1);
 	int step = drift_step(pn);
-	/* The steps this much observation can account for.  A hop whose clock
-	 * reads before the first packet's, which is what the observer's clock
-	 * wrapping gives, accounts for none. */
-	int earned = offset > 0 ? offset / CLK27_DRIFT_SLOTS : 0;
+	/*
+	 * The steps this much observation can account for.  The slots since
+	 * the first packet are taken modulo the clock's own length, because
+	 * the observer's clock wraps about once a day and a hop after the
+	 * wrap reads as a negative difference; counting that as no
+	 * observation would deny a whole attempt its drift.  A packet
+	 * genuinely out of order would over-earn here, and the cap below is
+	 * what that costs.
+	 */
+	int earned = (int) ((((uint32_t) offset) & (SEQUENCE_LENGTH - 1)) /
+			    CLK27_DRIFT_SLOTS);
 	/* The next step away from where the drift started, and, while it has
 	 * no direction yet, the one behind as well: a clock with no drift yet
 	 * is as likely to be the slower of the two as the faster. */
@@ -552,11 +568,23 @@ static void score_hop(btbb_piconet *pn, int i, int offset, uint8_t channel)
 		tally(&fit->agreements);
 		return;
 	case HOP_SAYS_NOTHING:
+		/* Nothing is known about this hop, so nothing is known about
+		 * a step out of it either: the two hops that take a step have
+		 * to be the candidate's last two readable hops, or "twice" is
+		 * no stronger than "once a long time apart". */
+		fit->pending = 0;
 		return;
 	case HOP_MISSES:
 		break;
 	}
 
+	/*
+	 * A hop the candidate was wrong about, which a step out can only
+	 * explain once the hop before it said the same.  So the first such
+	 * hop is a miss that remembers the step, and the second takes it and
+	 * counts for the candidate instead: one way out of each hop, not
+	 * several.
+	 */
 	for (t = 0; t < tries; t++) {
 		int drift = out[t];
 
@@ -566,15 +594,12 @@ static void score_hop(btbb_piconet *pn, int i, int offset, uint8_t channel)
 			    (SEQUENCE_LENGTH - 1), channel, pn) != HOP_AGREES)
 			continue;
 		if (fit->pending == (int8_t) drift) {
-			/* a second hop agreeing there: the candidate has
-			 * drifted, and this hop is evidence for it */
 			fit->drift = (int8_t) drift;
 			fit->pending = 0;
 			tally(&fit->agreements);
 		} else {
-			/* the first, which counts neither way until another
-			 * hop agrees at the same step */
 			fit->pending = (int8_t) drift;
+			tally(&fit->misses);
 		}
 		return;
 	}
@@ -801,7 +826,9 @@ int btbb_init_hop_reversal(int aliased, btbb_piconet *pn)
 	pn->best_score = 0;
 	pn->runner_up_score = 0;
 	pn->lead_hops = 0;
-	pn->best_clock = 0;
+	/* No clock yet: every real one is below SEQUENCE_LENGTH, so this
+	 * cannot be mistaken for one, which 0 could be. */
+	pn->best_clock = SEQUENCE_LENGTH;
 	pn->candidates_afh = (uint8_t) btbb_piconet_get_flag(pn, BTBB_IS_AFH);
 	btbb_piconet_set_flag(pn, BTBB_HOP_REVERSAL_INIT, 1);
 	btbb_piconet_set_flag(pn, BTBB_CLK27_VALID, 0);
@@ -929,7 +956,9 @@ static void reset(btbb_piconet *pn)
 	pn->best_score = 0;
 	pn->runner_up_score = 0;
 	pn->lead_hops = 0;
-	pn->best_clock = 0;
+	/* No clock yet: every real one is below SEQUENCE_LENGTH, so this
+	 * cannot be mistaken for one, which 0 could be. */
+	pn->best_clock = SEQUENCE_LENGTH;
 	pn->clk_offset = 0;
 	/* Both clocks are being searched for again, so neither offset
 	 * describes this piconet.  The slot offset is what the reported one is
@@ -1052,8 +1081,11 @@ static int score_candidates(int offset, char channel, btbb_piconet *pn)
 	 * hop old can be luck, so it has to hold while CLK27_LEAD_HOPS
 	 * further hops arrive.
 	 */
-	if (best_score >= CLK27_MIN_SCORE &&
+	if (best_score >= (kept == 1 ? CLK27_SOLE_SCORE : CLK27_MIN_SCORE) &&
 	    best_score - runner_up >= CLK27_SCORE_MARGIN &&
+	    /* and the caller would follow the sequence this was scored
+	     * under; see hop_fit() */
+	    (!btbb_piconet_get_flag(pn, BTBB_IS_AFH) || afh_in_use(pn)) &&
 	    candidate_clock(pn, best) == pn->best_clock)
 		pn->lead_hops++;
 	else

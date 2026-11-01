@@ -47,9 +47,12 @@
  *
  * The piconet's own clock agrees with every hop that can be checked against
  * it, as long as the map the prediction was made under holds no channel the
- * piconet has dropped.  Two things break that in a real capture.  A
- * controller reclassifies channels while the capture runs, so a hop the map
- * re-mapped before the change lands elsewhere after it.  And the two clocks
+ * piconet has dropped.  Three things break that in a real capture.  A
+ * controller reclassifies channels while the capture runs, and an observer
+ * cannot tell a channel it heard an hour ago from one still in use, so a hop
+ * the piconet now re-maps is checked against a channel it has stopped using
+ * and reads as a miss.  A receiver reports the channel it was listening on,
+ * which is not always the one the packet was sent on.  And the two clocks
  * drift, which moves a prediction by a slot pair every minute or so.
  * Measured on a 180 s capture of an adapted link, the best-fitting clock
  * missed 30 of the 166 hops that could be checked against it.  So one miss
@@ -79,6 +82,20 @@
 #define CLK27_SCORE_MARGIN 4
 
 /*
+ * What a candidate has to score when it is the only one left.
+ *
+ * The margin asks whether anything else explains the hops nearly as well, and
+ * with no other candidate standing there is nothing to ask.  That is not the
+ * same as an answer: every clock the observer could check has been ruled out,
+ * but the piconet's own may never have been in the list - the hop the
+ * candidates were chosen from can be one the piconet re-mapped - and then the
+ * last one standing is a clock that merely outlived the rest, which is the
+ * acceptance this search was written to replace.  So a sole candidate has to
+ * explain considerably more before it is believed on its own.
+ */
+#define CLK27_SOLE_SCORE 24
+
+/*
  * How many hops in a row one clock has to stay clearly ahead before it is
  * accepted.
  *
@@ -87,8 +104,8 @@
  * either of them can be a few agreements up at the moment the margin is
  * looked at.  Measured over 18 address and clock combinations, a lead that was
  * only a hop old accepted a clock that was not the device's in one of them, at
- * a score of 15 against 11.  A lead that has held while this many further hops
- * arrived is a different thing: each of them is another chance for the other
+ * a score of 15 against 11.  A lead that has held over this many hops is a
+ * different thing: each hop after the first is another chance for the other
  * clock to catch up, and the clock that really explains the capture pulls away
  * instead.
  */
@@ -124,11 +141,13 @@
  * device's explain all 101 of its checkable hops, exactly as many as the
  * device's own.
  *
- * A step is taken only when two hops have agreed at it.  One hop agrees a step
- * out by chance about once in 79, and a step is never given back, so a
- * candidate that moved on a chance agreement misses every checkable hop
- * afterwards and dies - which for the piconet's own clock is the search
- * throwing away the right answer.
+ * A step is taken only when the candidate's last two readable hops have both
+ * agreed at it.  One hop agrees a step out by chance about once in 79, and a
+ * step is never given back, so a candidate that moved on a chance agreement
+ * misses every checkable hop afterwards and dies - which for the piconet's own
+ * clock is the search throwing away the right answer.  The first of the two
+ * hops is still a miss, so the step costs the candidate something either way
+ * and no hop has a free way out.
  *
  * And the drift only ever moves away from where it started, because one of the
  * two clocks runs faster than the other and keeps doing so.  A candidate
@@ -363,7 +382,8 @@ struct btbb_piconet {
 	 * the others, which is what CLK27_SCORE_MARGIN is measured between.
 	 * Kept so that a caller or a test can see how close the search came
 	 * and to which clock.  They describe the state num_candidates counts,
-	 * so they mean nothing while that is zero. */
+	 * so they mean nothing while that is zero, where best_clock reads
+	 * SEQUENCE_LENGTH, which no clock can be. */
 	uint32_t best_clock;
 	int best_score;
 	int runner_up_score;
