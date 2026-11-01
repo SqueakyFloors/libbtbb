@@ -35,6 +35,8 @@
   counted by lell_malformed_count(); lell_set_malformed_verbose() asks for it.
 - Fixed: a service UUID list whose length is not a whole number of UUIDs
   printed none of them; the whole ones now print, and the leftover is counted.
+- A 32-bit Service UUID list (AD types 0x04 and 0x05) now prints as UUIDs;
+  earlier releases showed its bytes under an unrecognized type.
 - Fixed: lell_print() reported a Tx Power Level of -12 dBm as 244 dBm; it
   now prints the signed value the specification defines, on every host.
 - Fixed: an advertising PDU too short for the fields read from it now says

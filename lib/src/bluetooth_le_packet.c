@@ -660,6 +660,33 @@ print16:
 						   " 2)\n", sublen-1);
 				}
 				break;
+			case 0x04:
+				printf(" (32-bit Service UUIDs, more available)\n");
+				goto print32;
+			case 0x05:
+				printf(" (32-bit Service UUIDs)\n");
+print32:
+				/* The whole UUIDs this list holds, as above. */
+				for (i = 0; i + 4 <= sublen - 1; i += 4) {
+					/* assembled a byte at a time: the
+					 * buffer is not aligned for a
+					 * uint32_t, and the UUID is
+					 * little endian whatever the
+					 * host is */
+					uint32_t uuid =
+						(uint32_t) buf[pos+4+i] << 24 |
+						(uint32_t) buf[pos+3+i] << 16 |
+						(uint32_t) buf[pos+2+i] << 8 |
+						(uint32_t) buf[pos+1+i];
+					printf("           %08x\n", uuid);
+				}
+				if ((sublen - 1) % 4 != 0) {
+					_malformed(LELL_MALFORMED_AD_FIELD_LENGTH,
+						   "note: wrong length (%d,"
+						   " must be divisible by"
+						   " 4)\n", sublen-1);
+				}
+				break;
 			case 0x06:
 				printf(" (128-bit Service UUIDs, more available)\n");
 				goto print128;
