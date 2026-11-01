@@ -148,15 +148,18 @@ and the linker will name them, which is a check that does not depend on reading
 the sources. Read the **section**, not the symbol class: a format that has to
 relocate const data puts it in a section whose name begins `.data`
 (`.data.rel.ro`), and `nm`'s one-letter class then looks like writable data
-although it is not.
+although it is not. Keep the common symbols too: an object declared at file
+scope without `static` and without an initializer is a tentative definition,
+which neither format puts in a section until it is linked.
 
 On Mach-O, which is where the seven below were counted:
 
 ```sh
+rm -rf /tmp/btbb-statics      # a stale cache here reads another tree's objects
 cmake -S . -B /tmp/btbb-statics -DCMAKE_C_FLAGS=-O0
 cmake --build /tmp/btbb-statics --target btbb
 for o in /tmp/btbb-statics/lib/src/CMakeFiles/btbb.dir/*.c.o; do
-	nm -m "$o" | grep -E '__DATA,__(data|bss|common)'
+	nm -m "$o" | grep -E '__DATA,__(data|bss|common)|\(common\)'
 done | awk '$NF !~ /^ltmp/ { print $NF }' | sort
 ```
 
@@ -167,13 +170,16 @@ than counted to:
 ```sh
 objdump -t /tmp/btbb-statics/lib/src/CMakeFiles/btbb.dir/*.c.o |
 	awk '{ for (i = 2; i < NF; i++)
-	         if (($i == ".data" || $i == ".bss") && $NF != $i)
-	                 { print $NF; break } }' | sort -u
+	         if (($i == ".data" || $i == ".bss" || $i == "*COM*") &&
+	             $NF != $i) { print $NF; break } }' | sort -u
 ```
 
-Both forms were run against the same sources, the first on a Mach-O build
-and the second on ELF objects compiled `-O0 -fPIC`, and both answer with the
-seven below.
+Both forms were run against the same sources, the first on a Mach-O build and
+the second on ELF objects compiled `-O0 -fPIC`, and both answer with the seven
+below. Run on the commit before this check existed, the first form answers
+twelve: these seven and the five string tables the low energy printer reads,
+which were writable only because the arrays of pointers were not themselves
+`const`.
 
 `-O0` matters on either: an optimizing build merges small objects into one
 symbol and hides their names.

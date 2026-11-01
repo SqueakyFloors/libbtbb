@@ -49,8 +49,11 @@ static int failures = 0;
 	} while (0)
 
 /* How many of the 524,288 entries are not the permutation they stand for. A
-   half-filled table reads as zero where it was not reached, and perm5()
-   answers zero for only a few of its inputs, so a gap shows up here. */
+   gap in the table reads as zero, and perm5() answers zero for one input in
+   32 -- every entry with z == 0 -- so a gap shows up here unless it falls
+   entirely inside that plane, which the fill's loop order rules out: it
+   walks z outermost, so a fill that stopped early left whole z planes
+   untouched above the one it reached. */
 static int entries_wrong(void)
 {
 	int z, p_high, p_low, wrong = 0;

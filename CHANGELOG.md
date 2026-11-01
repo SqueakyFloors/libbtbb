@@ -214,13 +214,14 @@
 - The hop permutation table was filled the first time a hop was predicted,
   so two threads reaching it together could read half-written entries;
   btbb_init() now fills it, and the header says what else a caller that
-  decodes on several threads has to keep to itself. Every caller pays for
-  the fill at startup now, where only one that predicted a hop paid before:
-  524,288 permutations and 512 KB touched, which is half a millisecond in an
-  -O3 build and about 55 ms unoptimized.
+  decodes on several threads has to keep to itself. A caller of btbb_init()
+  pays for the fill there now, where only one that went on to predict a hop
+  paid before: 524,288 permutations into 524,288 bytes, about 55 ms in a build
+  with no build type chosen and half a millisecond at -O3. A caller that never
+  calls btbb_init() still gets the fill on its first hop prediction, and has
+  to decode on one thread.
 - Five string tables the low energy printer reads were writable where they
-  are never written; they are read-only now. What the library does share
-  between callers is seven objects, and btbb.h describes each of them.
+  are never written; they are read-only now.
 
 _Russell Wagner &lt;152923636+SqueakyFloors@users.noreply.github.com&gt;, 30 Oct 2026 09:30:00 -0700_
 

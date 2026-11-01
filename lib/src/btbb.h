@@ -101,6 +101,67 @@ extern "C"
 
 typedef struct btbb_packet btbb_packet;
 
+/* THREADS
+ *
+ * Nothing in this library is internally locked. A caller that decodes
+ * on more than one thread can do it, and these are the rules.
+ *
+ * Call btbb_init() once, from one thread, and let it return before
+ * starting the others. It fills the hop permutation table, which every
+ * piconet reads and which would otherwise be filled by whichever
+ * thread predicted the first hop. A caller that never calls
+ * btbb_init() gets that lazy fill instead, and must decode on one
+ * thread only.
+ *
+ * Give each thread its own btbb_piconet, and the packets that belong
+ * to it. A piconet belongs to one thread at a time: no two threads may
+ * touch one at once if either of them can write it. These can write
+ * it -- btbb_init_piconet(), btbb_process_packet(),
+ * btbb_uap_from_header(), btbb_winnow(), btbb_init_hop_reversal(),
+ * btbb_piconet_drop_clock(), btbb_piconet_set_uap(),
+ * btbb_piconet_set_clk_offset(), btbb_piconet_set_flag(),
+ * btbb_piconet_set_channel_seen(), btbb_piconet_clear_channel_seen(),
+ * btbb_piconet_set_afh_map(), btbb_piconet_ref() and
+ * btbb_piconet_unref() -- and the ones that only read are safe just
+ * while no thread is inside one of those. The reference count is a
+ * plain uint32_t rather than an atomic, as btbb_packet_ref() and
+ * btbb_packet_unref() keep for one packet, so a miscount there frees
+ * the object twice or leaks it, where the rest of these rules cost a
+ * wrong answer.
+ *
+ * A thread that wants another thread's result passes it over the
+ * accessors while it owns both piconets. btbb_piconet_get_afh_map()
+ * hands back the piconet's own ten bytes rather than a copy, and the
+ * thread that owns that piconet writes them as it decodes, so copy the
+ * ten bytes out and hand the copy to btbb_piconet_set_afh_map(); do
+ * not keep the pointer. btbb_piconet_get_uap() and
+ * btbb_piconet_set_uap() pass a value and need no such care.
+ *
+ * One thread only, whatever the piconets: survey mode (see
+ * btbb_init_survey()); the malformed-payload counts, which lell_print()
+ * keeps as it prints, and the setting that asks for their detail (see
+ * lell_malformed_count() and lell_set_malformed_verbose()); one capture
+ * file, whose handle belongs to the thread that writes it; and
+ * printing.
+ *
+ * Printing is more than the print calls. btbb_print_packet(),
+ * lell_print() and btbb_print_afh_map() write a line in several calls,
+ * so two threads interleave them -- and btbb_process_packet() calls
+ * btbb_print_packet() itself, on standard output, for a packet of a
+ * piconet it is following. UAP and clock discovery writes its own
+ * progress to standard error from inside the decode as well:
+ * btbb_process_packet(), btbb_uap_from_header(), btbb_winnow(),
+ * btbb_init_hop_reversal() and btbb_piconet_drop_clock() all report
+ * that way, and each of those notes flushes standard output first to
+ * keep the two streams in order. btbb_piconet_new() and
+ * btbb_packet_new() report an allocation they could not make, the
+ * first of them flushing and the second not. So two decoding threads
+ * interleave both streams. Serialize the printing, or give each thread
+ * streams of its own.
+ *
+ * Of the library's own state, that leaves only the tables btbb_init()
+ * builds, and they are read-only once built. */
+
 /* Initialize the library. Compute the syndrome. Return 0 on success,
  * negative on error.
  *
@@ -114,72 +175,23 @@ typedef struct btbb_packet btbb_packet;
  * end the process: they are made inside macros with no error path, so
  * a failed one prints "error: libbtbb: out of memory" on standard
  * error and exits with status 1. The entries are allocated by this
- * library, and a failure there returns -1 as above.
+ * library, and a failure there returns -1 as above. A call given a
+ * max_ac_errors of 0 builds no syndrome table at all, and a later call
+ * with a non-zero one builds it then.
  *
- * This call also builds the hop permutation table, so that both of the
- * tables it owns are in place before any caller runs, and read-only
- * from then on. That is what a caller that decodes on more than one
- * thread needs of this call: make it once, from one thread, and let it
- * return before starting the others. The permutation table is built by
- * the first statement, before the argument is even checked, so the
- * table is whole whatever this returns and there is no rule to learn
- * about which failures leave it half done.
+ * This call also fills the hop permutation table, by its first
+ * statement, before the argument is even checked: filling it cannot
+ * fail, so the table is whole whatever this returns and there is no
+ * rule to learn about which failures leave it half done. That is what
+ * makes decoding on several threads possible; see THREADS above.
  *
- * It costs 512 KB of this library's own storage, and the fill is
- * 524,288 permutations: measured on a current desktop, half a
- * millisecond in a -O3 build, about 18 ms at -O2 and about 55 ms
- * unoptimized, once per process. A caller on a small machine, or one
- * that never predicts a hop, may care about both figures.
- *
- * A caller that never calls this at all gets the table filled on its
- * first hop prediction instead, and must then decode on one thread
- * only: that fill is the one piece of shared state this library writes
- * outside the call below.
- *
- * What is safe after that: one btbb_piconet per thread, and the
- * packets that belong to it. Nothing here is internally locked, so a
- * piconet belongs to one thread at a time: no two threads may touch it
- * at once if either of them can write it. These can write it --
- * btbb_init_piconet(), btbb_process_packet(), btbb_uap_from_header(),
- * btbb_winnow(), btbb_init_hop_reversal(), btbb_piconet_drop_clock(),
- * btbb_piconet_set_uap(), btbb_piconet_set_clk_offset(),
- * btbb_piconet_set_flag(), btbb_piconet_set_channel_seen(),
- * btbb_piconet_clear_channel_seen(), btbb_piconet_set_afh_map(),
- * btbb_piconet_ref() and btbb_piconet_unref() -- and the ones that
- * only read are safe just while no thread is inside one of those. The
- * reference count is a plain int, as btbb_packet_ref() and
- * btbb_packet_unref() keep for one packet, so a miscount there frees
- * the object twice or leaks it, where the rest of this paragraph costs
- * a wrong answer.
- *
- * A thread that wants another thread's result passes it over the
- * accessors while it owns both piconets. btbb_piconet_get_afh_map()
- * hands back the piconet's own ten bytes rather than a copy, and the
- * thread that owns that piconet writes them as it decodes, so copy the
- * ten bytes out and hand the copy to btbb_piconet_set_afh_map(); do
- * not keep the pointer. btbb_piconet_get_uap() and
- * btbb_piconet_set_uap() pass a value and need no such care.
- *
- * What is not safe on any thread but one: survey mode (see
- * btbb_init_survey() below); the malformed-payload counts, which
- * lell_print() keeps as it prints, and the setting that asks for their
- * detail (see lell_malformed_count() and
- * lell_set_malformed_verbose() below); one capture file, whose handle
- * belongs to the thread that writes it; and printing.
- *
- * Printing needs saying twice, because it is not only the print calls.
- * btbb_print_packet(), lell_print() and btbb_print_afh_map() write a
- * line in several calls, so two threads interleave them. But UAP and
- * clock discovery also writes its own progress to standard error from
- * inside the decode -- btbb_process_packet(), btbb_uap_from_header(),
- * btbb_winnow(), btbb_init_hop_reversal() and btbb_piconet_drop_clock()
- * all report through it -- and btbb_piconet_new() and btbb_packet_new()
- * report an allocation they could not make. Each of those notes flushes
- * standard output first, to keep the two streams in order. So a caller
- * decoding on several threads, one piconet each, has those notes
- * interleaving and another thread's standard output being flushed under
- * it. Serialize the printing, or send each thread's standard error
- * somewhere of its own. */
+ * The table is 524,288 bytes of this library's own storage, and
+ * filling it computes that many permutations. Measured on an arm64
+ * laptop: about 55 ms unoptimized, which is what a build of this
+ * library with no build type chosen gets, about 18 ms at -O2, and half
+ * a millisecond at -O3. Once per process, and paid by every caller of
+ * this function, where before only one that went on to predict a hop
+ * paid it. */
 BTBB_API int btbb_init(int max_ac_errors);
 
 BTBB_API const char* btbb_get_release(void);
