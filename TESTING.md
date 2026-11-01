@@ -150,9 +150,11 @@ and the linker will name them, which is a check that does not depend on reading
 the sources. Read the **section**, not the symbol class: a format that has to
 relocate const data puts it in a section whose name begins `.data`
 (`.data.rel.ro`), and `nm`'s one-letter class then looks like writable data
-although it is not. Keep the common symbols too: an object declared at file
-scope without `static` and without an initializer is a tentative definition,
-which neither format puts in a section until it is linked.
+although it is not. Keep the common symbols too: on Mach-O an object declared at file scope
+without `static` and without an initializer is a tentative definition and ends
+up in `(common)` rather than in a section, which is how such an object looked
+before this change. Current ELF compilers default to `-fno-common` and put it
+straight in `.bss`, which the ELF form already looks for.
 
 On Mach-O, which is where the seven below were counted:
 
@@ -165,12 +167,13 @@ for o in /tmp/btbb-statics/lib/src/CMakeFiles/btbb.dir/*.c.o; do
 done | awk '$NF !~ /^ltmp/ { print $NF }' | sort
 ```
 
-On ELF, the same question asked of the section names, where `objdump` prints
-them in a column whose position moves, so the section is looked for rather
-than counted to:
+On a Linux build, the same question asked of the section names, where
+`objdump` prints them in a column whose position moves, so the section is
+looked for rather than counted to. Build into a directory of its own; run
+against the Mach-O objects above it prints nothing:
 
 ```sh
-objdump -t /tmp/btbb-statics/lib/src/CMakeFiles/btbb.dir/*.c.o |
+objdump -t /tmp/btbb-statics-elf/lib/src/CMakeFiles/btbb.dir/*.c.o |
 	awk '{ for (i = 2; i < NF; i++)
 	         if (($i == ".data" || $i == ".bss" || $i == "*COM*") &&
 	             $NF != $i) { print $NF; break } }' | sort -u
@@ -184,8 +187,10 @@ twelve: these seven and the five string tables the low energy printer reads,
 which were writable only because the arrays of pointers were not themselves
 `const`.
 
-`-O0` matters on either: an optimizing build merges small objects into one
-symbol and hides their names.
+`-O0` is the conservative default: measured on this commit, an `-O3` build of
+the library -- which is what its Release build type asks for -- merges two of
+the seven into one unnamed symbol and the command answers six, while an `-O2`
+build answers the same seven as `-O0`.
 
 Seven come out, and `btbb.h` describes each:
 

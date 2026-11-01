@@ -38,9 +38,10 @@ target_link_libraries(test_le_print_unsigned_char ${btbb_library})
 add_test(NAME le_print_unsigned_char COMMAND test_le_print_unsigned_char)
 set_tests_properties(le_print_unsigned_char PROPERTIES TIMEOUT 30)
 
-# Three of the test programs below compile bluetooth_packet.c into themselves,
-# and btbb_init() fills the hop permutation table, which lives in the piconet
-# translation unit, so each of those three builds that one too.
+# Three of the test programs below compile bluetooth_packet.c into themselves
+# without bluetooth_piconet.c, and btbb_init() fills the hop permutation table,
+# which lives in the piconet translation unit, so each of those three builds
+# that one too.
 # The functions this one covers are internal, so it compiles the library
 # source itself rather than linking the library.
 add_executable(test_internal test_internal.c ${PROJECT_SOURCE_DIR}/lib/src/bluetooth_piconet.c)
@@ -57,8 +58,8 @@ add_executable(test_perm_table test_perm_table.c)
 target_include_directories(test_perm_table PRIVATE ${PROJECT_SOURCE_DIR}/lib/src)
 target_compile_options(test_perm_table PRIVATE -std=gnu90)
 add_test(NAME perm_table COMMAND test_perm_table)
-# Under a second here, but it fills the table four times, walks all 524,288
-# entries five times, and the fifth walk is of a call that must not fill it.
+# Under a second here, but it fills the table four times and walks all 524,288
+# entries seven times, the last of those after a call that must not fill it.
 # A sanitizer build and a shared runner both multiply that.
 set_tests_properties(perm_table PROPERTIES TIMEOUT 60)
 

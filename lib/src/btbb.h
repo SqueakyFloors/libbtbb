@@ -147,11 +147,12 @@ typedef struct btbb_packet btbb_packet;
  * file, whose handle belongs to the thread that writes it; and
  * printing.
  *
- * Printing is more than the print calls. btbb_print_packet(),
- * lell_print() and btbb_print_afh_map() write a line in several calls,
- * so two threads interleave them -- and btbb_process_packet() calls
- * btbb_print_packet() itself, on standard output, for a packet of a
- * piconet it is following. UAP and clock discovery writes its own
+ * Printing is more than the print calls. btbb_print_packet() and
+ * lell_print() build a line out of several calls, so two threads
+ * interleave them, and btbb_process_packet() calls btbb_print_packet()
+ * itself, on standard output, for a packet of a piconet it is
+ * following. btbb_print_afh_map() writes its line in one call, so it
+ * only has to share the stream. UAP and clock discovery writes its own
  * progress to standard error from inside the decode as well:
  * btbb_process_packet(), btbb_uap_from_header(), btbb_winnow(),
  * btbb_init_hop_reversal() and btbb_piconet_drop_clock() all report
@@ -182,25 +183,22 @@ typedef struct btbb_packet btbb_packet;
  * error and exits with status 1. The entries are allocated by this
  * library, and a failure there returns -1 as above. A call given a
  * max_ac_errors of 0 builds no syndrome table at all, and a later call
- * with a non-zero one builds it then.
+ * with a non-zero one builds it then. A syndrome table that exists is
+ * not rebuilt, so a second call asking for more access code errors
+ * than the first keeps the first call's table and still returns 0.
  *
  * This call also fills the hop permutation table, by its first
  * statement, before the argument is even checked: filling it cannot
  * fail, so the table is whole whatever this returns and there is no
- * rule to learn about which failures leave it half done. A table that
- * already exists is not rebuilt, so a second call asking for more
- * access code errors than the first keeps the first call's table and
- * still returns 0. That is what
+ * rule to learn about which failures leave it half done. That is what
  * makes decoding on several threads possible; see THREADS above.
  *
  * The table is 524,288 bytes of this library's own storage, and
  * filling it computes that many permutations, once per process. Every
  * caller of this function pays for that now, where before only one
- * that went on to predict a hop paid it. How long it takes depends
- * entirely on how this library was compiled -- two reviewers of the
- * change measured it two orders of magnitude apart across build types
- * -- so measure it on your own build rather than trusting a figure
- * here. */
+ * that went on to predict a hop paid it. How long it takes depends on
+ * the build and the machine, by a wide margin, so measure it on yours
+ * rather than trusting a figure here. */
 BTBB_API int btbb_init(int max_ac_errors);
 
 BTBB_API const char* btbb_get_release(void);

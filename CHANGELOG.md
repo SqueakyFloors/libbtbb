@@ -220,8 +220,8 @@
   no longer lost while the file is closed and removed.
 - Five string tables the low energy printer reads were writable where they
   are never written; they are read-only now. perm_table and its flag stopped
-  being external symbols, which the shared library already hid and a static
-  one did not.
+  being external symbols, which the shared library already hid and the static
+  library did not.
 
 _Russell Wagner &lt;152923636+SqueakyFloors@users.noreply.github.com&gt;, 30 Oct 2026 09:30:00 -0700_
 
