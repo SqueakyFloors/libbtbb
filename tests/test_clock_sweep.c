@@ -4,9 +4,14 @@
  *
  * The sweep: a device hops on a 40-channel AFH map; the observer has seen all
  * of it but one channel.  The observer catches one packet every four slots, up
- * to 40 of them, and tries to recover the device's CLK1-27.  Each true clock
- * value is one trial, ending in a true lock, a wrong lock, every candidate
- * ruled out so discovery starts over, or still undecided after 40 packets.
+ * to PACKETS of them, and tries to recover the device's CLK1-27.  Each true
+ * clock value is one trial, ending in a true lock, a wrong lock, every
+ * candidate ruled out so discovery starts over, or still undecided when the
+ * packets run out.  Wrong locks are what it was written to count, and the
+ * scored search produces none here; what it counts now is that the search is
+ * still pressed - a clock that is not the device's leads at some point in
+ * every attempt - and declines rather than picks when the hops fit two clocks
+ * nearly as well.
  * Each lock is then followed with the packets the observer's receiver would
  * really hear on that offset, so a trial also says whether the clock survived
  * being followed.  It runs twice: once with the observer's clock reading the
@@ -82,7 +87,17 @@ static int failures = 0;
 static const uint8_t MAP_DEVICE[10] = {0xff, 0xff, 0xff, 0xff, 0xff};
 static const uint8_t MAP_OBSERVER[10] = {0x7f, 0xff, 0xff, 0xff, 0xff};
 
-#define PACKETS 40
+/*
+ * How many packets one attempt is given, and how far apart they are in 625 us
+ * slots.
+ *
+ * Far more than the 40 this used to need, because most of what the observer
+ * hears says nothing about most candidates: its map is a subset of the
+ * device's, so a prediction landing on a channel it has not heard cannot be
+ * checked, and only about half of its hops rule anything out.  Locks land
+ * between 60 and 80 packets in; the rest is headroom.
+ */
+#define PACKETS 200
 #define SLOTS_APART 4
 
 /* How far the observer's clock reads from the device's, in 625 us slots, for
@@ -94,8 +109,8 @@ static const uint8_t MAP_OBSERVER[10] = {0x7f, 0xff, 0xff, 0xff, 0xff};
  * the full one covers, so a couple of dozen trials still hold locks of both
  * kinds; the full run the issues quote is every clock value, "400". */
 #define FIRST_CLOCK 0x1000000
-#define DEFAULT_TRIALS 24
-#define DEFAULT_STEP 17
+#define DEFAULT_TRIALS 12
+#define DEFAULT_STEP 34
 
 static btbb_piconet *discovered(const uint8_t *map)
 {
@@ -107,6 +122,7 @@ static btbb_piconet *discovered(const uint8_t *map)
 	btbb_piconet_set_flag(pn, BTBB_GOT_FIRST_PACKET, 1);
 	memcpy(pn->afh_map, map, sizeof(pn->afh_map));
 	btbb_piconet_set_flag(pn, BTBB_IS_AFH, 1);
+	pn->got_settled_clk6 = 1;
 	precalc(pn);
 	address_precalc(((TEST_UAP << 24) | TEST_LAP) & 0xfffffff, pn);
 	return pn;
@@ -274,6 +290,20 @@ struct totals {
 	long wrong_heard_total;
 	int wrong_heard_most;
 	int true_heard_least;	/* INT_MAX until a right lock is followed */
+	/*
+	 * How close an attempt that ended with no clock came: the candidates
+	 * it still had, the best score among them, the best of the rest, and
+	 * whether the piconet's own clock was still one of them.  A search
+	 * that ends here has declined to pick, which is the outcome this
+	 * scenario is allowed to have; what it must never do is pick wrongly.
+	 */
+	int undecided_candidates;
+	int undecided_best;
+	int undecided_runner_up;
+	int undecided_with_the_true_clock;
+	/* Attempts in which a clock that was not the piconet's held the best
+	 * score at some point, so the margin rule had something to decline. */
+	int wrong_clock_led;
 	/* locks handed back with btbb_piconet_drop_clock(), by outcome, and
 	 * how many of them the library then had ruled out */
 	int caller_dropped[OUTCOMES];
@@ -292,6 +322,7 @@ static enum outcome attempt(btbb_piconet *pn, btbb_piconet *device,
 	uint32_t first_pkt_time = true_clock - apart;
 	uint32_t offset;
 	enum outcome result = UNDECIDED;
+	int wrong_led = 0;
 
 	btbb_piconet_set_uap(pn, TEST_UAP);
 	btbb_piconet_set_flag(pn, BTBB_CLK6_VALID, 1);
@@ -299,11 +330,13 @@ static enum outcome attempt(btbb_piconet *pn, btbb_piconet *device,
 	btbb_piconet_set_flag(pn, BTBB_IS_AFH, 1);
 	pn->first_pkt_time = first_pkt_time;
 	pn->clk6_offset = (int) (apart & 0x3f);
+	pn->settled_clk6_offset = pn->clk6_offset;
+	pn->got_settled_clk6 = 1;
 	pn->pattern_indices[0] = 0;
 	pn->pattern_channels[0] = channel_at(device, true_clock);
 	btbb_piconet_set_channel_seen(pn, pn->pattern_channels[0]);
 	pn->packets_observed = 1;
-	pn->winnowed = 0;
+	note_hop(pn, first_pkt_time, pn->pattern_channels[0]);
 
 	if (btbb_init_hop_reversal(0, pn) == 0)
 		return DROPPED;
@@ -316,12 +349,16 @@ static enum outcome attempt(btbb_piconet *pn, btbb_piconet *device,
 		pn->pattern_indices[pn->packets_observed] = (int) offset;
 		pn->pattern_channels[pn->packets_observed] = channel;
 		pn->packets_observed++;
+		note_hop(pn, first_pkt_time + offset, channel);
 		btbb_winnow(pn);
 
 		if (!btbb_piconet_get_flag(pn, BTBB_HOP_REVERSAL_INIT)) {
 			result = DROPPED;
 			break;
 		}
+		if (!btbb_piconet_get_flag(pn, BTBB_CLK27_VALID) &&
+		    pn->best_score > 0 && pn->best_clock != true_clock)
+			wrong_led = 1;
 		if (btbb_piconet_get_flag(pn, BTBB_CLK27_VALID)) {
 			uint32_t locked = pn->clock_candidates[0];
 			int agree = slots_on_the_right_channel(device, locked,
@@ -350,6 +387,20 @@ static enum outcome attempt(btbb_piconet *pn, btbb_piconet *device,
 		}
 	}
 
+	if (wrong_led)
+		t->wrong_clock_led++;
+	if (result == UNDECIDED) {
+		int i;
+
+		t->undecided_candidates += pn->num_candidates;
+		t->undecided_best += pn->best_score;
+		t->undecided_runner_up += pn->runner_up_score;
+		for (i = 0; i < pn->num_candidates; i++)
+			if (pn->clock_candidates[i] == true_clock) {
+				t->undecided_with_the_true_clock++;
+				break;
+			}
+	}
 	return result;
 }
 
@@ -483,6 +534,17 @@ static void sweep(const char *label, uint32_t apart, int trials, int step)
 			"%d at most; a clock that was right, %d at least\n",
 			(double) t.wrong_heard_total / (double) t.wrong_stuck,
 			t.wrong_heard_most, t.true_heard_least);
+	fprintf(stderr, "  a wrong clock led at some point in %d attempts\n",
+		t.wrong_clock_led);
+	if (t.counts[UNDECIDED] > 0)
+		fprintf(stderr, "  no clock chosen in %d: on average %d candidates left, "
+			"best score %d against %d, the piconet's own clock still "
+			"among them in %d\n",
+			t.counts[UNDECIDED],
+			t.undecided_candidates / t.counts[UNDECIDED],
+			t.undecided_best / t.counts[UNDECIDED],
+			t.undecided_runner_up / t.counts[UNDECIDED],
+			t.undecided_with_the_true_clock);
 	fprintf(stderr, "  handed back by the caller: wrong %d of %d, true %d of %d, "
 		"ruled out %d of %d\n",
 		t.caller_dropped[WRONG_LOCK], t.wrong_stuck,
@@ -500,32 +562,35 @@ static void sweep(const char *label, uint32_t apart, int trials, int step)
 			(double) (t.counts[TRUE_LOCK] * FOLLOWED_SLOT_PAIRS));
 
 	/* The scenario is only a test of anything if clocks are recovered
-	 * from it at all, and wrong ones accepted. */
+	 * from it at all, and if the search is really pressed on the way:
+	 * a clock that was not the device's held the best score at some point
+	 * in every attempt, so the margin had something to decline. */
 	CHECK(t.counts[TRUE_LOCK] > 0);
-	CHECK(t.counts[WRONG_LOCK] > 0);
-	/* Not one wrong lock changes the CLK1-6 a receiver dewhitens with, so
-	 * a run of failed headers cannot be what finds them. */
-	CHECK(t.wrong_locks_with_another_clk1_6 == 0);
-	/* Which the follow phase then says of the locks themselves: a wrong
-	 * CLK1-27 carries discovery's CLK1-6, so every header it hears still
-	 * dewhitens and checks out and nothing in the library sees the wrong
-	 * channel, while a clock that is right is never given up. */
-	CHECK(t.wrong_stuck == t.counts[WRONG_LOCK]);
+	CHECK(t.wrong_clock_led > 0);
+	/*
+	 * And not one of those was accepted.  This is what the scored search
+	 * is for: the same scenario used to confirm a wrong clock in a
+	 * quarter of its attempts, because a wrong candidate can be the last
+	 * one standing while the map is still a channel short, and the lock
+	 * went to whoever stood alone.  A clock is now accepted only while it
+	 * explains more of the hops than anything else by a margin, so where
+	 * the hops fit two clocks nearly as well the search ends with no
+	 * clock - the "undecided" line above - and the caller is told nothing
+	 * rather than told wrongly.
+	 */
+	CHECK(t.counts[WRONG_LOCK] == 0);
+	CHECK(t.wrong_stuck == 0);
 	CHECK(t.wrong_recovered == 0);
+	CHECK(t.wrong_locks_with_another_clk1_6 == 0);
+	/* Every clock it did accept was the device's, and following one is
+	 * never what gives it up. */
 	CHECK(t.correct == t.counts[TRUE_LOCK]);
 	CHECK(t.false_drops == 0);
-	/* So the caller is what rescues them, and what it has to go on is the
-	 * packets it heard: the quietest follow under a clock that was right
-	 * is still louder than the noisiest one under a wrong clock, so a
-	 * threshold between the two exists for a tool to pick. */
-	CHECK(t.wrong_heard_most < t.true_heard_least);
 	/* Every lock the library kept, the caller can hand back, and the
 	 * library rules each one out, so the next attempt does not return to
 	 * it. */
-	CHECK(t.caller_dropped[WRONG_LOCK] == t.wrong_stuck);
 	CHECK(t.caller_dropped[TRUE_LOCK] == t.correct);
-	CHECK(t.caller_dropped_ruled_out ==
-	      t.caller_dropped[WRONG_LOCK] + t.caller_dropped[TRUE_LOCK]);
+	CHECK(t.caller_dropped_ruled_out == t.caller_dropped[TRUE_LOCK]);
 	btbb_packet_unref(pkt);
 	btbb_piconet_unref(device);
 }

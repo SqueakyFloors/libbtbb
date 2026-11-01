@@ -179,6 +179,9 @@ static btbb_piconet *discovered(const uint8_t *map, int afh)
 	if (map != NULL)
 		memcpy(pn->afh_map, map, sizeof(pn->afh_map));
 	btbb_piconet_set_flag(pn, BTBB_IS_AFH, afh);
+	/* Discovery settles the CLK1-6 offset on its way to this state, and
+	 * the adapted-hopping test reads the slot parity from it. */
+	pn->got_settled_clk6 = 1;
 	precalc(pn);
 	address_precalc(((TEST_UAP << 24) | TEST_LAP) & 0xfffffff, pn);
 	return pn;
@@ -198,6 +201,7 @@ static void observe(btbb_piconet *pn, int offset, uint8_t channel)
 	pn->pattern_indices[pn->packets_observed] = offset;
 	pn->pattern_channels[pn->packets_observed] = channel;
 	pn->packets_observed++;
+	note_hop(pn, pn->first_pkt_time + (uint32_t) offset, channel);
 	btbb_winnow(pn);
 }
 
@@ -208,6 +212,7 @@ static void first_hop(btbb_piconet *pn, uint8_t channel)
 	pn->pattern_indices[0] = 0;
 	pn->pattern_channels[0] = channel;
 	pn->packets_observed = 1;
+	note_hop(pn, pn->first_pkt_time, channel);
 }
 
 /* Start capturing both streams, counting a failure to do so as one. */
@@ -255,15 +260,31 @@ static void test_afh_candidates_fit_their_list(void)
 	count = btbb_init_hop_reversal(0, pn);
 	CHECK_EQ(count, pn->num_candidates);
 	CHECK(count > old_size);
-	/* The list handed back is exactly as long as the count beside it,
-	 * whatever the sizes it grew through on the way. */
+	/* The lists handed back are exactly as long as the count beside them,
+	 * whatever the sizes they grew through on the way. */
 	CHECK_EQ(sizeof(uint32_t) * (size_t) count,
 		 size_allocated(pn->clock_candidates));
-	/* Every candidate really does hop to the observed channel, so the list
-	 * was filled and not merely allocated large enough. */
-	for (i = 0; i < pn->num_candidates; i++)
-		CHECK_EQ(pn->pattern_channels[0],
-			 channel_at(pn, pn->clock_candidates[i]));
+	CHECK_EQ(sizeof(struct clk27_fit) * (size_t) count,
+		 size_allocated(pn->candidate_fits));
+	/*
+	 * No candidate the first hop rules out is in the list, and every one
+	 * starts with nothing to its name, so the lists were filled and not
+	 * merely allocated large enough.  Under adapted hopping most of them
+	 * are clocks the hop says nothing about, their predicted channel
+	 * being one the observer has not heard; that is the point of carrying
+	 * them.
+	 */
+	for (i = 0; i < pn->num_candidates; i++) {
+		enum hop_fit fit = hop_fit(pn->clock_candidates[i],
+					   pn->pattern_channels[0], pn);
+
+		CHECK(fit != HOP_MISSES);
+		/* its score so far is this hop and nothing else */
+		CHECK_EQ(fit == HOP_AGREES ? 1 : 0,
+			 pn->candidate_fits[i].agreements);
+		CHECK_EQ(0, pn->candidate_fits[i].misses);
+		CHECK_EQ(0, pn->candidate_fits[i].drift);
+	}
 	/* And the one the first hop was taken from is among them. */
 	CHECK(candidate_listed(pn, 0));
 	btbb_piconet_unref(pn);
@@ -407,7 +428,7 @@ static void test_an_adapted_sequence_is_recognized_before_its_hops_are_dropped(v
 	CHECK(candidate_listed(pn, true_clock));
 
 	/* and the rest of the device's hops settle on it */
-	for (offset = 2; offset < 2 * 60; offset += 2) {
+	for (offset = 2; offset < 2 * 250; offset += 2) {
 		observe(pn, (int) offset,
 			channel_at(device, true_clock + offset));
 		if (!btbb_piconet_get_flag(pn, BTBB_HOP_REVERSAL_INIT))
@@ -486,10 +507,11 @@ static void test_choosing_the_candidates_again_recompares_every_hop(void)
 
 /*
  * While the clock is being recovered, every packet may add a channel to the
- * AFH map, and the hops predicted from it change with it.  The predictions
- * used to come from a sequence generated once, when hop reversal started, so
- * from then on the library winnowed against a map it no longer held - and the
- * true clock was dropped along with the rest.
+ * AFH map, and what the library can check a candidate against grows with it.
+ * The piconet's own clock has to stay in the list through all of that: here
+ * the map is a channel short when the candidates are chosen, so the first hop
+ * lands on a channel the observer has not heard and says nothing about the
+ * true clock, which is carried on that basis and settled on in the end.
  */
 static void test_candidates_follow_the_map_as_it_is_learned(void)
 {
@@ -526,18 +548,21 @@ static void test_candidates_follow_the_map_as_it_is_learned(void)
 
 	first_hop(pn, channel_at(device, true_clock));
 	CHECK(btbb_init_hop_reversal(0, pn) > 1);
-	/* Not a candidate yet: the map it was chosen under is incomplete. */
-	CHECK(!candidate_listed(pn, true_clock));
+	/* A candidate even though the map it was chosen under is incomplete:
+	 * the hop predicts a channel the observer has not heard, so it cannot
+	 * say this clock is wrong. */
+	CHECK(candidate_listed(pn, true_clock));
 
 	/* The device's hops, four slots apart so each is a new slot pair. */
-	for (offset = 4; offset < 4 * 40; offset += 4) {
+	for (offset = 4; offset < 4 * 200; offset += 4) {
 		observe(pn, (int) offset,
 			channel_at(device, true_clock + offset));
 		if (!btbb_piconet_get_flag(pn, BTBB_HOP_REVERSAL_INIT))
 			break;	/* every candidate was dropped */
 		if (offset == 4) {
 			/* The hop on channel 7 completed the map, and the
-			 * candidates were chosen again from it. */
+			 * candidates stand: a channel the map gains cannot
+			 * have ruled one out. */
 			CHECK_EQ(24, pn->used_channels);
 			CHECK(candidate_listed(pn, true_clock));
 		}
@@ -558,9 +583,10 @@ static void test_candidates_follow_the_map_as_it_is_learned(void)
 /*
  * Choosing the candidates again is a walk over 2^21 clock values, and during
  * discovery a channel is seen for the first time often, so it has to happen
- * only when the hops really would be predicted differently: when hop
- * selection is adapted to the map at all, and then only if the map itself
- * changed.
+ * only when the hops really would be predicted differently.  That is when the
+ * piconet turns out to hop adapted rather than basically, and nothing else: a
+ * candidate is only ever ruled out on a channel the map already held, so a
+ * channel the map gains cannot have ruled one out, and the list still stands.
  */
 static void test_candidates_rechosen_only_for_a_new_sequence(void)
 {
@@ -573,6 +599,10 @@ static void test_candidates_rechosen_only_for_a_new_sequence(void)
 	/* Basic hopping: the map does not come into hop selection. */
 	CHECK_EQ(1, btbb_piconet_set_channel_seen(pn, 40));
 	CHECK(!candidates_superseded(pn));
+	/* Hops that turn out to be adapted do supersede them, the basic
+	 * sequence they were chosen from not being this piconet's. */
+	btbb_piconet_set_flag(pn, BTBB_IS_AFH, 1);
+	CHECK(candidates_superseded(pn));
 	btbb_piconet_unref(pn);
 
 	pn = discovered(map_18, 1);
@@ -580,15 +610,16 @@ static void test_candidates_rechosen_only_for_a_new_sequence(void)
 	pn->packets_observed = 1;
 	CHECK_EQ(18, pn->used_channels);
 	CHECK(btbb_init_hop_reversal(0, pn) > 1);
-	/* One more used channel, still below the minimum: the same basic
-	 * sequence, so the candidates stand. */
+	/* One more used channel, still below the minimum: the same sequence,
+	 * so the candidates stand. */
 	CHECK_EQ(1, btbb_piconet_set_channel_seen(pn, 20));
 	CHECK_EQ(19, pn->used_channels);
 	CHECK(!candidates_superseded(pn));
-	/* The one that reaches the minimum starts adapting the sequence. */
+	/* And the one that reaches the minimum, where re-mapping starts, does
+	 * not supersede them either. */
 	CHECK_EQ(1, btbb_piconet_set_channel_seen(pn, 21));
 	CHECK_EQ(AFH_MIN_USED_CHANNELS, pn->used_channels);
-	CHECK(candidates_superseded(pn));
+	CHECK(!candidates_superseded(pn));
 	btbb_piconet_unref(pn);
 
 	/* An adapted sequence, and a map differing only in the reserved bit
@@ -605,10 +636,10 @@ static void test_candidates_rechosen_only_for_a_new_sequence(void)
 
 /*
  * How the candidate list used to be chosen: one walk over the clock values to
- * count the matches, then a second to write them into a list of exactly that
- * size.  The library now makes a single walk, growing the list as it goes,
- * and this is here to say that the candidates it ends up with are the same
- * ones, in the same order.
+ * count the ones the hop does not rule out, then a second to write them into
+ * a list of exactly that size.  The library now makes a single walk, growing
+ * the list as it goes, and this is here to say that the candidates it ends up
+ * with are the same ones, in the same order.
  */
 static int reference_candidates(btbb_piconet *pn, char channel,
 				int known_clock_bits, uint32_t **out)
@@ -619,7 +650,7 @@ static int reference_candidates(btbb_piconet *pn, char channel,
 	*out = NULL;
 	for (clk1_27 = (uint32_t) known_clock_bits; clk1_27 < SEQUENCE_LENGTH;
 	     clk1_27 += 0x40) {
-		if (observed_channel(clk1_27, pn) == channel)
+		if (hop_fit(clk1_27, (uint8_t) channel, pn) != HOP_MISSES)
 			count++;
 	}
 	if (count == 0)
@@ -630,7 +661,7 @@ static int reference_candidates(btbb_piconet *pn, char channel,
 	count = 0;
 	for (clk1_27 = (uint32_t) known_clock_bits; clk1_27 < SEQUENCE_LENGTH;
 	     clk1_27 += 0x40) {
-		if (observed_channel(clk1_27, pn) == channel)
+		if (hop_fit(clk1_27, (uint8_t) channel, pn) != HOP_MISSES)
 			(*out)[count++] = clk1_27;
 	}
 	return count;
@@ -908,50 +939,57 @@ static void test_an_allocation_failure_partway_through_the_list(void)
 }
 
 /*
- * With one candidate left, the clock is accepted only once that many further
- * hops have agreed with it.  Here the piconet predicts its own hops, so the
- * candidate that survives is the right one and the only question is when it
- * is accepted.
+ * A clock is accepted only once it is clearly ahead: its score has reached
+ * CLK27_MIN_SCORE and every other candidate is CLK27_SCORE_MARGIN behind it.
+ * Here the piconet predicts its own hops, so the candidate that pulls ahead
+ * is the right one and the only question is when it is accepted.
  *
  * The hops are spread over the clock rather than taken from consecutive
  * slots, as the packets a receiver happens to catch are: two clock values
  * that differ only in the high bits hop alike for a long run of slots, so
  * consecutive slots hardly narrow the list at all.
  */
-static void test_the_clock_is_confirmed_before_it_is_accepted(void)
+static void test_the_clock_is_accepted_once_it_is_clearly_ahead(void)
 {
 	btbb_piconet *pn = discovered(NULL, 0);
 	uint32_t offset;
-	int hops_with_one_candidate = 0;
+	int hops = 1;		/* the one the candidates were chosen from */
 
 	first_hop(pn, channel_at(pn, 0));
 	CHECK(btbb_init_hop_reversal(0, pn) > 1);
+	/* The hop the candidates were chosen from is the first one scored,
+	 * and every candidate agrees with it, so it accepts nothing. */
+	CHECK(btbb_winnow(pn) > 1);
+	CHECK(!btbb_piconet_get_flag(pn, BTBB_CLK27_VALID));
 	for (offset = 100; offset < 100 * 40; offset += 100) {
 		observe(pn, (int) offset, channel_at(pn, offset));
-		if (pn->num_candidates == 1)
-			hops_with_one_candidate++;
+		hops++;
 		if (btbb_piconet_get_flag(pn, BTBB_CLK27_VALID))
 			break;
 	}
 	CHECK(btbb_piconet_get_flag(pn, BTBB_CLK27_VALID));
-	/* the hop that chose it, and then the ones that confirmed it */
-	CHECK_EQ(CLK27_CONFIRM_HOPS + 1, hops_with_one_candidate);
+	/* Every hop agrees with the piconet's own clock and misses nothing,
+	 * so its score is the hops it has seen and it is accepted on the hop
+	 * that takes the score to CLK27_MIN_SCORE. */
+	CHECK_EQ(CLK27_MIN_SCORE, hops);
+	CHECK_EQ(CLK27_MIN_SCORE, pn->best_score);
+	CHECK(pn->best_score - pn->runner_up_score >= CLK27_SCORE_MARGIN);
 	CHECK_EQ(0, pn->clock_candidates[0]);
 	CHECK_EQ(0, pn->clk_offset);
 	btbb_piconet_unref(pn);
 }
 
 /*
- * A clock that is not the piconet's can match every hop observed so far while
- * the AFH map is still a channel short, and be the last candidate standing.
- * Accepting it there starts following the piconet on the wrong offset, after
- * which nothing winnows again: every packet fails to decode, forever.
+ * A clock that is not the piconet's can agree with every hop observed so far
+ * while the AFH map is still a channel short.  Accepting it starts following
+ * the piconet on the wrong offset, after which nothing is scored again: every
+ * packet fails to decode, forever.
  *
- * The device here hops on channels 0-23 and the observer has yet to see
- * channel 7.  At this clock the candidate that stands alone partway through
- * is a wrong one, and the hop that follows is the one that completes the map,
- * which chooses the candidates again from the map as it then stands.  The
- * clock accepted in the end is the piconet's.
+ * So a candidate is accepted on how much it explains and only while nothing
+ * else explains nearly as much, not on being the last one left.  The device
+ * here hops on channels 0-23 and the observer has yet to see channel 7; the
+ * clock accepted in the end is the piconet's, and no wrong one is accepted on
+ * the way to it.
  */
 static void test_a_wrong_clock_is_not_accepted_on_a_short_map(void)
 {
@@ -964,7 +1002,7 @@ static void test_a_wrong_clock_is_not_accepted_on_a_short_map(void)
 	btbb_piconet *device = discovered(map_truth, 1);
 	btbb_piconet *pn = discovered(map_so_far, 1);
 	uint32_t offset;
-	int wrong_candidate_stood_alone = 0;
+	int a_wrong_clock_led = 0;
 	int accepted_a_wrong_clock = 0;
 
 	pn->first_pkt_time = true_clock;
@@ -973,14 +1011,14 @@ static void test_a_wrong_clock_is_not_accepted_on_a_short_map(void)
 	CHECK(btbb_init_hop_reversal(0, pn) > 1);
 
 	/* The device's hops, four slots apart so each is a new slot pair. */
-	for (offset = 4; offset <= 4 * 40; offset += 4) {
+	for (offset = 4; offset <= 4 * 200; offset += 4) {
 		observe(pn, (int) offset,
 			channel_at(device, true_clock + offset));
 		if (!btbb_piconet_get_flag(pn, BTBB_HOP_REVERSAL_INIT))
 			break;	/* every candidate was dropped */
-		if (pn->num_candidates == 1 &&
-		    pn->clock_candidates[0] != true_clock)
-			wrong_candidate_stood_alone = 1;
+		if (!btbb_piconet_get_flag(pn, BTBB_CLK27_VALID) &&
+		    pn->best_score > 0 && pn->best_clock != true_clock)
+			a_wrong_clock_led = 1;
 		if (btbb_piconet_get_flag(pn, BTBB_CLK27_VALID)) {
 			if (pn->clock_candidates[0] != true_clock)
 				accepted_a_wrong_clock = 1;
@@ -988,8 +1026,8 @@ static void test_a_wrong_clock_is_not_accepted_on_a_short_map(void)
 		}
 	}
 
-	/* the scenario really does leave a wrong candidate on its own */
-	CHECK(wrong_candidate_stood_alone);
+	/* the scenario really does put a wrong clock in front for a while */
+	CHECK(a_wrong_clock_led);
 	CHECK_EQ(0, accepted_a_wrong_clock);
 	CHECK(btbb_piconet_get_flag(pn, BTBB_CLK27_VALID));
 	CHECK_EQ(1, pn->num_candidates);
@@ -1616,7 +1654,8 @@ static void test_a_lost_lock_leaves_the_piconet_ready_to_search(void)
 	CHECK(pn->clock_candidates == NULL);
 	CHECK_EQ(0, pn->num_candidates);
 	CHECK_EQ(0, pn->winnowed);
-	CHECK_EQ(0, pn->clk27_confirmations);
+	CHECK(pn->candidate_fits == NULL);
+	CHECK_EQ(0, pn->best_score);
 	CHECK_EQ(0, pn->clk6_offset);
 	CHECK_EQ(0, btbb_piconet_get_clk_offset(pn));
 	CHECK_EQ(0, pn->packets_observed);
@@ -2538,6 +2577,7 @@ static void test_a_refused_aliased_request_leaves_recovery_alone(void)
 	btbb_piconet *pn = discovered(NULL, 0);
 	uint32_t *candidates;
 	char out[4096], err[4096];
+	uint32_t offset;
 	int count;
 
 	first_hop(pn, channel_at(pn, 0));
@@ -2556,8 +2596,9 @@ static void test_a_refused_aliased_request_leaves_recovery_alone(void)
 	CHECK_EQ(count, pn->num_candidates);
 	CHECK(pn->clock_candidates == candidates);
 	CHECK(btbb_piconet_get_flag(pn, BTBB_HOP_REVERSAL_INIT));
-	/* and the hops that follow still narrow that list to the clock */
-	observe(pn, 100, channel_at(pn, 100));
+	/* and the hops that follow still narrow that list towards the clock */
+	for (offset = 100; offset <= 100 * 5; offset += 100)
+		observe(pn, (int) offset, channel_at(pn, offset));
 	CHECK(pn->num_candidates > 0);
 	CHECK(pn->num_candidates < count);
 	btbb_piconet_unref(pn);
@@ -2891,7 +2932,7 @@ int main(void)
 	test_a_uap_with_its_top_bit_set();
 	test_an_allocation_failure_leaves_no_candidates();
 	test_an_allocation_failure_partway_through_the_list();
-	test_the_clock_is_confirmed_before_it_is_accepted();
+	test_the_clock_is_accepted_once_it_is_clearly_ahead();
 	test_a_wrong_clock_is_not_accepted_on_a_short_map();
 	test_discovery_notes_go_to_stderr();
 	test_discovery_complaints_go_to_stderr();

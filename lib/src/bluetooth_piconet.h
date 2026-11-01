@@ -34,22 +34,98 @@
 #define AFH_MIN_USED_CHANNELS 20
 
 /*
- * How many further observed hops have to agree with the last CLK1-27
- * candidate standing before it is taken as the piconet's clock.
+ * How a CLK1-27 candidate is scored, and what it takes to accept one.
  *
- * Candidates are narrowed by comparing each observed hop with the hop the
- * library predicts, and while the AFH map is still being learned those
- * predictions are wrong for the channels not yet seen.  A clock that is not
- * the piconet's can survive every comparison made so far and be the last one
- * left; once it is accepted, following begins and nothing winnows again, so
- * every packet after it fails to decode and there is no way back.
+ * Every observed hop is compared with the hop a candidate predicts, and the
+ * comparison has three outcomes rather than two.  It agrees, where the
+ * predicted channel is the one the packet arrived on.  It misses, where the
+ * prediction is definitely something else.  Or it says nothing, which is the
+ * case adapted hopping adds: a piconet keeps the channel its selection kernel
+ * picked where its own map marks that channel used and replaces it otherwise,
+ * and an observer learns a channel is used only by hearing a packet on it, so
+ * a prediction landing on a channel never heard cannot be checked either way.
  *
- * Each confirming hop is another chance for a wrong candidate to disagree,
- * and another chance for the map to gain the channel that would have ruled it
- * out, which starts the search again from the map as it then stands.  The
- * cost is this many more packets before following starts.
+ * The piconet's own clock agrees with every hop that can be checked against
+ * it, as long as the map the prediction was made under holds no channel the
+ * piconet has dropped.  Two things break that in a real capture.  A
+ * controller reclassifies channels while the capture runs, so a hop the map
+ * re-mapped before the change lands elsewhere after it.  And the two clocks
+ * drift, which moves a prediction by a slot pair every minute or so.
+ * Measured on a 180 s capture of an adapted link, the best-fitting clock
+ * missed 30 of the 166 hops that could be checked against it.  So one miss
+ * cannot rule a candidate out: eliminating on a single miss drops the
+ * piconet's own clock and leaves the search to accept whichever wrong
+ * candidate outlived it.
+ *
+ * What separates the two instead is how much each candidate explains.  A
+ * candidate that is not the piconet's clock predicts an unrelated channel, so
+ * it agrees with about one hop in 79 and misses nearly all the rest; the
+ * piconet's clock agrees with every hop the observer's map can check.  So the
+ * score is agreements less CLK27_MISS_WEIGHT for each miss, a candidate stands
+ * while that score has not fallen CLK27_MISS_GRACE below zero, and a clock is
+ * accepted only when its score has reached CLK27_MIN_SCORE and is
+ * CLK27_SCORE_MARGIN clear of every other candidate.
+ *
+ * The margin is what keeps a wrong clock from being confirmed where the hops
+ * do not single one out.  Measured on that same capture, which carries voice
+ * on a 7.5 ms interval so its hops are sampled on a 12-slot grid, three
+ * unrelated clocks each explain 49 of 60 consecutive hops and predict
+ * different channels elsewhere.  Scored, they come out level, no margin
+ * opens, and the search ends with no clock rather than one of the three.
  */
-#define CLK27_CONFIRM_HOPS 4
+#define CLK27_MISS_WEIGHT 2
+#define CLK27_MISS_GRACE 6
+#define CLK27_MIN_SCORE 8
+#define CLK27_SCORE_MARGIN 4
+
+/*
+ * How far the observer's clock and the piconet's may be taken to have drifted
+ * apart since the candidates were chosen, in 625 us slot pairs.
+ *
+ * The two clocks run at their own rates, so a prediction made from a
+ * candidate slowly moves away from the piconet's real hop.  Measured on the
+ * bench, the two are within a part per million of each other, which is about
+ * a slot a minute: ±2 pairs covers a capture of several minutes.
+ *
+ * Slot pairs, not slots, because under adapted hopping a single slot is
+ * invisible - the same channel mechanism gives both slots of a pair the same
+ * channel - so a drift that changes a prediction at all changes it by a pair.
+ *
+ * Each candidate carries its own drift, which starts at none and moves by one
+ * pair at a time, and only when the hop in front of it does not fit without
+ * moving.  Two things hold it to what a clock can really do, and both matter:
+ * without them a candidate may slide a pair either way at every hop, which
+ * reaches far enough to explain almost any capture.  Measured on the
+ * synthetic sweep, that let a clock 0x2140400 away from the piconet's explain
+ * 101 of its 101 checkable hops, exactly as many as the piconet's own.
+ *
+ * It takes CLK27_DRIFT_SLOTS of observation to earn each pair, so a candidate
+ * cannot have drifted further than the capture has had time to drift.  16384
+ * slots is 10 seconds, which allows about 6 slots a minute where the bench
+ * measures 1, and leaves a short capture no drift at all.
+ *
+ * And the drift only ever moves away from where it started, because one of
+ * the two clocks runs faster than the other and keeps doing so.  A candidate
+ * cannot wander back and forth looking for a fit.
+ */
+#define CLK27_MAX_DRIFT_PAIRS 2
+#define CLK27_DRIFT_SLOTS 16384
+
+/*
+ * How many observed hops one attempt at CLK1-27 may take before it is given
+ * up and discovery starts over.
+ *
+ * An attempt that has not produced a clear winner by now is not going to: the
+ * hops it is being given do not single out one clock, which is what a link
+ * whose packets fall on a regular grid does.  Starting over picks a different
+ * first packet, and the clocks already followed and given up are remembered,
+ * so the next attempt is not the same search again.
+ *
+ * Generous on purpose, because the alternative to waiting is accepting
+ * something: 256 hops is a couple of seconds on a busy link and a minute or
+ * two on a quiet one.
+ */
+#define CLK27_ATTEMPT_HOPS 256
 
 /*
  * How many packet headers in a row have to fail their HEC while following a
@@ -141,6 +217,21 @@
 #define MAX_REJECTED_CLOCKS 8
 #define LOCK_LOSS_TRIES 3
 
+/*
+ * How well one CLK1-27 candidate explains the hops observed so far, and where
+ * its clock has drifted to.  One of these per entry of clock_candidates, the
+ * two arrays being the same length and only ever indexed together.
+ *
+ * Counted in hops, so a byte each is plenty: a candidate is accepted or gone
+ * long before either reaches 255, and both stop counting there rather than
+ * wrap.
+ */
+struct clk27_fit {
+	uint8_t agreements;	/* hops the candidate predicted exactly */
+	uint8_t misses;		/* hops it was definitely wrong about */
+	int8_t drift;		/* slot pairs, within CLK27_MAX_DRIFT_PAIRS */
+};
+
 struct btbb_piconet {
 
 	uint32_t refcount;
@@ -166,6 +257,20 @@ struct btbb_piconet {
 	/* CLK1-27 candidates */
 	uint32_t *clock_candidates;
 
+	/*
+	 * How each of them is doing, allocated with the candidate list and
+	 * the same length.
+	 *
+	 * The list is at its longest when the observer has heard little of
+	 * the piconet's map, because then most predictions land on a channel
+	 * it cannot check and almost nothing is ruled out.  The ceiling is
+	 * the whole search space, 2^21 clock values, which with the list
+	 * itself is 15 MB; a link using most of the band leaves well under a
+	 * megabyte.  Carrying those candidates is the point: that is where
+	 * the piconet's own clock is.
+	 */
+	struct clk27_fit *candidate_fits;
+
 	/* these values for single_hop() can be precalculated */
 	int b, e;
 
@@ -185,12 +290,29 @@ struct btbb_piconet {
 	/* number of candidates for CLK1-27 */
 	int num_candidates;
 
-	/* The hop sequence clock_candidates was chosen from: whether hop
-	 * selection was adapted to candidates_afh_map, and that map.  A
-	 * piconet whose map has moved on since would winnow against a
-	 * sequence it no longer follows. */
+	/* Whether hop selection was adapted to the piconet's map when
+	 * clock_candidates was chosen.  A piconet that has turned out to be
+	 * adapted since would be scored against the basic sequence, which it
+	 * does not follow.  Which map it is does not come into it: a channel
+	 * the map gains cannot bring back a candidate, because a candidate is
+	 * only ever ruled out on a channel the map already held. */
 	uint8_t candidates_afh;
-	uint8_t candidates_afh_map[10];
+
+	/* Where the last packet of this piconet was heard: the observer's
+	 * clock as CLK1-27 and the channel, with got_last_hop set once there
+	 * has been one.  The adapted-hopping test reads a channel repeated
+	 * one slot later from these, and they are kept across discovery
+	 * starting over so that a restart does not take the evidence with
+	 * it. */
+	uint32_t last_hop_time;
+	uint8_t last_hop_channel;
+	uint8_t got_last_hop;
+
+	/* The last CLK1-6 offset discovery settled on, and whether it ever
+	 * has.  Kept across discovery starting over for the slot parity the
+	 * adapted-hopping test needs; see central_slot(). */
+	int settled_clk6_offset;
+	uint8_t got_settled_clk6;
 
 	/* number of packets observed during one attempt at UAP/clock discovery */
 	int packets_observed;
@@ -201,10 +323,14 @@ struct btbb_piconet {
 	/* number of observed packets that have been used to winnow the candidates */
 	int winnowed;
 
-	/* How many winnowing comparisons have left one candidate standing.
-	 * The first of them is the comparison that chose it; the rest are the
-	 * hops that confirm it, counted against CLK27_CONFIRM_HOPS above. */
-	int clk27_confirmations;
+	/* Where the search stands after the last hop: the clock the best
+	 * candidate now stands for, its score, and the score of the best of
+	 * the others, which is what CLK27_SCORE_MARGIN is measured between.
+	 * Kept so that a caller or a test can see how close the search came
+	 * and to which clock. */
+	uint32_t best_clock;
+	int best_score;
+	int runner_up_score;
 
 	/* True once hop reversal has accepted a clock for this piconet, which
 	 * is the clock that can be given up again.  A caller that set the
