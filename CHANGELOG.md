@@ -79,6 +79,13 @@
   whole hopping sequence took; it now answers hops one at a time.
 - The hopping sequence is gone, with its notes on standard output and the
   exported hop(), gen_hop_pattern() and get_hop_pattern().
+- Fixed: the hop permutation table was filled the first time a hop was
+  predicted, so two threads reaching it together could read half-written
+  entries; btbb_init() fills it now. The 524,288 permutations are computed
+  there rather than on a first hop, so every caller of btbb_init() pays for
+  them where only one that went on to predict a hop paid before. A caller
+  that never calls btbb_init() still gets the fill on its first hop
+  prediction, and has to decode on one thread.
 
 ### Capture files
 
@@ -216,6 +223,10 @@
 - A capture file name already in use was reported as a failed write; it is
   now reported as the name being taken, and the reason a write did fail is
   no longer lost while the file is closed and removed.
+- Five string tables the low energy printer reads were writable where they
+  are never written; they are read-only now. perm_table and its flag stopped
+  being external symbols, which the shared library already hid and the static
+  library did not.
 
 _Russell Wagner &lt;152923636+SqueakyFloors@users.noreply.github.com&gt;, 30 Oct 2026 09:30:00 -0700_
 

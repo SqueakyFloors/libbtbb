@@ -28,8 +28,8 @@
 #include <stdio.h>
 #include <string.h>
 
-int perm_table_initialized = 0;
-char perm_table[0x20][0x20][0x200];
+static int perm_table_initialized = 0;
+static char perm_table[0x20][0x20][0x200];
 
 /* Report how UAP and clock discovery is getting on. These go to stderr so
  * that a tool dumping capture data to stdout holds nothing but the dump,
@@ -329,19 +329,27 @@ void perm_table_init(void)
 {
 	/* populate perm_table for all possible inputs */
 	int z, p_high, p_low;
+
+	if (perm_table_initialized)
+		return;
+
 	for (z = 0; z < 0x20; z++)
 		for (p_high = 0; p_high < 0x20; p_high++)
 			for (p_low = 0; p_low < 0x200; p_low++)
 				perm_table[z][p_high][p_low] = perm5(z, p_high, p_low);
+	perm_table_initialized = 1;
 }
 
 /* drop-in replacement for perm5() using lookup table */
 int fast_perm(int z, int p_high, int p_low)
 {
-	if (!perm_table_initialized) {
+	/* btbb_init() has normally filled the table already. The fallback is
+	 * for a caller that never called it, which btbb.h tells to decode on
+	 * one thread only: two threads filling the table together would let a
+	 * third read half-written entries and predict hops wrongly with
+	 * nothing to say so. */
+	if (!perm_table_initialized)
 		perm_table_init();
-		perm_table_initialized = 1;
-	}
 
 	return(perm_table[z][p_high][p_low]);
 }
