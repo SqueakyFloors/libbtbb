@@ -89,14 +89,40 @@ static void forget_the_table(void)
 int main(void)
 {
 	/* Nothing has asked for a permutation yet, so the flag says so and
-	   every byte of the table is still zero. */
+	   every byte of the table is still zero. No syndrome table either,
+	   which the first case below needs. */
 	CHECK(perm_table_initialized == 0);
 	CHECK(entries_set() == 0);
+	CHECK(syndrome_map == NULL);
 
-	/* btbb_init() fills it, so fast_perm() answers without filling
-	   anything itself, and every entry is the permutation it stands
-	   for. */
+	/* A call that asks for no access code error correction builds no
+	   syndrome table and fills the permutation table all the same: the
+	   two do not depend on each other. This case runs first, while no
+	   syndrome table exists, because that is what lets it check none was
+	   built. The whole table, not one entry: a table filled part way
+	   would answer for whichever entry a case happened to read. */
+	CHECK(btbb_init(0) == 0);
+	CHECK(syndrome_map == NULL);
+	CHECK(perm_table_initialized == 1);
+	CHECK(entries_wrong() == 0);
+
+	/* And so does a call whose argument the library refuses, because the
+	   table is filled before the argument is looked at. Both ways of
+	   refusing one: below the range and above it. */
+	forget_the_table();
+	CHECK(btbb_init(-1) == -1);
+	CHECK(perm_table_initialized == 1);
+	CHECK(entries_wrong() == 0);
+
+	forget_the_table();
+	CHECK(btbb_init(AC_ERROR_LIMIT + 1) == -1);
+	CHECK(perm_table_initialized == 1);
+	CHECK(entries_wrong() == 0);
+
+	/* The ordinary call, which builds both tables. */
+	forget_the_table();
 	CHECK(btbb_init(2) == 0);
+	CHECK(syndrome_map != NULL);
 	CHECK(perm_table_initialized == 1);
 	CHECK(entries_wrong() == 0);
 
@@ -106,42 +132,14 @@ int main(void)
 	CHECK(fast_perm(0x15, 0x0a, 0x123) == perm5(0x15, 0x0a, 0x123));
 
 	/* A second btbb_init() leaves the table alone, as it leaves the
-	   syndrome map alone. Pinned by handing it a table that is all zero
-	   with the flag already set: a call that filled it again would make
-	   these entries right, and the point is that it does not run. */
+	   syndrome map alone. Pinned by handing that call a table of zeros
+	   with the flag already set and checking the zeros survive: a call
+	   that filled it again would make every entry right, so only this
+	   fails without the early return in perm_table_init(). */
 	memset(perm_table, 0, sizeof(perm_table));
 	CHECK(perm_table_initialized == 1);
 	CHECK(btbb_init(2) == 0);
 	CHECK(entries_set() == 0);
-
-	/* A call that asks for no access code error correction builds no
-	   syndrome table, and fills the permutation table all the same: the
-	   two do not depend on each other. The whole table, not one entry: a
-	   table filled part way would answer for whichever entry a case
-	   happened to read. */
-	forget_the_table();
-	/* The table an earlier call built is left where it is: this process is
-	   about to end, and what matters here is that btbb_init(0) builds
-	   none of its own. */
-	syndrome_map = NULL;
-	CHECK(btbb_init(0) == 0);
-	CHECK(syndrome_map == NULL);
-	CHECK(perm_table_initialized == 1);
-	CHECK(entries_wrong() == 0);
-
-	/* And so does a call whose argument the library refuses, because the
-	   table is filled before the argument is looked at. */
-	forget_the_table();
-	CHECK(btbb_init(-1) == -1);
-	CHECK(perm_table_initialized == 1);
-	CHECK(entries_wrong() == 0);
-
-	/* The same for a value above what the library accepts, which is the
-	   other way the argument check refuses one. */
-	forget_the_table();
-	CHECK(btbb_init(AC_ERROR_LIMIT + 1) == -1);
-	CHECK(perm_table_initialized == 1);
-	CHECK(entries_wrong() == 0);
 
 	if (failures) {
 		printf("%d failure%s\n", failures, failures == 1 ? "" : "s");
