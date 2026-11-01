@@ -142,8 +142,10 @@ Tx Power Level read through a plain `char`, the allocation failures, and a
 ## What the library shares between callers
 
 `btbb.h` tells a caller that decodes on several threads what the library keeps
-to itself, so that list has to be the real one. What the library shares is
-exactly its objects of static storage duration that live in a writable section,
+to itself, so that list has to be the real one. The streams are shared as
+well, which no symbol table can show and which the header's own rules cover.
+What the library shares of its own state is exactly its objects of static
+storage duration that live in a writable section,
 and the linker will name them, which is a check that does not depend on reading
 the sources. Read the **section**, not the symbol class: a format that has to
 relocate const data puts it in a section whose name begins `.data`
@@ -175,8 +177,9 @@ objdump -t /tmp/btbb-statics/lib/src/CMakeFiles/btbb.dir/*.c.o |
 ```
 
 Both forms were run against the same sources, the first on a Mach-O build and
-the second on ELF objects compiled `-O0 -fPIC`, and both answer with the seven
-below. Run on the commit before this check existed, the first form answers
+the second on ELF objects built the same way (the shared-library target is what
+adds `-fPIC`), and both answer with the seven below. The Mach-O form prints the
+names with a leading underscore. Run on the commit before this check existed, the first form answers
 twelve: these seven and the five string tables the low energy printer reads,
 which were writable only because the arrays of pointers were not themselves
 `const`.

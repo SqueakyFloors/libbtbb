@@ -107,8 +107,8 @@ typedef struct btbb_packet btbb_packet;
  * on more than one thread can do it, and these are the rules.
  *
  * Call btbb_init() once, from one thread, and let it return before
- * starting the others. It fills the hop permutation table, which every
- * piconet reads and which would otherwise be filled by whichever
+ * starting the others. It fills the hop permutation table, which hop
+ * prediction reads and which would otherwise be filled by whichever
  * thread predicted the first hop. A caller that never calls
  * btbb_init() gets that lazy fill instead, and must decode on one
  * thread only.
@@ -123,11 +123,14 @@ typedef struct btbb_packet btbb_packet;
  * btbb_piconet_set_channel_seen(), btbb_piconet_clear_channel_seen(),
  * btbb_piconet_set_afh_map(), btbb_piconet_ref() and
  * btbb_piconet_unref() -- and the ones that only read are safe just
- * while no thread is inside one of those. The reference count is a
- * plain uint32_t rather than an atomic, as btbb_packet_ref() and
- * btbb_packet_unref() keep for one packet, so a miscount there frees
- * the object twice or leaks it, where the rest of these rules cost a
- * wrong answer.
+ * while no thread is inside one of those -- btbb_piconet_get_afh_map()
+ * among them, because the ten bytes it hands back are the piconet's own
+ * writable storage. The reference count is a plain uint32_t rather than
+ * an atomic, as btbb_packet_ref() and btbb_packet_unref() keep for one
+ * packet and lell_packet_ref() and lell_packet_unref() for a low energy
+ * one, so a miscount there frees the object twice or leaks it, where
+ * the rest of these rules cost a wrong answer. A packet of either kind
+ * belongs to one thread as a piconet does.
  *
  * A thread that wants another thread's result passes it over the
  * accessors while it owns both piconets. btbb_piconet_get_afh_map()
@@ -152,8 +155,10 @@ typedef struct btbb_packet btbb_packet;
  * progress to standard error from inside the decode as well:
  * btbb_process_packet(), btbb_uap_from_header(), btbb_winnow(),
  * btbb_init_hop_reversal() and btbb_piconet_drop_clock() all report
- * that way, and each of those notes flushes standard output first to
- * keep the two streams in order. btbb_piconet_new() and
+ * that way, and so does lell_print() for the detail of a payload it
+ * could not read once lell_set_malformed_verbose() has asked for it.
+ * Each of those notes flushes standard output first, to keep the two
+ * streams in order. btbb_piconet_new() and
  * btbb_packet_new() report an allocation they could not make, the
  * first of them flushing and the second not. So two decoding threads
  * interleave both streams. Serialize the printing, or give each thread
@@ -182,16 +187,20 @@ typedef struct btbb_packet btbb_packet;
  * This call also fills the hop permutation table, by its first
  * statement, before the argument is even checked: filling it cannot
  * fail, so the table is whole whatever this returns and there is no
- * rule to learn about which failures leave it half done. That is what
+ * rule to learn about which failures leave it half done. A table that
+ * already exists is not rebuilt, so a second call asking for more
+ * access code errors than the first keeps the first call's table and
+ * still returns 0. That is what
  * makes decoding on several threads possible; see THREADS above.
  *
  * The table is 524,288 bytes of this library's own storage, and
- * filling it computes that many permutations. Measured on an arm64
- * laptop: about 55 ms unoptimized, which is what a build of this
- * library with no build type chosen gets, about 18 ms at -O2, and half
- * a millisecond at -O3. Once per process, and paid by every caller of
- * this function, where before only one that went on to predict a hop
- * paid it. */
+ * filling it computes that many permutations, once per process. Every
+ * caller of this function pays for that now, where before only one
+ * that went on to predict a hop paid it. How long it takes depends
+ * entirely on how this library was compiled -- two reviewers of the
+ * change measured it two orders of magnitude apart across build types
+ * -- so measure it on your own build rather than trusting a figure
+ * here. */
 BTBB_API int btbb_init(int max_ac_errors);
 
 BTBB_API const char* btbb_get_release(void);

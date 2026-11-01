@@ -57,9 +57,9 @@ add_executable(test_perm_table test_perm_table.c)
 target_include_directories(test_perm_table PRIVATE ${PROJECT_SOURCE_DIR}/lib/src)
 target_compile_options(test_perm_table PRIVATE -std=gnu90)
 add_test(NAME perm_table COMMAND test_perm_table)
-# Under a second here, but it fills the table five times and walks all 524,288
-# entries after each fill, which a sanitizer build and a shared runner both
-# multiply.
+# Under a second here, but it fills the table four times, walks all 524,288
+# entries five times, and the fifth walk is of a call that must not fill it.
+# A sanitizer build and a shared runner both multiply that.
 set_tests_properties(perm_table PROPERTIES TIMEOUT 60)
 
 # The Bluetooth Core specification's own sample data. These also reach
