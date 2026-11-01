@@ -1,5 +1,6 @@
 #
-# libFuzzer targets for the decoders and the capture writers.
+# libFuzzer targets for the decoders, clock and UAP recovery, and the capture
+# writers.
 #
 # They are built where the compiler can build a libFuzzer program and skipped
 # where it cannot, so that a build with a compiler that has no fuzzer - any
@@ -60,7 +61,7 @@ message(STATUS "Fuzz targets: built")
 # The library source is compiled into each target rather than linked, so that
 # the code under test carries the fuzzer's instrumentation however the library
 # itself was configured. RELEASE is what the library's own build defines.
-foreach(fuzz_target find_ac bredr le pcap pcapng)
+foreach(fuzz_target find_ac bredr piconet le pcap pcapng)
     add_executable(fuzz_${fuzz_target} fuzz_${fuzz_target}.c ${c_sources})
     target_include_directories(fuzz_${fuzz_target}
                                PRIVATE ${PROJECT_SOURCE_DIR}/lib/src)
