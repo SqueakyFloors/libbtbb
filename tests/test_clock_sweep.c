@@ -301,9 +301,16 @@ struct totals {
 	int undecided_best;
 	int undecided_runner_up;
 	int undecided_with_the_true_clock;
-	/* Attempts in which a clock that was not the piconet's held the best
-	 * score at some point, so the margin rule had something to decline. */
+	/*
+	 * Attempts in which a clock that was not the piconet's held the best
+	 * score at some point, and the highest score any of them reached
+	 * while it did.  Those are what the margin and the held lead had to
+	 * decline, and how near the thing they declined came to
+	 * CLK27_MIN_SCORE: a scenario where no wrong clock ever leads is not
+	 * a test of either rule.
+	 */
 	int wrong_clock_led;
+	int wrong_lead_best;
 	/* locks handed back with btbb_piconet_drop_clock(), by outcome, and
 	 * how many of them the library then had ruled out */
 	int caller_dropped[OUTCOMES];
@@ -323,6 +330,7 @@ static enum outcome attempt(btbb_piconet *pn, btbb_piconet *device,
 	uint32_t offset;
 	enum outcome result = UNDECIDED;
 	int wrong_led = 0;
+	int wrong_best = 0;
 
 	btbb_piconet_set_uap(pn, TEST_UAP);
 	btbb_piconet_set_flag(pn, BTBB_CLK6_VALID, 1);
@@ -357,8 +365,11 @@ static enum outcome attempt(btbb_piconet *pn, btbb_piconet *device,
 			break;
 		}
 		if (!btbb_piconet_get_flag(pn, BTBB_CLK27_VALID) &&
-		    pn->best_score > 0 && pn->best_clock != true_clock)
+		    pn->best_score > 0 && pn->best_clock != true_clock) {
 			wrong_led = 1;
+			if (pn->best_score > wrong_best)
+				wrong_best = pn->best_score;
+		}
 		if (btbb_piconet_get_flag(pn, BTBB_CLK27_VALID)) {
 			uint32_t locked = pn->clock_candidates[0];
 			int agree = slots_on_the_right_channel(device, locked,
@@ -389,6 +400,8 @@ static enum outcome attempt(btbb_piconet *pn, btbb_piconet *device,
 
 	if (wrong_led)
 		t->wrong_clock_led++;
+	if (wrong_best > t->wrong_lead_best)
+		t->wrong_lead_best = wrong_best;
 	if (result == UNDECIDED) {
 		int i;
 
@@ -534,8 +547,8 @@ static void sweep(const char *label, uint32_t apart, int trials, int step)
 			"%d at most; a clock that was right, %d at least\n",
 			(double) t.wrong_heard_total / (double) t.wrong_stuck,
 			t.wrong_heard_most, t.true_heard_least);
-	fprintf(stderr, "  a wrong clock led at some point in %d attempts\n",
-		t.wrong_clock_led);
+	fprintf(stderr, "  a wrong clock led at some point in %d attempts, best score %d of the %d it takes\n",
+		t.wrong_clock_led, t.wrong_lead_best, CLK27_MIN_SCORE);
 	if (t.counts[UNDECIDED] > 0)
 		fprintf(stderr, "  no clock chosen in %d: on average %d candidates left, "
 			"best score %d against %d, the piconet's own clock still "
@@ -567,6 +580,7 @@ static void sweep(const char *label, uint32_t apart, int trials, int step)
 	 * in every attempt, so the margin had something to decline. */
 	CHECK(t.counts[TRUE_LOCK] > 0);
 	CHECK(t.wrong_clock_led > 0);
+	CHECK(t.wrong_lead_best > 0);
 	/*
 	 * And not one of those was accepted.  This is what the scored search
 	 * is for: the same scenario used to confirm a wrong clock in a

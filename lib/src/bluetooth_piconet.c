@@ -110,6 +110,12 @@ void btbb_init_piconet(btbb_piconet *pn, uint32_t lap)
 		 * attempt's, but not the piconet itself. */
 		pn->got_last_hop = 0;
 		pn->got_settled_clk6 = 0;
+		/* And what that evidence had concluded.  Whether hop
+		 * selection is adapted is a property of the piconet, so it
+		 * does not survive the piconet either; discovery starting
+		 * over keeps it, a new LAP does not. */
+		btbb_piconet_set_flag(pn, BTBB_LOOKS_LIKE_AFH, 0);
+		btbb_piconet_set_flag(pn, BTBB_IS_AFH, 0);
 	}
 	pn->LAP = lap;
 	btbb_piconet_set_flag(pn, BTBB_LAP_VALID, 1);
@@ -452,6 +458,18 @@ static char observed_channel(uint32_t clk1_27, btbb_piconet *pn)
  * piconet's own clock in the list while the map is still being learned.  The
  * cost is that fewer wrong clocks go with each hop, so the list takes more
  * hops to narrow; the gain is that it narrows towards the right clock.
+ *
+ * Nothing is taken from where the observer's own map would re-map such a hop
+ * to, either, tempting though it is: that is the right channel once the
+ * observer's map has caught up with the piconet's, and reading an agreement
+ * there can only add to a candidate's score, never cost it.  Measured, it
+ * costs correctness: across 144 address and clock combinations of the
+ * scenario in tests/test_clock_sweep.c it took the searches that confirmed a
+ * clock not the device's from none to eighteen.  A re-mapping computed from a
+ * map that is missing channels is not a weak version of the right answer; the
+ * missing channels shift both the index and the table it indexes, and the
+ * agreements that come out of it favour the wrong clocks about as often as
+ * the right one.
  *
  * Whether the piconet is adapted decides this, not how many channels the
  * observer has heard: an adapted piconet answers a central slot on its own
@@ -1123,27 +1141,36 @@ static int score_candidates(int offset, char channel, btbb_piconet *pn)
  * is a different sequence altogether and leaves the piconet's clock out of a
  * list chosen from the other.
  *
- * And the map halving the channels the observer has not heard.  Those
- * channels are what the search cannot check, and the list is about as long as
- * their share of the band: candidates chosen from the first packet of a
- * capture, when the observer has heard five channels, number two million,
- * where the same walk under a map of seventy-six finds a hundred thousand.
- * Carrying the two million is what keeps the piconet's clock in the list, but
- * a hop then rules out one candidate in twenty instead of nineteen, and a
- * capture of a few hundred packets runs out before the list does: measured on
- * the bench, a search carrying two million candidates chosen at the second
- * packet reached no clock in four minutes where the same packets under a
- * learned map do.  So the list is chosen again whenever the unheard channels
- * have halved, which halves the list with them, and the hops remembered so
- * far are scored against the new one.
+ * And the map halving the channels the observer has not heard, while the
+ * search has not yet built a score worth keeping.  Those channels are what
+ * the search cannot check, and the list is about as long as their share of
+ * the band: chosen from the first packets of a capture, when the observer has
+ * heard five channels, it holds two million, where the same walk under a
+ * learned map of seventy-six finds a hundred thousand.  Carrying the two
+ * million is what keeps the piconet's clock in the list, but a hop then rules
+ * out one candidate in twenty instead of nineteen, and a capture of a few
+ * hundred packets runs out before the list does.  Choosing again whenever the
+ * unheard channels have halved halves the list with them.
  *
- * A candidate is only ever ruled out on a channel the map already held, so
- * choosing again under a larger map keeps the piconet's own clock: the hop
- * the candidates come from either lands on a channel the piconet kept, where
- * that clock agrees, or on one it re-mapped, which the observer can only have
- * heard from something other than this piconet.  Halving rather than every
- * new channel is what keeps the cost down: the walk is 2^21 clock values, and
- * during discovery a channel is heard for the first time often.
+ * Only while no candidate has reached CLK27_MIN_SCORE, because choosing again
+ * throws every score away: once the search has a candidate within reach of
+ * being accepted, a shorter list is not worth starting over for, and on a
+ * sweeping receiver the map keeps gaining channels deep into a capture.
+ *
+ * A channel the map gains without halving the unheard ones does not supersede
+ * them: a candidate is only ever ruled out on a channel the map already held,
+ * so a comparison made under a smaller map is one the larger map makes too.
+ * That is also what makes choosing again safe for the piconet's own clock -
+ * the hop the candidates come from either lands on a channel the piconet kept,
+ * where that clock agrees, or on one it re-mapped, which the observer can only
+ * have heard of from something other than this piconet.  Halving rather than
+ * every new channel is what keeps the cost down: the walk is 2^21 clock
+ * values, and during discovery a channel is heard for the first time often.
+ *
+ * A caller that takes a channel back out of the map with
+ * btbb_piconet_clear_channel_seen() breaks the first of those arguments, and
+ * the search does not try to recover: the candidates it holds were chosen and
+ * scored under what the caller said at the time.
  */
 static int candidates_superseded(btbb_piconet *pn)
 {
@@ -1154,6 +1181,8 @@ static int candidates_superseded(btbb_piconet *pn)
 		return 1;
 	if (!pn->candidates_afh)
 		return 0;	/* the basic sequence, whatever the map says */
+	if (pn->best_score >= CLK27_MIN_SCORE)
+		return 0;	/* too much to throw away */
 	return pn->candidates_unheard > 0 &&
 		unheard * 2 <= (int) pn->candidates_unheard;
 }
@@ -1227,7 +1256,7 @@ static void note_hop(btbb_piconet *pn, uint32_t clk1_27, uint8_t channel)
 	if (!btbb_piconet_get_flag(pn, BTBB_LOOKS_LIKE_AFH) &&
 	    pn->got_last_hop &&
 	    pn->got_settled_clk6 &&
-	    clk1_27 == pn->last_hop_time + 1 &&
+	    clk1_27 == ((pn->last_hop_time + 1) & (SEQUENCE_LENGTH - 1)) &&
 	    channel == pn->last_hop_channel &&
 	    central_slot(pn, pn->last_hop_time)) {
 		btbb_piconet_set_flag(pn, BTBB_LOOKS_LIKE_AFH, 1);
@@ -1306,9 +1335,13 @@ int btbb_winnow(btbb_piconet *pn)
 		 * next attempt is a fresh reading of the same piconet rather
 		 * than the same search again.
 		 */
-		if (pn->winnowed >= CLK27_ATTEMPT_HOPS) {
+		/* The hops this attempt has been given, not the hops scored
+		 * against the list it holds: choosing the candidates again
+		 * takes the scoring back to the first of them, and that must
+		 * not hand the attempt its budget a second time. */
+		if (pn->packets_observed >= CLK27_ATTEMPT_HOPS) {
 			piconet_note("no CLK1-27 is clearly ahead after %d hops (best score %d, next best %d); starting over\n",
-				     pn->winnowed, pn->best_score,
+				     pn->packets_observed, pn->best_score,
 				     pn->runner_up_score);
 			reset(pn);
 			return 0;

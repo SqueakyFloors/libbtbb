@@ -669,6 +669,12 @@ static void test_candidates_rechosen_only_for_a_new_sequence(void)
 	CHECK_EQ(1, btbb_piconet_set_channel_seen(pn, 50));
 	CHECK_EQ(30, BT_NUM_CHANNELS - pn->used_channels);
 	CHECK(candidates_superseded(pn));
+	/* Not once a candidate is within reach of being accepted, though:
+	 * choosing again throws every score away. */
+	pn->best_score = CLK27_MIN_SCORE;
+	CHECK(!candidates_superseded(pn));
+	pn->best_score = CLK27_MIN_SCORE - 1;
+	CHECK(candidates_superseded(pn));
 	btbb_piconet_unref(pn);
 
 	/* An adapted sequence, and a map differing only in the reserved bit
@@ -1257,6 +1263,7 @@ static void test_a_map_that_loses_a_channel_confirms_no_wrong_clock(void)
 	const uint32_t true_clock = 0x1000000;
 	const uint32_t changes_at = 4 * 40;
 	uint32_t offset;
+	int came_within_reach = 0;
 
 	pn->first_pkt_time = true_clock;
 	pn->clk6_offset = 0;
@@ -1271,12 +1278,18 @@ static void test_a_map_that_loses_a_channel_confirms_no_wrong_clock(void)
 			channel_at(hopping, true_clock + offset));
 		if (!btbb_piconet_get_flag(pn, BTBB_HOP_REVERSAL_INIT))
 			break;	/* the attempt ended; nothing was accepted */
+		if (pn->best_score >= CLK27_MIN_SCORE)
+			came_within_reach = 1;
 		if (btbb_piconet_get_flag(pn, BTBB_CLK27_VALID))
 			break;
 	}
 
-	/* Whatever it did, it did not confirm a clock that is not the
-	 * device's. */
+	/* The scenario is only a test of anything if acceptance was really in
+	 * play: some candidate scored enough to be accepted had the margin
+	 * and the lead gone its way. */
+	CHECK(came_within_reach);
+	/* And whatever it did with that, it did not confirm a clock that is
+	 * not the device's. */
 	if (btbb_piconet_get_flag(pn, BTBB_CLK27_VALID)) {
 		CHECK_EQ(1, pn->num_candidates);
 		if (pn->clock_candidates != NULL)

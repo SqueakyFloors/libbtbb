@@ -354,9 +354,9 @@ struct btbb_piconet {
 
 	/* How many channels the observer had not heard when clock_candidates
 	 * was chosen.  Every one of them makes a hop the search cannot check,
-	 * so the list is roughly that long: the candidates are chosen again
-	 * once the map has halved the number, which halves the list with
-	 * it. */
+	 * so the list is roughly that long: while the search has nothing to
+	 * lose, the candidates are chosen again once the map has halved the
+	 * number, which halves the list with it. */
 	uint8_t candidates_unheard;
 
 	/* Where the last packet of this piconet was heard: the observer's
