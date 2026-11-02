@@ -8,8 +8,8 @@
   with no type, no payload, and nothing checked until hop reversal confirmed
   the whole clock. They are now read as soon as CLK1-6 is settled, which is
   all that dewhitening takes. Against an adapted-hopping piconet the whole
-  clock may never be confirmed at all, so that is the difference between a
-  capture a reader can use and an empty one.
+  clock may never be confirmed at all, so a capture of one held nothing but
+  the packets' addresses and signal levels however well they were received.
 - Fixed: AUX1, EV3, EV4, and EV5 payloads did not decode; they now do, each
   at the longest length its type allows.
 - Fixed: a DV packet's data field was dewhitened as the voice field; it now
