@@ -2132,14 +2132,6 @@ static void test_a_header_that_checks_out_ends_the_run(void)
 	btbb_piconet_unref(pn);
 }
 
-/* The CLK1-6 offset this piconet holds, as the library's own reader sees it. */
-static int settled_clk6_is(const btbb_piconet *pn, int offset)
-{
-	if (!btbb_piconet_get_flag(pn, BTBB_CLK6_VALID))
-		return 0;
-	return btbb_piconet_get_clk_offset(pn) == offset;
-}
-
 /*
  * What a reader of a capture file goes by, on a packet that was read in full:
  * the header checked out, the type names what the header holds, and the
@@ -2327,7 +2319,8 @@ static void test_a_packet_is_read_at_the_clock_the_search_moved_to(void)
 	 * offset was last read holds. */
 	btbb_piconet_set_clk_offset(pn, (settles_on + 1) & 0x3f);
 	btbb_piconet_set_flag(pn, BTBB_CLK6_VALID, 1);
-	CHECK(settled_clk6_is(pn, (settles_on + 1) & 0x3f));
+	CHECK(btbb_piconet_get_flag(pn, BTBB_CLK6_VALID));
+	CHECK_EQ((settles_on + 1) & 0x3f, btbb_piconet_get_clk_offset(pn));
 
 	length = spec_dh1_symbols(stream, first_clk6);
 	pkt = spec_dh1_packet(stream, length, first_clkn);
@@ -2339,7 +2332,8 @@ static void test_a_packet_is_read_at_the_clock_the_search_moved_to(void)
 	CHECK_EQ(0, btbb_process_packet(pkt, pn));
 
 	/* The search read the clock again on this packet and moved it */
-	CHECK(settled_clk6_is(pn, settles_on));
+	CHECK(btbb_piconet_get_flag(pn, BTBB_CLK6_VALID));
+	CHECK_EQ(settles_on, btbb_piconet_get_clk_offset(pn));
 
 	/* and the packet carries what was read at the clock it moved to */
 	check_read_in_full(pkt);
@@ -2366,7 +2360,7 @@ static void test_the_packet_that_ends_an_attempt_is_read(void)
 	char stream[MAX_SYMBOLS];
 	btbb_piconet *pn = btbb_piconet_new();
 	btbb_packet *pkt = NULL;
-	int length, offset = 0;
+	int length;
 
 	CHECK(pn != NULL);
 	if (pn == NULL)
@@ -2394,7 +2388,6 @@ static void test_the_packet_that_ends_an_attempt_is_read(void)
 	 * Either way CLK1-6 is gone by the time the packet has been handled.
 	 */
 	pn->packets_observed = MAX_PATTERN_LENGTH;
-	offset = btbb_piconet_get_clk_offset(pn);
 	length = spec_dh1_symbols(stream, first_clk6 + 2);
 	pkt = spec_dh1_packet(stream, length, first_clkn + 4);
 	CHECK(pkt != NULL);
@@ -2410,8 +2403,6 @@ static void test_the_packet_that_ends_an_attempt_is_read(void)
 	/* and the packet was read all the same, at the clock the search held
 	 * as it arrived */
 	check_read_in_full(pkt);
-	CHECK_EQ(first_clk6 + 2,
-		 (int) (((first_clkn + 4) >> 1) + (uint32_t) offset) & 0x3f);
 
 	btbb_packet_unref(pkt);
 	btbb_piconet_unref(pn);

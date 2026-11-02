@@ -1907,6 +1907,10 @@ int btbb_piconet_drop_clock(btbb_piconet *pn)
  * ticks rather than slots.  A caller may have set CLK1-6 itself, which the
  * same two flags describe, so this reads the public offset rather than the
  * field the library's own search writes.
+ *
+ * That offset is whatever the caller passed, so it is masked to the six bits
+ * it can mean.  Without that a negative one would read back as the -1 that
+ * says there is no clock.
  */
 static int settled_clk6(const btbb_piconet *pn)
 {
@@ -1914,7 +1918,7 @@ static int settled_clk6(const btbb_piconet *pn)
 	    btbb_piconet_get_flag(pn, BTBB_CLK27_VALID))
 		return -1;
 
-	return btbb_piconet_get_clk_offset(pn);
+	return btbb_piconet_get_clk_offset(pn) & 0x3f;
 }
 
 /*
@@ -1956,16 +1960,16 @@ static void read_at_clk6(btbb_packet *pkt, uint8_t uap, int clk6_offset)
 	 * address-part search puts it back after a trial that found nothing.
 	 * The flag goes back with it, because btbb_packet_set_uap() above
 	 * raised it, and a packet with no address part of its own must not
-	 * come back claiming a valid one. */
+	 * come back claiming a valid one.
+	 *
+	 * The type and the header are not put back: one read happened and it
+	 * failed, so no type and no header is what is known about the packet.
+	 * The search restores those because each of its 64 trial clocks
+	 * leaves a different made-up answer behind. */
 	if (!btbb_packet_get_flag(pkt, BTBB_HEC_VALID)) {
 		pkt->UAP = caller_uap;
 		btbb_packet_set_flag(pkt, BTBB_UAP_VALID, caller_uap_valid);
 	}
-	/* The type is not put back the same way, and nor is the header: one
-	 * read happened and it failed, so what the packet says now - no type,
-	 * no header - is what is known about it.  The address-part search
-	 * restores both because each of its 64 trial clocks leaves a
-	 * different made-up answer behind. */
 
 	/* The packet keeps what it decoded, which is what the caller records,
 	 * but not the claim that its own clock is the piconet's: nothing else
