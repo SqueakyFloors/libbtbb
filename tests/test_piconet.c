@@ -2133,14 +2133,92 @@ static void test_a_header_that_checks_out_ends_the_run(void)
 }
 
 /*
- * A packet of a piconet whose address part and CLK1-6 are known is read in
- * full, with its payload and its CRC checked, while the search for the whole
- * clock is still going. Dewhitening takes CLK1-6 and nothing more, so the
- * rest of the clock -- which says where the piconet hops next -- is not
- * needed to read a packet already received. Against an adapted-hopping
- * piconet that rest may never be confirmed at all.
+ * A packet that arrives while hop reversal is searching for the whole clock
+ * is read in full, with its type, its payload, and both checks.
+ *
+ * This is what a capture does for all but its first packet or two: a caller
+ * that gives the address part, as `ubertooth-rx -l <LAP> -u <UAP>` does,
+ * settles CLK1-6 on the first packet and starts hop reversal on the same one,
+ * and every packet after that goes to hop reversal. Dewhitening takes CLK1-6
+ * and nothing more, so the rest of the clock -- which says where the piconet
+ * hops next -- is not needed to read a packet already received. Against an
+ * adapted-hopping piconet that rest may never be confirmed at all, so these
+ * are all the packets there are.
  */
-static void test_a_packet_is_read_before_the_whole_clock_is_in(void)
+static void test_a_packet_is_read_while_hop_reversal_searches(void)
+{
+	const int first_clk6 = 0x25;
+	const uint32_t first_clkn = 10;
+	char stream[MAX_SYMBOLS];
+	btbb_piconet *pn = btbb_piconet_new();
+	btbb_packet *settling, *pkt;
+	int length;
+
+	CHECK(pn != NULL);
+	if (pn == NULL)
+		return;
+	/* The address part comes from the caller, which is what makes the
+	 * first packet start hop reversal rather than only settle CLK1-6. */
+	btbb_init_piconet(pn, SPEC_DH1_LAP);
+	btbb_piconet_set_uap(pn, SPEC_DH1_UAP);
+
+	length = spec_dh1_symbols(stream, first_clk6);
+	settling = spec_dh1_packet(stream, length, first_clkn);
+	CHECK(settling != NULL);
+	if (settling == NULL) {
+		btbb_piconet_unref(pn);
+		return;
+	}
+	CHECK_EQ(0, btbb_process_packet(settling, pn));
+	CHECK(btbb_piconet_get_flag(pn, BTBB_CLK6_VALID));
+	CHECK(btbb_piconet_get_flag(pn, BTBB_HOP_REVERSAL_INIT));
+	btbb_packet_unref(settling);
+
+	/* The next packet, two slots later on both clocks, is handed to hop
+	 * reversal. */
+	length = spec_dh1_symbols(stream, first_clk6 + 2);
+	pkt = spec_dh1_packet(stream, length, first_clkn + 4);
+	CHECK(pkt != NULL);
+	if (pkt == NULL) {
+		btbb_piconet_unref(pn);
+		return;
+	}
+	CHECK_EQ(0, btbb_process_packet(pkt, pn));
+	CHECK(btbb_piconet_get_flag(pn, BTBB_HOP_REVERSAL_INIT));
+	CHECK(!btbb_piconet_get_flag(pn, BTBB_FOLLOWING));
+	CHECK(!btbb_piconet_get_flag(pn, BTBB_CLK27_VALID));
+
+	/* and it comes back read: the header, the payload, and the two checks
+	 * a reader of a capture file goes by */
+	CHECK(btbb_packet_get_flag(pkt, BTBB_HEC_CHECKED));
+	CHECK(btbb_packet_get_flag(pkt, BTBB_HEC_VALID));
+	CHECK_EQ(PACKET_TYPE_DH1, btbb_packet_get_type(pkt));
+	CHECK(btbb_packet_get_flag(pkt, BTBB_HAS_PAYLOAD));
+	CHECK(btbb_packet_get_payload_length(pkt) > 0);
+	CHECK(btbb_packet_get_flag(pkt, BTBB_CRC_CHECKED));
+	CHECK(btbb_packet_get_flag(pkt, BTBB_CRC_CORRECT));
+
+	/* The packet's own clock is still the board's, and it does not claim
+	 * otherwise: nothing else may read that clock as the piconet's. */
+	CHECK_EQ((first_clkn + 4) >> 1, pkt->clkn);
+	CHECK(!btbb_packet_get_flag(pkt, BTBB_CLK6_VALID));
+
+	btbb_packet_unref(pkt);
+	btbb_piconet_unref(pn);
+}
+
+/*
+ * Reading a packet again at the clock the search holds does not cost it what
+ * the search itself recorded.
+ *
+ * Here the address part is not given, so the first packet settles it and
+ * CLK1-6 together and the second goes through the address-part search once
+ * more, which reads and records the header itself at the clock it confirms.
+ * Reading it again afterwards has to use that clock: at any other one the
+ * same symbols dewhiten to a header that fails its check bits, which would
+ * replace a recorded header with nothing.
+ */
+static void test_a_packet_the_search_reads_itself_keeps_its_header(void)
 {
 	/* The piconet's CLK1-6 and the board's own clock run a fixed number
 	 * of slots apart, so a fixture whose clocks agreed would not notice
@@ -2184,11 +2262,12 @@ static void test_a_packet_is_read_before_the_whole_clock_is_in(void)
 	CHECK(!btbb_piconet_get_flag(pn, BTBB_FOLLOWING));
 	CHECK(!btbb_piconet_get_flag(pn, BTBB_CLK27_VALID));
 
-	/* and it comes back read: the header, the payload, and the two checks
-	 * a reader of a capture file goes by */
+	/* the header the search read, still on the packet, with the payload
+	 * and the two checks a reader of a capture file goes by */
 	CHECK(btbb_packet_get_flag(pkt, BTBB_HEC_CHECKED));
 	CHECK(btbb_packet_get_flag(pkt, BTBB_HEC_VALID));
 	CHECK_EQ(PACKET_TYPE_DH1, btbb_packet_get_type(pkt));
+	CHECK_EQ(SPEC_DH1_HEADER_DATA, air_to_host16(pkt->packet_header, 10));
 	CHECK(btbb_packet_get_flag(pkt, BTBB_HAS_PAYLOAD));
 	CHECK(btbb_packet_get_payload_length(pkt) > 0);
 	CHECK(btbb_packet_get_flag(pkt, BTBB_CRC_CHECKED));
@@ -2303,8 +2382,25 @@ static void test_a_packet_whose_header_fails_is_not_read(void)
 			btbb_packet_unref(pkt);
 		return;
 	}
+	/* The caller's address part on the packet, so the restore below has
+	 * something of its own to go back to. */
+	btbb_packet_set_uap(pkt, OTHER_UAP);
+
 	CHECK_EQ(0, btbb_process_packet(pkt, pn));
+
+	/* The check bits were checked and they failed, so nothing the header
+	 * would have given is on the packet: no payload, no type, and no
+	 * LT_ADDR. */
+	CHECK(btbb_packet_get_flag(pkt, BTBB_HEC_CHECKED));
+	CHECK(!btbb_packet_get_flag(pkt, BTBB_HEC_VALID));
 	CHECK(!btbb_packet_get_flag(pkt, BTBB_HAS_PAYLOAD));
+	CHECK_EQ(0, btbb_packet_get_type(pkt));
+	CHECK_EQ(0, pkt->packet_lt_addr);
+	CHECK(!btbb_packet_get_flag(pkt, BTBB_CRC_CHECKED));
+
+	/* and the piconet's address part is not left on it either: this
+	 * packet is not known to be the piconet's */
+	CHECK_EQ(OTHER_UAP, btbb_packet_get_uap(pkt));
 
 	btbb_packet_unref(pkt);
 	btbb_piconet_unref(pn);
@@ -3565,7 +3661,8 @@ int main(void)
 	test_the_clocks_of_the_device_and_the_observer_differ();
 	test_every_candidate_agrees_on_clk1_6();
 	test_the_settled_offset_reads_the_packets_own_header();
-	test_a_packet_is_read_before_the_whole_clock_is_in();
+	test_a_packet_is_read_while_hop_reversal_searches();
+	test_a_packet_the_search_reads_itself_keeps_its_header();
 	test_the_packet_that_ends_an_attempt_is_read();
 	test_a_packet_whose_header_fails_is_not_read();
 	test_the_settling_packet_carries_its_own_header();
