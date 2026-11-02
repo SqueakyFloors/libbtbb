@@ -1898,6 +1898,86 @@ int btbb_piconet_drop_clock(btbb_piconet *pn)
 	return 1;
 }
 
+/*
+ * The CLK1-6 this piconet holds, as the offset from the receiving board's
+ * clock in 625 us slots, or -1 where there is none to read a packet at.
+ *
+ * CLK1-27 has to be absent for the offset to be CLK1-6 at all: the same field
+ * carries the whole clock's offset once hop reversal has one, in 312.5 us
+ * ticks rather than slots.  A caller may have set CLK1-6 itself, which the
+ * same two flags describe, so this reads the public offset rather than the
+ * field the library's own search writes.
+ *
+ * That offset is whatever the caller passed, so it is masked to the six bits
+ * it can mean.  Without that a negative one would read back as the -1 that
+ * says there is no clock.
+ */
+static int settled_clk6(const btbb_piconet *pn)
+{
+	if (!btbb_piconet_get_flag(pn, BTBB_CLK6_VALID) ||
+	    btbb_piconet_get_flag(pn, BTBB_CLK27_VALID))
+		return -1;
+
+	return btbb_piconet_get_clk_offset(pn) & 0x3f;
+}
+
+/*
+ * Read this packet at the piconet's CLK1-6, while the search for the whole
+ * clock goes on.
+ *
+ * Dewhitening a header and a payload takes CLK1-6 and nothing more (Vol 2,
+ * Part B, 7.2), so a piconet whose address part and CLK1-6 are settled can be
+ * read in full. The rest of the clock says where the piconet hops next, which
+ * is what a receiver needs to stay with it and what hop reversal is for; a
+ * packet already in hand needs none of it.
+ *
+ * Nothing is printed: this is a library, and a caller that wants the packet
+ * reported has btbb_print_packet().
+ *
+ * The clock the packet carries is the receiving board's, and clk6_offset is
+ * the difference to the piconet's, so it is added here and put back
+ * afterwards: the caller gave that clock and may still be using it, and the
+ * hop pattern the search remembers is in the receiver's clock too.  Both are
+ * counts of 625 us slots, pkt->clkn because btbb_packet_set_data() shifts the
+ * 312.5 us value it is given down by one.  A caller doing this for itself
+ * doubles the offset instead, because what it hands that function is in ticks.
+ */
+static void read_at_clk6(btbb_packet *pkt, uint8_t uap, int clk6_offset)
+{
+	const uint32_t board_clkn = pkt->clkn;
+	const uint8_t caller_uap = pkt->UAP;
+	const int caller_uap_valid = btbb_packet_get_flag(pkt, BTBB_UAP_VALID);
+
+	btbb_packet_set_uap(pkt, uap);
+	pkt->clkn = board_clkn + (uint32_t) clk6_offset;
+	btbb_packet_set_flag(pkt, BTBB_CLK6_VALID, 1);
+
+	btbb_decode(pkt);
+
+	/* A header whose check bits do not hold under this address part is
+	 * not known to be this piconet's, so the address part is not the
+	 * packet's to carry: what the caller had goes back on, as the
+	 * address-part search puts it back after a trial that found nothing.
+	 * The flag goes back with it, because btbb_packet_set_uap() above
+	 * raised it, and a packet with no address part of its own must not
+	 * come back claiming a valid one.
+	 *
+	 * The type and the header are not put back: one read happened and it
+	 * failed, so no type and no header is what is known about the packet.
+	 * The search restores those because each of its 64 trial clocks
+	 * leaves a different made-up answer behind. */
+	if (!btbb_packet_get_flag(pkt, BTBB_HEC_VALID)) {
+		pkt->UAP = caller_uap;
+		btbb_packet_set_flag(pkt, BTBB_UAP_VALID, caller_uap_valid);
+	}
+
+	/* The packet keeps what it decoded, which is what the caller records,
+	 * but not the claim that its own clock is the piconet's: nothing else
+	 * may read this clock as CLK1-6. */
+	btbb_packet_set_flag(pkt, BTBB_CLK6_VALID, 0);
+	pkt->clkn = board_clkn;
+}
+
 int btbb_process_packet(btbb_packet *pkt, btbb_piconet *pn) {
 	if (survey_mode) {
 		pn = get_piconet(btbb_packet_get_lap(pkt));
@@ -1981,12 +2061,46 @@ int btbb_process_packet(btbb_packet *pkt, btbb_piconet *pn) {
 
 		/* Have LAP/UAP, need clocks. */
 		else if (btbb_piconet_get_uap(pn)) {
+			/* The clock the search holds as this packet arrives,
+			 * read before the search is given the packet, because
+			 * an attempt that ends gives its clock up while
+			 * handling the packet that ended it.  On a piconet
+			 * whose whole clock is never confirmed every attempt
+			 * ends that way, so these packets are most of what
+			 * there is to read. */
+			const int on_arrival = settled_clk6(pn);
+			int clk6_offset;
+
 			try_hop(pkt, pn);
 			if (btbb_piconet_get_flag(pn, BTBB_CLK6_VALID) &&
 			    btbb_piconet_get_flag(pn, BTBB_CLK27_VALID)) {
 				btbb_piconet_set_flag(pn, BTBB_FOLLOWING, 1);
 				return -1;
 			}
+			/* The clock the search holds now wins where it has
+			 * one: this packet may be the one that settled it, or
+			 * the one that moved it, and either way that is the
+			 * clock the packet's own header was just read at.
+			 *
+			 * The clock from before is only the fallback, for an
+			 * attempt this packet ended.  It is a guess there, not
+			 * a clock the search still stands behind: an attempt
+			 * can end because the hops ruled every CLK1-27
+			 * candidate out, which says nothing about CLK1-6, or
+			 * because the address-part search eliminated its last
+			 * CLK1-6 candidate, which means this very packet
+			 * disproved that clock.  What keeps the second case
+			 * out of a capture file is the header's own check
+			 * bits: read at a clock that is not the piconet's they
+			 * do not hold, and nothing is recorded. */
+			clk6_offset = settled_clk6(pn);
+			if (clk6_offset < 0)
+				clk6_offset = on_arrival;
+			/* The whole clock is not in yet, and CLK1-6 is all it
+			 * takes to read the packet. */
+			if (clk6_offset >= 0)
+				read_at_clk6(pkt, btbb_piconet_get_uap(pn),
+					     clk6_offset);
 		}
 
 		/* Have LAP, need UAP. */
