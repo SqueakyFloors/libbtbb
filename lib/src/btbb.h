@@ -178,8 +178,9 @@ typedef struct btbb_packet btbb_packet;
  * reasonable.
  *
  * The table is a hash table. A failed allocation, whether of one of
- * its entries or inside the table itself, returns -1 and leaves no
- * table behind, so a later call can try again. A call given a
+ * its entries or inside the table itself, is reported on standard
+ * error and returns -1, and leaves no table behind, so a later call
+ * can try again. A call given a
  * max_ac_errors of 0 builds no syndrome table at all, and a later call
  * with a non-zero one builds it then. A syndrome table that exists is
  * not rebuilt, so a second call asking for more access code errors

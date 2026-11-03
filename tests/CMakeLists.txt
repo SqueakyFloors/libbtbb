@@ -139,10 +139,14 @@ set_tests_properties(hop PROPERTIES TIMEOUT 60)
 add_executable(test_uthash_oom test_uthash_oom.c)
 target_include_directories(test_uthash_oom PRIVATE ${PROJECT_SOURCE_DIR}/lib/src)
 target_compile_options(test_uthash_oom PRIVATE -std=gnu90)
+# HASH_DEBUG asks uthash to walk the whole table after every add and delete,
+# so a table left inconsistent by a rolled-back add is caught here rather
+# than at some later lookup.
+target_compile_definitions(test_uthash_oom PRIVATE HASH_DEBUG=1)
 add_test(NAME uthash_oom COMMAND test_uthash_oom)
-# A few hundred survey entries and one access code error correction table:
-# a fraction of a second, which a sanitizer build multiplies.
-set_tests_properties(uthash_oom PROPERTIES TIMEOUT 60)
+# A few hundred survey entries and two access code error correction tables,
+# each add checked: a few seconds, which a sanitizer build multiplies.
+set_tests_properties(uthash_oom PROPERTIES TIMEOUT 120)
 
 # That uthash is reached through the wrapper which sets what an allocation
 # failure does, and not directly. This one compiles two small sources of its

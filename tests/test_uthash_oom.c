@@ -163,6 +163,15 @@ static void test_an_error_correction_table_that_cannot_be_allocated(void)
 	/* no half-built table was left behind */
 	CHECK(syndrome_map == NULL);
 
+	/* and a table that was being built when an allocation failed is
+	 * thrown away whole: half a map would correct fewer access code
+	 * errors than the caller asked for and nothing would say so. Two
+	 * allocations through is the table and its first bucket array, so the
+	 * failure here is a bucket array it could not grow, partway in. */
+	allocations_left = 2;
+	CHECK(btbb_init(2) == -1);
+	CHECK(syndrome_map == NULL);
+
 	/* so a later call builds it */
 	allocations_left = -1;
 	CHECK(btbb_init(2) == 0);

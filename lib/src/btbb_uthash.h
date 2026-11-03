@@ -50,9 +50,11 @@
  * hash table allocation failed. On 0 the table is as it was and `add` is
  * still the caller's to free.
  *
- * The flag the handler above sets is this macro's own local variable, so
- * nothing is shared between threads, and a HASH_ADD written outside the
- * wrapper does not compile: there would be no such variable in scope.
+ * The flag the handler above sets is this macro's own local variable, so the
+ * flag is not shared between threads (the tables themselves are not guarded;
+ * btbb.h says which calls belong on one thread), and a HASH_ADD written
+ * outside the wrapper does not compile: there would be no such variable in
+ * scope.
  */
 #define BTBB_HASH_ADD(hh, head, fieldname, keylen, add, added)            \
 	do {                                                              \
