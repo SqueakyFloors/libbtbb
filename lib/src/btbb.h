@@ -177,11 +177,9 @@ typedef struct btbb_packet btbb_packet;
  * hundred MB and lots of noise. For embedded targets, a value of 2 is
  * reasonable.
  *
- * The table is a hash table, and the hash table's own allocations can
- * end the process: they are made inside macros with no error path, so
- * a failed one prints "error: libbtbb: out of memory" on standard
- * error and exits with status 1. The entries are allocated by this
- * library, and a failure there returns -1 as above. A call given a
+ * The table is a hash table. A failed allocation, whether of one of
+ * its entries or inside the table itself, returns -1 and leaves no
+ * table behind, so a later call can try again. A call given a
  * max_ac_errors of 0 builds no syndrome table at all, and a later call
  * with a non-zero one builds it then. A syndrome table that exists is
  * not rebuilt, so a second call asking for more access code errors
@@ -515,14 +513,13 @@ BTBB_API int btbb_winnow(btbb_piconet *pn);
  * packet, so it is on for everything the process decodes from here on,
  * and there is no call that turns it off again. Always returns 0.
  *
- * A survey that runs out of memory can end the process. The survey
- * keeps a hash table of the LAPs it has heard, and that table is
- * grown inside macros with no error path, so a failed allocation
- * there prints "error: libbtbb: out of memory" on standard error and
- * exits with status 1, as the table btbb_init() builds does. The
- * allocations the survey makes itself for a LAP it has just heard -
- * its entry for that LAP, and the piconet - are checked, and the
- * packet is dropped instead.
+ * A survey short of memory drops packets rather than ending the
+ * process. The survey keeps a hash table of the LAPs it has heard, and
+ * a failed allocation in that table, in its entry for a LAP it has
+ * just heard, or in the piconet for that LAP, costs that one packet:
+ * the LAPs already in the survey are unaffected, and a later packet
+ * from the same LAP is taken if the memory is there by then. The
+ * failure is reported on standard error.
  *
  * Both the mode and the table belong to the process and neither is
  * guarded, so a survey runs on one thread. Turn it on before starting

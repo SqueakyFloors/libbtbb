@@ -156,8 +156,10 @@
 - Fixed: an allocation the library could not get went unreported; the FEC
   2/3 decoder, tun_format(), and btbb_piconet_new() now return NULL, and
   btbb_init() returns -1.
-- Fixed: a failed allocation in one of the library's hash tables exited 255
-  in silence; it now prints "error: libbtbb: out of memory" and exits 1.
+- Fixed: a failed allocation in one of the library's hash tables ended the
+  calling program; btbb_init() now returns -1, and a piconet survey drops
+  that one packet and says so on standard error, as every other allocation
+  failure does.
 - Fixed: btbb_pcap_create_file() printed "PCAP error:" of its own beside
   the caller's report of the same failure; the caller, which knows the file
   name, now reports it alone, as it already did for every other writer.

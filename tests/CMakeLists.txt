@@ -140,9 +140,9 @@ add_executable(test_uthash_oom test_uthash_oom.c)
 target_include_directories(test_uthash_oom PRIVATE ${PROJECT_SOURCE_DIR}/lib/src)
 target_compile_options(test_uthash_oom PRIVATE -std=gnu90)
 add_test(NAME uthash_oom COMMAND test_uthash_oom)
-# Four child processes and a few hundred survey entries: under a tenth of
-# a second. The limit is for a case where the library does not exit.
-set_tests_properties(uthash_oom PROPERTIES TIMEOUT 30)
+# A few hundred survey entries and one access code error correction table:
+# a fraction of a second, which a sanitizer build multiplies.
+set_tests_properties(uthash_oom PROPERTIES TIMEOUT 60)
 
 # That uthash is reached through the wrapper which sets what an allocation
 # failure does, and not directly. This one compiles two small sources of its
