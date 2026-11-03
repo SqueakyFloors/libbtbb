@@ -616,6 +616,9 @@ void btbb_packet_set_data(btbb_packet *pkt, char *data, int length,
 	memset(pkt->packet_header, 0, sizeof(pkt->packet_header));
 	pkt->packet_lt_addr = 0;
 	pkt->packet_type = 0;
+	/* The transport goes with the type: it is the one the decoder read the
+	 * last payload as, and these symbols have no payload yet. */
+	pkt->transport = BTBB_TRANSPORT_ANY;
 	pkt->packet_flags = 0;
 	pkt->packet_hec = 0;
 	memset(pkt->payload_header, 0, sizeof(pkt->payload_header));
@@ -910,6 +913,65 @@ static uint8_t uap_from_hec(uint16_t data, uint8_t hec)
         return reverse(hec);
 }
 
+/*
+ * The logical transport a 4-bit TYPE code names at the basic rate, which is
+ * the rate this library decodes (Vol 2, Part B, Section 6.5, Table 6.2). A
+ * capture file records it beside the payload, and the format reads the record's
+ * count of corrected payload bits according to it, so a reader is entitled to
+ * take the packet type from the pair rather than from the type code alone.
+ *
+ * It is the transport the decoder read the packet as, which is as much as the
+ * packet itself says. A connectionless broadcast uses the same codes as the
+ * asynchronous link, and a voice link may carry a DM1 or an FHS as well, all
+ * with the same packet types; nothing in the packet tells them apart, and this
+ * library decodes each code as the one type Table 6.2 gives it at this rate.
+ * NULL and POLL carry no payload and go on every transport, so there is
+ * nothing to name.
+ *
+ * TYPE code 0111 is the one code two types share at this rate, an HV3 on the
+ * synchronous link or an EV3 on the extended one, so this map has no answer
+ * for it. btbb_decode_payload() names it from the type it decoded; the search
+ * for a piconet's address part never settles on that code, which the rule
+ * that demotes it in crc_check() explains. That code is also the case a
+ * reader cannot work out for itself: the two types are the same length as
+ * well as the same code, so only this byte says which one a record holds, and
+ * so whether its payload ends in a CRC.
+ */
+static uint8_t transport_for_type(uint8_t packet_type)
+{
+	switch (packet_type) {
+	case PACKET_TYPE_HV1:
+	case PACKET_TYPE_HV2:
+	case PACKET_TYPE_DV:
+		return BTBB_TRANSPORT_SCO;
+
+	case PACKET_TYPE_EV4:
+	case PACKET_TYPE_EV5:
+		return BTBB_TRANSPORT_ESCO;
+
+	case PACKET_TYPE_FHS:
+	case PACKET_TYPE_DM1:
+	case PACKET_TYPE_DH1:
+	case PACKET_TYPE_AUX1:
+	case PACKET_TYPE_DM3:
+	case PACKET_TYPE_DH3:
+	case PACKET_TYPE_DM5:
+	case PACKET_TYPE_DH5:
+		return BTBB_TRANSPORT_ACL;
+
+	default:
+		return BTBB_TRANSPORT_ANY;
+	}
+}
+
+/* Name the transport the decoder read this payload as, or "any" while there
+ * is no payload for it to describe. */
+static void record_transport(btbb_packet* pkt, uint8_t transport)
+{
+	pkt->transport = pkt->payload_length > 0 ? transport
+						 : BTBB_TRANSPORT_ANY;
+}
+
 /* check if the packet's CRC is correct for a given clock (CLK1-6) */
 int crc_check(int clock, btbb_packet* pkt)
 {
@@ -967,7 +1029,13 @@ int crc_check(int clock, btbb_packet* pkt)
 			pkt->packet_type != 5))
 		retval = 1;
 
-	/* EV3 and EV5 have a relatively high false positive rate */
+	/* EV3 and EV5 have a relatively high false positive rate.
+	 *
+	 * It is also why nothing below has to tell an HV3 from an EV3: the
+	 * switch above tries only the EV3, and this line keeps whatever it
+	 * decoded from counting as settled, so a payload of TYPE code 0111
+	 * never reaches the transport named at the end. Code that lets one
+	 * through has to name it, as btbb_decode_payload() does. */
 	if (retval > 1 && (pkt->packet_type == 7 || pkt->packet_type == 13))
 		retval = 1;
 
@@ -995,6 +1063,9 @@ int crc_check(int clock, btbb_packet* pkt)
 		btbb_packet_set_flag(pkt, BTBB_HAS_PAYLOAD, 0);
 		pkt->payload_length = 0;
 		pkt->corrected_payload_bits = 0;
+		/* and no transport either: it says which transport the count
+		 * above was made on, and there is no count left */
+		pkt->transport = BTBB_TRANSPORT_ANY;
 	}
 	else {
 		/* The CRC came out at this clock, so this trial is the
@@ -1007,6 +1078,7 @@ int crc_check(int clock, btbb_packet* pkt)
 		 * see. */
 		btbb_packet_set_flag(pkt, BTBB_HAS_PAYLOAD,
 				     pkt->payload_length > 0);
+		record_transport(pkt, transport_for_type(pkt->packet_type));
 	}
 
 	return retval;
@@ -1854,6 +1926,7 @@ int btbb_decode_header(btbb_packet* pkt)
 	pkt->payload_length = 0;
 	pkt->payload_header_length = 0;
 	pkt->corrected_payload_bits = 0;
+	pkt->transport = BTBB_TRANSPORT_ANY;
 
 	/* The header is whitened at the sender's CLK1-6, so reading it needs
 	 * the packet to have been given the piconet's clock rather than the
@@ -1869,6 +1942,11 @@ int btbb_decode_header(btbb_packet* pkt)
 int btbb_decode_payload(btbb_packet* pkt)
 {
 	int rv = 0;
+	/* The transport this type's payload rides on, read before the decoders
+	 * below run because none of them changes the packet type. The one code
+	 * two types share is settled in its own case. */
+	uint8_t transport = transport_for_type(pkt->packet_type);
+
 	pkt->payload_header_length = 0;
 
 	/* Nothing is known about this payload's CRC until one of the type
@@ -1928,8 +2006,12 @@ int btbb_decode_payload(btbb_packet* pkt)
 			 * payload's CRC never does.
 			 */
 			rv = EV3(pkt->clkn, pkt);
-			if (rv < 10 && !known_esco_length(pkt, EV3_MAX_PAYLOAD))
+			if (rv < 10 && !known_esco_length(pkt, EV3_MAX_PAYLOAD)) {
 				rv = HV(pkt->clkn, pkt);
+				transport = BTBB_TRANSPORT_SCO;
+			} else {
+				transport = BTBB_TRANSPORT_ESCO;
+			}
 			/* don't know how to decode 3-EV3 */
 			break;
 		case PACKET_TYPE_DV:
@@ -2000,6 +2082,7 @@ int btbb_decode_payload(btbb_packet* pkt)
 		btbb_packet_set_flag(pkt, BTBB_HAS_PAYLOAD, 0);
 		memset(pkt->payload, 0, sizeof(pkt->payload));
 	}
+	record_transport(pkt, transport);
 
 	return rv;
 }

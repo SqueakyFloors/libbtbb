@@ -668,6 +668,21 @@ static void test_dh1_sample_packet(void)
 	CHECK((uint8_t) packed[6] == 0x37);
 	CHECK((uint8_t) packed[7] == 0x6c);
 
+	/* A DH1 rides the asynchronous link, which is what a capture record
+	   carries beside the payload. The transport describes that payload,
+	   so handing the same packet object another frame's symbols takes it
+	   back off again, as the payload itself is taken off. */
+	CHECK(btbb_packet_get_transport(pkt) == BTBB_TRANSPORT_ACL);
+	btbb_packet_set_data(pkt, stream, length, 0, 0);
+	CHECK(btbb_packet_get_transport(pkt) == BTBB_TRANSPORT_ANY);
+
+	/* A header decoded on its own names none either: nothing has read a
+	   payload yet. */
+	btbb_packet_set_flag(pkt, BTBB_CLK6_VALID, 1);
+	btbb_packet_set_transport(pkt, BTBB_TRANSPORT_CSB);
+	CHECK(btbb_decode_header(pkt) == 1);
+	CHECK(btbb_packet_get_transport(pkt) == BTBB_TRANSPORT_ANY);
+
 	btbb_packet_unref(pkt);
 }
 
@@ -973,6 +988,10 @@ static void test_acl_payload_lengths(void)
 		CHECK(rv == (ACL_TYPES[row].has_crc ? 10 : 2));
 		CHECK(btbb_packet_get_payload_length(pkt) ==
 		      ACL_TYPES[row].payload_length);
+		/* Every one of these codes is an asynchronous link packet at
+		   the basic rate, which is what a capture file records beside
+		   the count of corrected payload bits. */
+		CHECK(btbb_packet_get_transport(pkt) == BTBB_TRANSPORT_ACL);
 		CHECK(btbb_get_payload_packed(pkt, packed) ==
 		      ACL_TYPES[row].payload_length);
 		for (i = 0; i < ACL_TYPES[row].body; i++)
@@ -1231,10 +1250,14 @@ static void test_uncorrectable_payload_fec(void)
 		if (pkt == NULL)
 			return;
 		seed_stale_payload_length(pkt);
+		/* a transport the decoder never produces, so a record cannot
+		   be left naming one for a payload that did not decode */
+		btbb_packet_set_transport(pkt, BTBB_TRANSPORT_CSB);
 		CHECK(btbb_decode_header(pkt) == 1);
 		CHECK(btbb_decode_payload(pkt) == 0);
 		CHECK(btbb_packet_get_payload_length(pkt) == 0);
 		CHECK(btbb_packet_get_flag(pkt, BTBB_HAS_PAYLOAD) == 0);
+		CHECK(btbb_packet_get_transport(pkt) == BTBB_TRANSPORT_ANY);
 		btbb_packet_unref(pkt);
 	}
 
@@ -1572,6 +1595,16 @@ static void test_sco_payload_lengths(void)
 		for (i = 0; i < CASES[row].bytes; i++)
 			CHECK((uint8_t) packed[i] == (uint8_t) (0xa0 + i));
 
+		/* A decode through btbb_decode_payload() also names the
+		   transport a capture record carries. HV1 and HV2 have a type
+		   code of their own; code 0111 is an HV3 or an EV3, and
+		   tests/test_esco.c settles that one. */
+		if (CASES[row].type != PACKET_TYPE_HV3) {
+			CHECK(btbb_decode_payload(pkt) == 2);
+			CHECK(btbb_packet_get_transport(pkt) ==
+			      BTBB_TRANSPORT_SCO);
+		}
+
 		btbb_packet_unref(pkt);
 	}
 }
@@ -1838,6 +1871,8 @@ static void test_dv_payload_at_clock(int clock)
 	CHECK(btbb_packet_get_type(pkt) == PACKET_TYPE_DV);
 	CHECK(btbb_decode_payload(pkt) == 10);
 	CHECK(btbb_packet_get_payload_length(pkt) == 1 + DV_BODY + 2);
+	/* a DV carries voice and data together on the synchronous link */
+	CHECK(btbb_packet_get_transport(pkt) == BTBB_TRANSPORT_SCO);
 	CHECK(btbb_get_payload_packed(pkt, packed) == 1 + DV_BODY + 2);
 	CHECK((uint8_t) packed[0] == 0x4e);
 	for (i = 0; i < DV_BODY; i++)
@@ -1944,6 +1979,7 @@ static void test_fhs_payload(void)
 	CHECK(btbb_packet_get_type(pkt) == PACKET_TYPE_FHS);
 	CHECK(btbb_decode_payload(pkt) == 1000);
 	CHECK(btbb_packet_get_payload_length(pkt) == 20);
+	CHECK(btbb_packet_get_transport(pkt) == BTBB_TRANSPORT_ACL);
 	CHECK(lap_from_fhs(pkt) == lap);
 	CHECK(uap_from_fhs(pkt) == uap);
 	CHECK(nap_from_fhs(pkt) == nap);
@@ -2146,6 +2182,9 @@ static void test_packets_without_payload(void)
 		/* these types have no payload to report, which the flag the
 		 * writers read has to say as well as the length */
 		CHECK(btbb_packet_get_flag(pkt, BTBB_HAS_PAYLOAD) == 0);
+		/* and they are sent on every transport, so a record names
+		 * none */
+		CHECK(btbb_packet_get_transport(pkt) == BTBB_TRANSPORT_ANY);
 		btbb_packet_unref(pkt);
 	}
 
@@ -2210,10 +2249,21 @@ static void test_uap_and_clock_recovery(void)
 			if (try_clock(i, pkt) == 0x47 &&
 			    crc_check(i, pkt) > 1) {
 				CHECK(i == clock);
+				/* The trial whose CRC came out is this
+				   packet's own decode, so it names the
+				   transport a record of it would carry. */
+				CHECK(btbb_packet_get_transport(pkt) ==
+				      BTBB_TRANSPORT_ACL);
 				matches++;
 			}
 		}
 		CHECK(matches == 1);
+
+		/* A trial at another clock is one the search goes on from: its
+		   payload and count are taken back off the packet, and the
+		   transport with them. */
+		CHECK(crc_check((clock + 1) & 0x3f, pkt) <= 2);
+		CHECK(btbb_packet_get_transport(pkt) == BTBB_TRANSPORT_ANY);
 
 		pkt->clkn = (uint32_t) clock;
 		btbb_packet_set_flag(pkt, BTBB_CLK6_VALID, 1);
