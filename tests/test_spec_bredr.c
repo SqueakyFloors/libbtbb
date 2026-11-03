@@ -973,6 +973,10 @@ static void test_acl_payload_lengths(void)
 		CHECK(rv == (ACL_TYPES[row].has_crc ? 10 : 2));
 		CHECK(btbb_packet_get_payload_length(pkt) ==
 		      ACL_TYPES[row].payload_length);
+		/* Every one of these codes is an asynchronous link packet at
+		   the basic rate, which is what a capture file records beside
+		   the count of corrected payload bits. */
+		CHECK(btbb_packet_get_transport(pkt) == BTBB_TRANSPORT_ACL);
 		CHECK(btbb_get_payload_packed(pkt, packed) ==
 		      ACL_TYPES[row].payload_length);
 		for (i = 0; i < ACL_TYPES[row].body; i++)
@@ -1838,6 +1842,8 @@ static void test_dv_payload_at_clock(int clock)
 	CHECK(btbb_packet_get_type(pkt) == PACKET_TYPE_DV);
 	CHECK(btbb_decode_payload(pkt) == 10);
 	CHECK(btbb_packet_get_payload_length(pkt) == 1 + DV_BODY + 2);
+	/* a DV carries voice and data together on the synchronous link */
+	CHECK(btbb_packet_get_transport(pkt) == BTBB_TRANSPORT_SCO);
 	CHECK(btbb_get_payload_packed(pkt, packed) == 1 + DV_BODY + 2);
 	CHECK((uint8_t) packed[0] == 0x4e);
 	for (i = 0; i < DV_BODY; i++)
@@ -1944,6 +1950,7 @@ static void test_fhs_payload(void)
 	CHECK(btbb_packet_get_type(pkt) == PACKET_TYPE_FHS);
 	CHECK(btbb_decode_payload(pkt) == 1000);
 	CHECK(btbb_packet_get_payload_length(pkt) == 20);
+	CHECK(btbb_packet_get_transport(pkt) == BTBB_TRANSPORT_ACL);
 	CHECK(lap_from_fhs(pkt) == lap);
 	CHECK(uap_from_fhs(pkt) == uap);
 	CHECK(nap_from_fhs(pkt) == nap);
@@ -2146,6 +2153,9 @@ static void test_packets_without_payload(void)
 		/* these types have no payload to report, which the flag the
 		 * writers read has to say as well as the length */
 		CHECK(btbb_packet_get_flag(pkt, BTBB_HAS_PAYLOAD) == 0);
+		/* and they are sent on every transport, so a record names
+		 * none */
+		CHECK(btbb_packet_get_transport(pkt) == BTBB_TRANSPORT_ANY);
 		btbb_packet_unref(pkt);
 	}
 

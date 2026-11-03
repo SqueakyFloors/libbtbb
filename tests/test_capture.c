@@ -382,17 +382,24 @@ static btbb_packet *decode_bredr(char *stream, int length, uint8_t uap)
 	btbb_packet_set_flag(pkt, BTBB_WHITENED, 0);
 	btbb_packet_set_flag(pkt, BTBB_CLK6_VALID, 1);
 	btbb_packet_set_uap(pkt, uap);
-	/* Two different values, so a record's payload_transport_rate byte
-	   pins both of its nibbles. The library never sets these itself. */
-	btbb_packet_set_transport(pkt, BTBB_TRANSPORT_ACL);
+	/* The modulation is the caller's, and 8DPSK is not the value the
+	   library leaves behind, so a record's payload_transport_rate byte
+	   pins that nibble. The transport below is a value the decoder never
+	   produces: the byte must then hold the transport it read the payload
+	   as, and not this. */
 	btbb_packet_set_modulation(pkt, BTBB_MOD_8DPSK);
+	btbb_packet_set_transport(pkt, BTBB_TRANSPORT_CSB);
 	if (btbb_decode_header(pkt))
 		(void) btbb_decode_payload(pkt);
 	return pkt;
 }
 
-/* transport ACL in the high nibble, 8DPSK modulation in the low one */
+/* The byte a DH1's record carries: the decoder read it on the asynchronous
+   link, and the caller's modulation is in the low nibble. */
 #define EXPECTED_TRANSPORT_RATE ((BTBB_TRANSPORT_ACL << 4) | BTBB_MOD_8DPSK)
+
+/* and an HV1's, which the decoder read on the synchronous link */
+#define EXPECTED_SCO_TRANSPORT_RATE ((BTBB_TRANSPORT_SCO << 4) | BTBB_MOD_8DPSK)
 
 /*
  * The HEC that goes with this header data and UAP, found by trying all 256 of
@@ -677,6 +684,9 @@ static void test_bredr_pcapng_empty_payload(void)
 	CHECK(rd32(blk + 24) == 22);
 
 	data = blk + 28;
+	/* No payload, so the record names no transport and the byte holds
+	   only the caller's modulation. */
+	CHECK(capture[data + 4] == BTBB_MOD_8DPSK);
 	CHECK(rd16(data + 20) == expected_flags);
 	CHECK((rd16(data + 20) & BREDR_PAYLOAD_PRESENT) == 0);
 	CHECK((rd16(data + 20) & BREDR_REFUAP_VALID) == 0);
@@ -1865,6 +1875,7 @@ static void test_bredr_corrected_bits(void)
 		if (blk >= capture_len)
 			return;
 		data = blk + 28;
+		CHECK(capture[data + 4] == EXPECTED_SCO_TRANSPORT_RATE);
 		CHECK(capture[data + 5] == expected);
 		CHECK(rd16(data + 6) == expected);
 		CHECK((rd16(data + 20) & BREDR_PAYLOAD_PRESENT) != 0);
@@ -1879,6 +1890,8 @@ static void test_bredr_corrected_bits(void)
 			if (capture_len == 0)
 				return;
 			data = 24 + 16;
+			CHECK(capture[data + 4] ==
+			      EXPECTED_SCO_TRANSPORT_RATE);
 			CHECK(capture[data + 5] == expected);
 			CHECK(rd16(data + 6) == expected);
 			for (i = 0; i < 10; i++)

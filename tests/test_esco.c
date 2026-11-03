@@ -194,6 +194,9 @@ static void test_esco_search_reports_the_longest_match(void)
 	CHECK(btbb_packet_get_flag(pkt, BTBB_HAS_PAYLOAD) == 1);
 	CHECK(btbb_packet_get_flag(pkt, BTBB_CRC_CHECKED) == 1);
 	CHECK(btbb_packet_get_flag(pkt, BTBB_CRC_CORRECT) == 1);
+	/* an EV5 rides the extended synchronous link, which is what a capture
+	   file records beside the count of corrected payload bits */
+	CHECK(btbb_packet_get_transport(pkt) == BTBB_TRANSPORT_ESCO);
 	check_payload_bytes(pkt, payload, COLLISION_BYTES);
 	btbb_packet_unref(pkt);
 
@@ -212,6 +215,9 @@ static void test_esco_search_reports_the_longest_match(void)
 		return;
 	CHECK(btbb_decode_payload(pkt) == 10);
 	CHECK(btbb_packet_get_payload_length(pkt) == COLLISION_BYTES);
+	/* TYPE code 0111 decoded as an EV3, so the transport is the extended
+	   one and not the synchronous link an HV3 would ride */
+	CHECK(btbb_packet_get_transport(pkt) == BTBB_TRANSPORT_ESCO);
 	check_payload_bytes(pkt, payload, COLLISION_BYTES);
 	btbb_packet_unref(pkt);
 
@@ -225,6 +231,7 @@ static void test_esco_search_reports_the_longest_match(void)
 	CHECK(btbb_decode_payload(pkt) == 10);
 	CHECK(btbb_packet_get_payload_length(pkt) == COLLISION_BYTES);
 	CHECK(btbb_packet_get_flag(pkt, BTBB_CRC_CORRECT) == 1);
+	CHECK(btbb_packet_get_transport(pkt) == BTBB_TRANSPORT_ESCO);
 	check_payload_bytes(pkt, payload, COLLISION_BYTES);
 	/* an intact payload, so the error correction put nothing right */
 	CHECK(pkt->corrected_payload_bits == 0);
@@ -501,6 +508,8 @@ static void test_hv3_is_not_reported_as_ev3(void)
 	/* a voice payload has no CRC, so none was checked */
 	CHECK(btbb_packet_get_flag(pkt, BTBB_CRC_CHECKED) == 0);
 	CHECK(btbb_packet_get_flag(pkt, BTBB_CRC_CORRECT) == 0);
+	/* and an HV3 rides the synchronous link, not the extended one */
+	CHECK(btbb_packet_get_transport(pkt) == BTBB_TRANSPORT_SCO);
 	check_payload_bytes(pkt, voice, 30);
 	btbb_packet_unref(pkt);
 
@@ -522,6 +531,8 @@ static void test_hv3_is_not_reported_as_ev3(void)
 	CHECK(btbb_decode_payload(pkt) == 1);
 	CHECK(btbb_packet_get_payload_length(pkt) == 0);
 	CHECK(btbb_packet_get_flag(pkt, BTBB_HAS_PAYLOAD) == 0);
+	/* no payload decoded, so there is no transport to name either */
+	CHECK(btbb_packet_get_transport(pkt) == BTBB_TRANSPORT_ANY);
 	btbb_packet_unref(pkt);
 }
 
@@ -540,12 +551,14 @@ static void test_known_esco_length_rules_out_hv3(void)
 	btbb_packet_set_esco_length(pkt, COLLISION_MATCH_MIDDLE - 2);
 	CHECK(btbb_decode_payload(pkt) == 10);
 	CHECK(btbb_packet_get_payload_length(pkt) == COLLISION_MATCH_MIDDLE);
+	CHECK(btbb_packet_get_transport(pkt) == BTBB_TRANSPORT_ESCO);
 
 	/* a length whose CRC does not agree is the caller's answer too: an
 	 * HV3's 30 voice bytes are not what this link carries */
 	btbb_packet_set_esco_length(pkt, 10);
 	CHECK(btbb_decode_payload(pkt) == 2);
 	CHECK(btbb_packet_get_payload_length(pkt) == 12);
+	CHECK(btbb_packet_get_transport(pkt) == BTBB_TRANSPORT_ESCO);
 
 	btbb_packet_unref(pkt);
 }
