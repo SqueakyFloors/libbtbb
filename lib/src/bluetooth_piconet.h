@@ -411,6 +411,16 @@ struct btbb_piconet {
 	 * attempt has not scored yet when it starts. */
 	int attempt_hops;
 
+	/* True where the UAP came from the caller rather than from the
+	 * library's own search.  A stated UAP outlives discovery starting
+	 * over, since nothing discovery found is evidence against what the
+	 * caller said; one the library worked out itself goes with the rest
+	 * of the state, so that a search which settled the wrong UAP can look
+	 * for another.  Cleared with the piconet's other state when the LAP
+	 * changes and when a followed clock is given up, which is what
+	 * btbb.h tells a caller. */
+	uint8_t uap_stated;
+
 	/* True once hop reversal has accepted a clock for this piconet, which
 	 * is the clock that can be given up again.  A caller that set the
 	 * clock itself, from an adapter say, owns it: the library has no

@@ -107,9 +107,11 @@ add_executable(test_piconet test_piconet.c)
 target_include_directories(test_piconet PRIVATE ${PROJECT_SOURCE_DIR}/lib/src)
 target_compile_options(test_piconet PRIVATE -std=gnu90)
 add_test(NAME piconet COMMAND test_piconet)
-# Under a second, but each candidate list is a walk over 2^21 clock
-# values, which a sanitizer build takes a few seconds over.
-set_tests_properties(piconet PROPERTIES TIMEOUT 60)
+# About ten seconds, most of it the candidate lists: each one is a walk
+# over 2^21 clock values, and the captures driven from a first packet to a
+# clock choose several and then score 26,000 candidates against every hop.
+# A sanitizer build takes five times as long.
+set_tests_properties(piconet PROPERTIES TIMEOUT 180)
 
 # The two clock-recovery measurements the issues quote. Internal, so it
 # compiles the translation units it reaches into.

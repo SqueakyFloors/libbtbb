@@ -108,6 +108,9 @@ void btbb_init_piconet(btbb_piconet *pn, uint32_t lap)
 		 * BTBB_UAP_VALID clear, and it is the flag that says whether
 		 * an address part is known. */
 		reset(pn);
+		/* Including an address part the caller stated: it was the
+		 * last piconet's. */
+		pn->uap_stated = 0;
 		pn->num_rejected = 0;
 		pn->lock_losses = 0;
 		pn->lock_loss_reported = 0;
@@ -145,6 +148,7 @@ int btbb_piconet_get_flag(const btbb_piconet *pn, const int flag)
 void btbb_piconet_set_uap(btbb_piconet *pn, uint8_t uap)
 {
 	pn->UAP = uap;
+	pn->uap_stated = 1;
 	btbb_piconet_set_flag(pn, BTBB_UAP_VALID, 1);
 }
 
@@ -931,6 +935,35 @@ int btbb_init_hop_reversal(int aliased, btbb_piconet *pn)
 	return init_hop_reversal(aliased, pn, 0);
 }
 
+/* The two lines the library writes once the search has the whole clock: that
+ * it has it, and the offset the caller puts its receiver on. */
+static void report_clock(const btbb_piconet *pn)
+{
+	piconet_note("got CLK1-27\n");
+	piconet_note("clock offset = %d.\n", pn->clk_offset);
+}
+
+/*
+ * Discovery gave up and started over, which clears the UAP along with
+ * everything else.  A UAP the caller stated is known all the same - the
+ * caller said so, and nothing discovery found is evidence against it - so it
+ * is put back and the next packet goes on searching for the clock rather than
+ * for a UAP.
+ *
+ * A UAP the library worked out for itself is not put back.  It came from the
+ * same search that has just thrown its own state away, and putting it back
+ * would leave every later candidate filtered against a value nothing
+ * supports: a search that settled the wrong UAP would then rule out the
+ * piconet's own clock forever, and never look for another UAP.
+ */
+static void keep_stated_uap(btbb_piconet *pn, uint8_t stated_uap)
+{
+	if (pn->uap_stated && !btbb_piconet_get_flag(pn, BTBB_UAP_VALID)) {
+		btbb_piconet_set_flag(pn, BTBB_UAP_VALID, 1);
+		pn->UAP = stated_uap;
+	}
+}
+
 void try_hop(btbb_packet *pkt, btbb_piconet *pn)
 {
 	uint8_t filter_uap = pn->UAP;
@@ -946,6 +979,7 @@ void try_hop(btbb_packet *pkt, btbb_piconet *pn)
 		if (pn->packets_observed >= MAX_PATTERN_LENGTH) {
 			piconet_note("Oops. More hops than we can remember.\n");
 			reset(pn);
+			keep_stated_uap(pn, filter_uap);
 			return;
 		}
 		/* Both clocks are CLK1-27, so the difference is a count of
@@ -962,22 +996,21 @@ void try_hop(btbb_packet *pkt, btbb_piconet *pn)
 		 * score a list the clock has gone from. */
 		note_hop(pn, pkt->clkn, pkt->channel);
 		btbb_winnow(pn);
-		if (btbb_piconet_get_flag(pn, BTBB_CLK27_VALID)) {
-			piconet_note("got CLK1-27\n");
-			piconet_note("clock offset = %d.\n", pn->clk_offset);
-		}
+		if (btbb_piconet_get_flag(pn, BTBB_CLK27_VALID))
+			report_clock(pn);
 	} else {
 		if (btbb_piconet_get_flag(pn, BTBB_CLK6_VALID)) {
 			btbb_uap_from_header(pkt, pn);
-			if (btbb_piconet_get_flag(pn, BTBB_CLK27_VALID)) {
-				piconet_note("got CLK1-27\n");
-				piconet_note("clock offset = %d.\n", pn->clk_offset);
-			}
+			if (btbb_piconet_get_flag(pn, BTBB_CLK27_VALID))
+				report_clock(pn);
 		} else {
 			if (btbb_uap_from_header(pkt, pn)) {
 				if (filter_uap == pn->UAP) {
 					btbb_init_hop_reversal(0, pn);
 					btbb_winnow(pn);
+					if (btbb_piconet_get_flag(
+						    pn, BTBB_CLK27_VALID))
+						report_clock(pn);
 				} else {
 					piconet_note("failed to confirm UAP\n");
 				}
@@ -985,10 +1018,7 @@ void try_hop(btbb_packet *pkt, btbb_piconet *pn)
 		}
 	}
 
-	if(!btbb_piconet_get_flag(pn, BTBB_UAP_VALID)) {
-		btbb_piconet_set_flag(pn, BTBB_UAP_VALID, 1);
-		pn->UAP = filter_uap;
-	}
+	keep_stated_uap(pn, filter_uap);
 }
 
 /* reset UAP/clock discovery */
@@ -1478,6 +1508,21 @@ static void settle_clk6_offset(btbb_piconet *pn, int first_packet_clock)
 	pn->got_settled_clk6 = 1;
 }
 
+/*
+ * The search has settled on this UAP, and on the CLK1-6 that reads it out of
+ * a header.  A UAP the search worked out for itself is the library's own, and
+ * goes again when discovery starts over; one the caller stated, which this
+ * clock has only confirmed, is still the caller's. See try_hop().
+ */
+static void settle_uap(btbb_piconet *pn, uint8_t uap)
+{
+	if (!btbb_piconet_get_flag(pn, BTBB_UAP_VALID))
+		pn->uap_stated = 0;
+	pn->UAP = uap;
+	btbb_piconet_set_flag(pn, BTBB_CLK6_VALID, 1);
+	btbb_piconet_set_flag(pn, BTBB_UAP_VALID, 1);
+}
+
 /* use packet headers to determine UAP */
 int btbb_uap_from_header(btbb_packet *pkt, btbb_piconet *pn)
 {
@@ -1586,9 +1631,7 @@ int btbb_uap_from_header(btbb_packet *pkt, btbb_piconet *pn)
 				else
 					piconet_note("Correct CRC! CLK6 = 0x%x found after %d total packets.\n",
 						     pn->clk6_offset, pn->total_packets_observed);
-				pn->UAP = UAP;
-				btbb_piconet_set_flag(pn, BTBB_CLK6_VALID, 1);
-				btbb_piconet_set_flag(pn, BTBB_UAP_VALID, 1);
+				settle_uap(pn, UAP);
 				pn->total_packets_observed = 0;
 				return 1;
 			}
@@ -1612,9 +1655,7 @@ int btbb_uap_from_header(btbb_packet *pkt, btbb_piconet *pn)
 			piconet_note("CLK6 = 0x%x found after %d total packets.\n",
 				     pn->clk6_offset,
 				     pn->total_packets_observed);
-		pn->UAP = pn->clock6_candidates[first_clock];
-		btbb_piconet_set_flag(pn, BTBB_CLK6_VALID, 1);
-		btbb_piconet_set_flag(pn, BTBB_UAP_VALID, 1);
+		settle_uap(pn, pn->clock6_candidates[first_clock]);
 		/* The clock is settled here too - the candidates ran out
 		 * until one was left - so the header this packet sent is the
 		 * one that clock reads, and the packet carries it as it does
@@ -1846,6 +1887,7 @@ static void drop_followed_clock(btbb_piconet *pn, int rule_it_out)
 	 * leaves the value where it is, with the flag clear; it is the flag
 	 * that says whether a UAP is known. */
 	pn->UAP = 0;
+	pn->uap_stated = 0;
 	reset(pn);
 }
 
@@ -2010,6 +2052,21 @@ static void read_at_clk6(btbb_packet *pkt, uint8_t uap, int clk6_offset)
 	pkt->clkn = board_clkn;
 }
 
+/*
+ * Follow the piconet from here, where the search has the whole clock.  The
+ * two clocks are checked together because each is reported on its own flag
+ * and following takes both: CLK1-6 dewhitens a header, CLK1-27 says which
+ * channel the next packet is on.  Returns whether it started.
+ */
+static int start_following(btbb_piconet *pn)
+{
+	if (!btbb_piconet_get_flag(pn, BTBB_CLK6_VALID) ||
+	    !btbb_piconet_get_flag(pn, BTBB_CLK27_VALID))
+		return 0;
+	btbb_piconet_set_flag(pn, BTBB_FOLLOWING, 1);
+	return 1;
+}
+
 int btbb_process_packet(btbb_packet *pkt, btbb_piconet *pn) {
 	if (survey_mode) {
 		pn = get_piconet(btbb_packet_get_lap(pkt));
@@ -2107,11 +2164,8 @@ int btbb_process_packet(btbb_packet *pkt, btbb_piconet *pn) {
 			int clk6_offset;
 
 			try_hop(pkt, pn);
-			if (btbb_piconet_get_flag(pn, BTBB_CLK6_VALID) &&
-			    btbb_piconet_get_flag(pn, BTBB_CLK27_VALID)) {
-				btbb_piconet_set_flag(pn, BTBB_FOLLOWING, 1);
+			if (start_following(pn))
 				return -1;
-			}
 			/* The clock the search holds now wins where it has
 			 * one: this packet may be the one that settled it, or
 			 * the one that moved it, and either way that is the
@@ -2140,7 +2194,25 @@ int btbb_process_packet(btbb_packet *pkt, btbb_piconet *pn) {
 
 		/* Have LAP, need UAP. */
 		else {
-			btbb_uap_from_header(pkt, pn);
+			/*
+			 * The packet that settles a UAP here settles CLK1-6
+			 * with it, so this is where the clock search starts
+			 * for a piconet that works its own UAP out: by the
+			 * time such a packet reaches try_hop(), CLK1-6 is in
+			 * and the branch that starts the search is behind it.
+			 * The candidates are chosen and scored from the hops
+			 * the UAP search remembered, so a UAP settled after a
+			 * long search starts with its list already narrowed.
+			 */
+			if (btbb_uap_from_header(pkt, pn)) {
+				btbb_init_hop_reversal(0, pn);
+				btbb_winnow(pn);
+				if (btbb_piconet_get_flag(pn,
+							  BTBB_CLK27_VALID))
+					report_clock(pn);
+				if (start_following(pn))
+					return -1;
+			}
 		}
 	}
 	return 0;

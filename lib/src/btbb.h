@@ -401,7 +401,13 @@ BTBB_API void btbb_init_piconet(btbb_piconet *pn, uint32_t lap);
 
    The library clears the flag again where it has no UAP to stand behind: this
    piconet pointed at another LAP, or a followed clock and the UAP with it
-   given up. A caller whose UAP should outlast that states it again. */
+   given up. A caller whose UAP should outlast that states it again.
+
+   A stated UAP is otherwise kept, including through discovery starting over,
+   because nothing the library finds is evidence against what the caller said.
+   A UAP the library worked out for itself does not outlast its own search: it
+   goes when discovery starts over, so that a search which settled the wrong
+   one can go on to look for another. */
 BTBB_API void btbb_piconet_set_uap(btbb_piconet *pn, uint8_t uap);
 BTBB_API uint8_t btbb_piconet_get_uap(const btbb_piconet *pn);
 BTBB_API uint32_t btbb_piconet_get_lap(const btbb_piconet *pn);
