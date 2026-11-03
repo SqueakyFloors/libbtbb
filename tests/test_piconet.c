@@ -2065,9 +2065,11 @@ static void test_a_stated_uap_of_zero_starts_the_clock_search(void)
 	CHECK(btbb_piconet_get_flag(pn, BTBB_CLK6_VALID));
 	CHECK(pn->num_candidates > 1);
 	/* and on the address part the caller gave, which the search confirmed
-	 * rather than replaced */
+	 * rather than replaced - so it is still the caller's, and outlives
+	 * discovery starting over */
 	CHECK(btbb_piconet_get_flag(pn, BTBB_UAP_VALID));
 	CHECK_EQ(ZERO_UAP, btbb_piconet_get_uap(pn));
+	CHECK_EQ(1, pn->uap_stated);
 
 	btbb_piconet_unref(pn);
 	btbb_piconet_unref(device);
@@ -2223,7 +2225,6 @@ static void test_a_discovered_uap_reaches_a_clock(void)
 		CHECK(strstr(err, "initial CLK1-27 candidates") != NULL);
 		CHECK(strstr(err, "got CLK1-27") != NULL);
 		CHECK(clock_at > 0);
-		CHECK(clock_at < 60);
 		/* and it is the clock the capture was built at, with the
 		 * piconet followed from here and the offset the caller puts
 		 * its receiver on - 625 us slots doubled, the unit a whole

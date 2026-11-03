@@ -68,11 +68,9 @@
   the new one's either, which had kept the real one from being found.
 - Fixed: a capture that worked out the piconet's address part for itself
   never started the clock search, so `ubertooth-rx -l <LAP>` with no `-u`
-  read the packets and never reached a clock or follow mode; the search now
-  starts from the packet that settles a discovered address part, as it does
-  from one that confirms a stated one. An address part the search gets wrong
-  is also given up again when discovery starts over, where before it was
-  held for the rest of the capture; one the caller stated is still kept.
+  read the packets and never reached a clock or follow mode; it now does.
+  An address part the search gets wrong is given up again, where before it
+  was held for the rest of the capture; one the caller stated is still kept.
 - Fixed: a clock search on a piconet using adaptive frequency hopping (AFH)
   started over on the basic sequence; it now narrows toward a clock.
 - Fixed: a clock tracked with AFH named the wrong channels; hopping now
