@@ -2074,9 +2074,11 @@ static void test_a_stated_uap_of_zero_starts_the_clock_search(void)
 }
 
 /*
- * A caller that states no address part still gets the address-part search,
- * and nothing else: there is no given value for the packets to confirm, so
- * the clock search is not started for it.
+ * A caller that states no address part still gets the address-part search on
+ * the packet that settles one, and not the clock search: there was no given
+ * value for that packet to confirm.  From the next packet on the piconet has
+ * an address part like any other and takes the branch above, as it did before
+ * this was decided on the flag.
  */
 static void test_an_unstated_uap_still_goes_to_header_discovery(void)
 {
@@ -2114,6 +2116,73 @@ static void test_an_unstated_uap_still_goes_to_header_discovery(void)
 	CHECK_EQ(0, pn->num_candidates);
 
 	btbb_packet_unref(pkt);
+	btbb_piconet_unref(pn);
+}
+
+/*
+ * A piconet struct pointed at another LAP searches for the new piconet's
+ * address part rather than keeping the last one's.
+ *
+ * A new LAP gives up what discovery found, which clears BTBB_UAP_VALID and
+ * leaves the old value in the piconet.  That is the one other state the
+ * branch above reads differently, and the flag has it right: no address part
+ * is known, so the search looks for one.  Reading the value sent these
+ * packets to try_hop() instead, which pins the address part it was called
+ * with for a piconet that has one -- so the old piconet's was marked known
+ * again and every clock whose header disagreed with it was ruled out, and the
+ * new piconet's was never found.
+ */
+static void test_a_new_lap_does_not_keep_the_old_uap(void)
+{
+	/* Clocks far enough apart that each one picks a different whitening
+	 * sequence, as packets of a real piconet do. */
+	static const uint32_t clocks[8] = {
+		3, 11, 20, 29, 38, 47, 55, 62
+	};
+	/* how far the board's clock runs ahead of the piconet's */
+	const int slots_late = 7;
+	/* the address part of the piconet the packets below are of, which is
+	 * not the one the piconet struct is carrying */
+	const uint8_t new_uap = 0x11;
+	btbb_piconet *pn = btbb_piconet_new();
+	int known = 0;
+	int i;
+
+	CHECK(pn != NULL);
+	if (pn == NULL)
+		return;
+	btbb_init_piconet(pn, TEST_LAP);
+	btbb_piconet_set_uap(pn, OTHER_UAP);
+	/* another piconet, so the address part found for the last one is no
+	 * longer known - though its value is still in the struct */
+	btbb_init_piconet(pn, SPEC_DH1_LAP);
+	CHECK(!btbb_piconet_get_flag(pn, BTBB_UAP_VALID));
+	CHECK_EQ(OTHER_UAP, btbb_piconet_get_uap(pn));
+
+	for (i = 0; i < 8 && !known; i++) {
+		/* NULL and POLL packets of several members of the new
+		 * piconet, which is what an idle link carries */
+		uint16_t header = (uint16_t) ((i % 7 + 1) |
+					      (((i & 1) ? PACKET_TYPE_POLL :
+						PACKET_TYPE_NULL) << 3));
+		btbb_packet *pkt = packet_read_slots_late(
+			SPEC_DH1_LAP, (uint8_t) (10 + i), header,
+			hec_for(header, new_uap), (int) clocks[i],
+			slots_late);
+
+		CHECK(pkt != NULL);
+		if (pkt == NULL)
+			break;
+		CHECK_EQ(0, btbb_process_packet(pkt, pn));
+		known = btbb_piconet_get_flag(pn, BTBB_UAP_VALID);
+		btbb_packet_unref(pkt);
+	}
+
+	/* the new piconet's address part, settled from its own packets */
+	CHECK(known);
+	CHECK_EQ(new_uap, btbb_piconet_get_uap(pn));
+	CHECK(btbb_piconet_get_flag(pn, BTBB_CLK6_VALID));
+
 	btbb_piconet_unref(pn);
 }
 
@@ -3880,6 +3949,7 @@ int main(void)
 	test_a_clock_settled_by_elimination_records_the_header();
 	test_a_stated_uap_of_zero_starts_the_clock_search();
 	test_an_unstated_uap_still_goes_to_header_discovery();
+	test_a_new_lap_does_not_keep_the_old_uap();
 	test_a_run_of_header_failures_gives_up_the_clock();
 	test_a_lost_lock_leaves_the_piconet_ready_to_search();
 	test_a_header_that_checks_out_ends_the_run();

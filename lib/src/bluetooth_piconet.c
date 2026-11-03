@@ -1811,9 +1811,10 @@ static void drop_followed_clock(btbb_piconet *pn, int rule_it_out)
 	}
 
 	/* The UAP goes with the clock: the two were followed as one answer,
-	 * and giving that up leaves the piconet with no address part. Nothing
-	 * may read the old one as the piconet's while discovery looks for
-	 * another. */
+	 * so a UAP this clock was wrong about is not one to hand a reader
+	 * while discovery looks for another. A reset for any other reason
+	 * leaves the value where it is, with the flag clear; it is the flag
+	 * that says whether a UAP is known. */
 	pn->UAP = 0;
 	reset(pn);
 }

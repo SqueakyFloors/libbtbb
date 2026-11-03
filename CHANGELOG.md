@@ -63,7 +63,9 @@
 
 - Fixed: a piconet whose address part was given as 0x00 went on searching for
   an address part and never started the clock search, so CLK1-27 never came;
-  a stated 0x00 now counts as given, as any other value does.
+  a stated 0x00 now counts as given, as any other value does. A piconet
+  pointed at another LAP no longer takes the last piconet's address part as
+  the new one's either, which had kept the real one from being found.
 - Fixed: a clock search on a piconet using adaptive frequency hopping (AFH)
   started over on the basic sequence; it now narrows toward a clock.
 - Fixed: a clock tracked with AFH named the wrong channels; hopping now
