@@ -346,9 +346,8 @@ btbb_pcap_append_packet(btbb_pcap_handle * h, const uint64_t ns,
 		/* The format gives neither corrected-bits field a validity
 		   flag, so a reader takes both at face value. The payload's
 		   count describes the payload in the record, so it is only
-		   recorded alongside one. Which of the format's two ranges it
-		   is on follows from the payload transport rate byte, which
-		   names the transport the decoder read the payload as.
+		   recorded alongside one, and alongside the payload transport
+		   rate the format reads it according to.
 
 		   The count goes in as the decoder made it. The published
 		   layout describes this field as running to +180 for the rate

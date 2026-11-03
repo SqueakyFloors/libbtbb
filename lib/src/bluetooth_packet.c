@@ -910,19 +910,24 @@ static uint8_t uap_from_hec(uint16_t data, uint8_t hec)
 /*
  * The logical transport a 4-bit TYPE code names at the basic rate, which is
  * the rate this library decodes (Vol 2, Part B, Section 6.5, Table 6.2). A
- * capture file carries it beside the count of corrected payload bits, and a
- * reader needs it to tell which packet type the code means, and so which
- * forward error correction that type uses: that is the scale the count is on.
+ * capture file records it beside the payload, and the format reads the record's
+ * count of corrected payload bits according to it, so a reader is entitled to
+ * take the packet type from the pair rather than from the type code alone.
  *
- * This is the transport the decoder read the packet as, which is as much as
- * the packet itself says. A connectionless broadcast uses the same codes as
- * the asynchronous link, and a voice link may carry a DM1 or an FHS as well,
- * all with the same packet types; nothing in the packet tells them apart, and
- * this library decodes each code as the one type Table 6.2 gives it. NULL and
- * POLL carry no payload and go on every transport, so there is nothing to
- * name. TYPE code 0111 is an HV3 on the synchronous link or an EV3 on the
- * extended one, and btbb_decode_payload() names that one from the type it
- * decoded.
+ * It is the transport the decoder read the packet as, which is as much as the
+ * packet itself says. A connectionless broadcast uses the same codes as the
+ * asynchronous link, and a voice link may carry a DM1 or an FHS as well, all
+ * with the same packet types; nothing in the packet tells them apart, and this
+ * library decodes each code as the one type Table 6.2 gives it at this rate.
+ * NULL and POLL carry no payload and go on every transport, so there is
+ * nothing to name.
+ *
+ * TYPE code 0111 is the one code two types share at this rate, an HV3 on the
+ * synchronous link or an EV3 on the extended one, so this map has no answer
+ * for it; each caller below names it from the type it decoded. That is also
+ * the case a reader cannot work out for itself: the two are the same code and
+ * the same length, and only this byte says which the record holds, and so
+ * whether its payload ends in a CRC.
  */
 static uint8_t transport_for_type(uint8_t packet_type)
 {
@@ -1059,7 +1064,14 @@ int crc_check(int clock, btbb_packet* pkt)
 		 * see. */
 		btbb_packet_set_flag(pkt, BTBB_HAS_PAYLOAD,
 				     pkt->payload_length > 0);
-		record_transport(pkt, transport_for_type(pkt->packet_type));
+		/* The switch above decodes TYPE code 0111 as an EV3 and never
+		 * as an HV3, so a payload settled here rides the extended
+		 * link. (No such payload reaches this branch today: the
+		 * false-positive rule above demotes that code's result.) */
+		record_transport(pkt,
+				 pkt->packet_type == PACKET_TYPE_HV3
+				 ? BTBB_TRANSPORT_ESCO
+				 : transport_for_type(pkt->packet_type));
 	}
 
 	return retval;
@@ -1939,10 +1951,8 @@ int btbb_decode_payload(btbb_packet* pkt)
 	btbb_packet_set_flag(pkt, BTBB_CRC_CORRECT, 0);
 
 	/* and nothing has been corrected yet either: the count belongs to the
-	 * payload the decoder below settles on, as does the transport that
-	 * says which forward error correction the count was made over */
+	 * payload the decoder below settles on */
 	pkt->corrected_payload_bits = 0;
-	pkt->transport = BTBB_TRANSPORT_ANY;
 
 	switch(pkt->packet_type)
 	{

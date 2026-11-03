@@ -261,18 +261,21 @@ BTBB_API void btbb_packet_set_uap(btbb_packet *pkt, uint8_t uap);
 BTBB_API uint8_t btbb_packet_get_uap(const btbb_packet *pkt);
 BTBB_API uint16_t btbb_packet_get_nap(const btbb_packet *pkt);
 
-/* The modulation a packet's symbols were demodulated with is the caller's to
-   state, because only the caller's radio knows it; it stays BTBB_MOD_GFSK, the
-   basic rate this library decodes, until the caller says otherwise.
+/* A capture file records these two as one byte, the payload transport rate of
+   the BR/EDR record layout.
 
-   The transport is the decoder's: btbb_decode_payload() names the one it read
+   The modulation is the caller's to state, because only the caller's radio
+   knows it. It stays BTBB_MOD_GFSK, the basic rate this library decodes,
+   until the caller says otherwise, and nothing here changes it.
+
+   The transport is the decoder's. btbb_decode_payload() names the one it read
    the payload as, from the packet type (Vol 2, Part B, Section 6.5, Table
-   6.2), and leaves BTBB_TRANSPORT_ANY where there is no payload to describe.
-   A capture file records both, and a reader needs the pair of them to tell
-   which packet type a record holds, and so which forward error correction its
-   count of corrected payload bits was made over. A caller may still set the
-   transport, which is then what the next record carries; decoding the packet
-   again replaces it. */
+   6.2), and leaves BTBB_TRANSPORT_ANY where it decoded no payload to
+   describe; the search for a piconet's address part does the same for the
+   payload it settles on. btbb_packet_set_transport() therefore only holds
+   until the packet is decoded or handed new symbols, each of which takes it
+   back to BTBB_TRANSPORT_ANY. To put a transport of your own in a record,
+   set it after decoding the packet and before writing the record. */
 BTBB_API void btbb_packet_set_modulation(btbb_packet *pkt, uint8_t modulation);
 BTBB_API void btbb_packet_set_transport(btbb_packet *pkt, uint8_t transport);
 BTBB_API uint8_t btbb_packet_get_modulation(const btbb_packet *pkt);

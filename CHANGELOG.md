@@ -114,9 +114,10 @@
   checked and whether they held, in both PCAP and PCAPNG files.
 - Fixed: the forward error correction fields in BR/EDR records read 0
   whatever the reception; they now carry the number of bits put right.
-- Fixed: a BR/EDR record's payload transport rate read "any", so a reader
-  could not tell which of the layout's two ranges its count of corrected
-  payload bits was on; it now names the transport the payload decoded on.
+- Fixed: a BR/EDR record's payload transport rate said the transport was
+  unknown, whatever the decoder had read the payload as, so an HV3 record and
+  an EV3 one were indistinguishable; it now names that transport, which is
+  also what the layout reads the record's corrected payload bits against.
 - Fixed: a PCAPNG file recorded connection parameters a CONNECT_IND did not
   carry; it now records the packet's own, so a reader can follow it.
 - Fixed: a long LE PCAPNG capture ran out of room for a CONNECT_IND's
