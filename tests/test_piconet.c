@@ -2079,6 +2079,12 @@ static void test_a_stated_uap_of_zero_starts_the_clock_search(void)
  * value for that packet to confirm.  From the next packet on the piconet has
  * an address part like any other and takes the branch above, as it did before
  * this was decided on the flag.
+ *
+ * The clock search starts from that same packet, because the address-part
+ * search settles CLK1-6 along with the address part and there is no later
+ * packet that settles anything for try_hop() to start it from.  One packet
+ * has been observed here, so the candidates are every clock that hops to its
+ * channel, with nothing yet to narrow them.
  */
 static void test_an_unstated_uap_still_goes_to_header_discovery(void)
 {
@@ -2110,13 +2116,284 @@ static void test_an_unstated_uap_still_goes_to_header_discovery(void)
 	CHECK(btbb_piconet_get_flag(pn, BTBB_UAP_VALID));
 	CHECK_EQ(SPEC_DH1_UAP, btbb_piconet_get_uap(pn));
 	CHECK(btbb_piconet_get_flag(pn, BTBB_CLK6_VALID));
-	/* and no clock search, as before: the caller gave nothing for this
-	 * packet to confirm */
-	CHECK(!btbb_piconet_get_flag(pn, BTBB_HOP_REVERSAL_INIT));
-	CHECK_EQ(0, pn->num_candidates);
+	/* and the clock search under way on it */
+	CHECK(btbb_piconet_get_flag(pn, BTBB_HOP_REVERSAL_INIT));
+	CHECK(pn->num_candidates > 1);
 
 	btbb_packet_unref(pkt);
 	btbb_piconet_unref(pn);
+}
+
+/*
+ * A capture of one piconet as a receiver hears it: a central and a peripheral
+ * packet of one slot pair every three pairs, each on the channel the device's
+ * clock hops to, every one read at a board clock a fixed number of slots
+ * ahead of the piconet's.
+ *
+ * The gaps between the packets matter.  Candidate clocks are told apart by
+ * the whitening sequence the clock a packet arrived at picks out, so a
+ * capture whose gaps share a factor with the 64 CLK1-6 values never reaches
+ * most of them: measured on a fixed gap of two slots, seven candidates
+ * survived a 400-packet capture and no address part was settled at all.  A
+ * pair every three pairs gives gaps of one and five slots, which between them
+ * reach all 64.
+ */
+#define DISCOVERY_BASE_CLOCK 0x1a2b3c
+#define DISCOVERY_SLOTS_LATE 7
+
+static btbb_packet *discovery_packet(btbb_piconet *device, uint8_t header_uap,
+				     int i)
+{
+	uint32_t clk = (uint32_t) DISCOVERY_BASE_CLOCK +
+		       (uint32_t) (6 * (i / 2) + (i & 1));
+	/* NULL and POLL packets of several members of the piconet, which is
+	 * what an idle link carries.  The header varies so that a wrong clock
+	 * reads a type out of the same symbols that the decoder goes looking
+	 * for a payload for, which is what rules that clock out. */
+	uint16_t header = (uint16_t) ((i % 7 + 1) |
+				      (((i & 1) ? PACKET_TYPE_POLL :
+					PACKET_TYPE_NULL) << 3));
+
+	return packet_read_slots_late(TEST_LAP, channel_at(device, clk),
+				      header, hec_for(header, header_uap),
+				      (int) clk, DISCOVERY_SLOTS_LATE);
+}
+
+/*
+ * A capture that works out the piconet's address part for itself goes on to
+ * its clock, the same as one the caller told the address part.
+ *
+ * The address-part search settles CLK1-6 along with the address part, so such
+ * a piconet reaches try_hop() with CLK1-6 already in, past the branch that
+ * starts the clock search, and nothing started it instead.  The search that
+ * had just succeeded then ran again on every packet for the rest of the
+ * capture: `ubertooth-rx -l <LAP>` with no -u read the piconet's packets and
+ * never reached a clock or follow mode.  Measured over 400 packets of this
+ * capture, for each address part below, no candidate CLK1-27 values were ever
+ * chosen; the clock now comes in between 30 and 40 packets.
+ */
+static void test_a_discovered_uap_reaches_a_clock(void)
+{
+	/* 0x00, which is a real address part and the one a caller stating it
+	 * had trouble with, and two others. */
+	static const uint8_t uaps[3] = {0x00, 0x5b, 0x47};
+	int u;
+
+	for (u = 0; u < 3; u++) {
+		const uint8_t uap = uaps[u];
+		/* the device under observation, whose hops the packets land
+		 * on */
+		btbb_piconet *device = discovered_as(TEST_LAP, uap, NULL, 0);
+		btbb_piconet *pn = btbb_piconet_new();
+		char out[4096], err[8192];
+		int clock_at = 0, i;
+
+		CHECK(pn != NULL);
+		CHECK(device != NULL);
+		if (pn == NULL || device == NULL) {
+			btbb_piconet_unref(pn);
+			btbb_piconet_unref(device);
+			continue;
+		}
+		/* the LAP and nothing else, which is all `-l` gives */
+		btbb_init_piconet(pn, TEST_LAP);
+		CHECK(!btbb_piconet_get_flag(pn, BTBB_UAP_VALID));
+		if (capture_or_fail() != 0) {
+			btbb_piconet_unref(pn);
+			btbb_piconet_unref(device);
+			return;
+		}
+
+		for (i = 0; i < 120 && clock_at == 0; i++) {
+			btbb_packet *pkt = discovery_packet(device, uap, i);
+
+			if (pkt == NULL)
+				break;
+			btbb_process_packet(pkt, pn);
+			btbb_packet_unref(pkt);
+			if (btbb_piconet_get_flag(pn, BTBB_CLK27_VALID))
+				clock_at = i + 1;
+		}
+		capture_stop(out, sizeof(out), err, sizeof(err));
+
+		/* the device's own address part, worked out from its headers */
+		CHECK(btbb_piconet_get_flag(pn, BTBB_UAP_VALID));
+		CHECK_EQ(uap, btbb_piconet_get_uap(pn));
+		/* the clock search ran and ended in a clock */
+		CHECK(strstr(err, "initial CLK1-27 candidates") != NULL);
+		CHECK(strstr(err, "got CLK1-27") != NULL);
+		CHECK(clock_at > 0);
+		CHECK(clock_at < 60);
+		/* and it is the clock the capture was built at, with the
+		 * piconet followed from here and the offset the caller puts
+		 * its receiver on - 625 us slots doubled, the unit a whole
+		 * clock's offset is reported in */
+		CHECK_EQ(DISCOVERY_BASE_CLOCK, pn->best_clock);
+		CHECK(btbb_piconet_get_flag(pn, BTBB_FOLLOWING));
+		CHECK_EQ(-2 * DISCOVERY_SLOTS_LATE,
+			 btbb_piconet_get_clk_offset(pn));
+		if (failures != 0)
+			printf("address part 0x%02x, clock at packet %d, "
+			       "stderr was: %s\n", uap, clock_at, err);
+
+		btbb_piconet_unref(pn);
+		btbb_piconet_unref(device);
+	}
+}
+
+/*
+ * An address part the search gets wrong is given up again.
+ *
+ * A header with bit errors in it reads out an address part the device does not
+ * have, and a few of those at the start of a capture are enough for the
+ * search to settle on one.  Everything after that is chosen against an
+ * address the piconet does not use: the candidate clocks come from a hop
+ * sequence it does not follow, and every header is checked against a value
+ * nothing supports.  So the library has to be able to let go of it, and it is
+ * the clock search running out of candidates that says so.
+ *
+ * What makes that possible is that an address part the library worked out
+ * itself is given up when discovery starts over, where one the caller stated
+ * is put back - the caller said so, and nothing discovery found is evidence
+ * against it.  Putting a discovered one back left the piconet filtering every
+ * later candidate against it: measured over this capture, the wrong value was
+ * held for the whole of 400 packets, and the device's own address part and
+ * clock were never found.
+ */
+static void test_a_wrong_discovered_uap_is_given_up(void)
+{
+	const uint8_t uap = 0x5b;
+	/* what the damaged headers read out as */
+	const uint8_t misread = 0x11;
+	/* enough of them to settle it: this capture settles an address part
+	 * on its third packet */
+	const int damaged = 3;
+	btbb_piconet *device = discovered_as(TEST_LAP, uap, NULL, 0);
+	btbb_piconet *pn = btbb_piconet_new();
+	char out[4096], err[65536];
+	int wrong_at = 0, given_up_at = 0, right_at = 0, clock_at = 0, i;
+
+	CHECK(pn != NULL);
+	CHECK(device != NULL);
+	if (pn == NULL || device == NULL) {
+		btbb_piconet_unref(pn);
+		btbb_piconet_unref(device);
+		return;
+	}
+	btbb_init_piconet(pn, TEST_LAP);
+	if (capture_or_fail() != 0) {
+		btbb_piconet_unref(pn);
+		btbb_piconet_unref(device);
+		return;
+	}
+
+	for (i = 0; i < 160 && clock_at == 0; i++) {
+		btbb_packet *pkt = discovery_packet(
+			device, (i < damaged) ? misread : uap, i);
+
+		if (pkt == NULL)
+			break;
+		btbb_process_packet(pkt, pn);
+		btbb_packet_unref(pkt);
+
+		if (btbb_piconet_get_flag(pn, BTBB_UAP_VALID)) {
+			if (btbb_piconet_get_uap(pn) == misread &&
+			    wrong_at == 0)
+				wrong_at = i + 1;
+			if (btbb_piconet_get_uap(pn) == uap && right_at == 0)
+				right_at = i + 1;
+		} else if (wrong_at != 0 && given_up_at == 0) {
+			given_up_at = i + 1;
+		}
+		if (btbb_piconet_get_flag(pn, BTBB_CLK27_VALID))
+			clock_at = i + 1;
+	}
+	capture_stop(out, sizeof(out), err, sizeof(err));
+
+	/* the damaged headers do settle the wrong address part */
+	CHECK(wrong_at > 0);
+	/* it is given up, the device's own is found, and its clock with it */
+	CHECK(given_up_at > wrong_at);
+	CHECK(right_at > given_up_at);
+	CHECK(clock_at > right_at);
+	CHECK_EQ(uap, btbb_piconet_get_uap(pn));
+	/* The clock is the capture's.  The attempt that found it started at a
+	 * later packet than the capture's first, so the candidate value is
+	 * that packet's rather than the first one's; what the caller puts its
+	 * receiver on is the offset between the two clocks, which is the same
+	 * either way. */
+	CHECK_EQ(-2 * DISCOVERY_SLOTS_LATE, btbb_piconet_get_clk_offset(pn));
+	if (failures != 0)
+		printf("wrong at %d, given up at %d, right at %d, "
+		       "clock at %d, stderr was: %s\n", wrong_at, given_up_at,
+		       right_at, clock_at, err);
+
+	btbb_piconet_unref(pn);
+	btbb_piconet_unref(device);
+}
+
+/*
+ * An address part the caller stated is kept through discovery starting over,
+ * however wrong it turns out to be.  The caller said so, and nothing the
+ * library finds is evidence against it, so the library goes on looking for
+ * this piconet's clock under that value rather than quietly searching for an
+ * address part of its own - which is what `ubertooth-rx -u` asks for.
+ *
+ * Here the stated value is not the device's, so the headers never check out
+ * under it and the search starts over again and again.  The capture is the
+ * same one the two tests above use.
+ */
+static void test_a_stated_uap_outlives_a_search_that_fails(void)
+{
+	/* the device's own address part, and the one the caller states */
+	const uint8_t uap = 0x5b;
+	const uint8_t stated = 0x11;
+	btbb_piconet *device = discovered_as(TEST_LAP, uap, NULL, 0);
+	btbb_piconet *pn = btbb_piconet_new();
+	char out[4096], err[65536];
+	int forgotten = 0, replaced = 0, i;
+
+	CHECK(pn != NULL);
+	CHECK(device != NULL);
+	if (pn == NULL || device == NULL) {
+		btbb_piconet_unref(pn);
+		btbb_piconet_unref(device);
+		return;
+	}
+	btbb_init_piconet(pn, TEST_LAP);
+	btbb_piconet_set_uap(pn, stated);
+	if (capture_or_fail() != 0) {
+		btbb_piconet_unref(pn);
+		btbb_piconet_unref(device);
+		return;
+	}
+
+	for (i = 0; i < 60; i++) {
+		btbb_packet *pkt = discovery_packet(device, uap, i);
+
+		if (pkt == NULL)
+			break;
+		btbb_process_packet(pkt, pn);
+		btbb_packet_unref(pkt);
+		if (!btbb_piconet_get_flag(pn, BTBB_UAP_VALID))
+			forgotten++;
+		if (btbb_piconet_get_uap(pn) != stated)
+			replaced++;
+	}
+	capture_stop(out, sizeof(out), err, sizeof(err));
+
+	/* the caller's value, known on every packet of the capture */
+	CHECK_EQ(0, forgotten);
+	CHECK_EQ(0, replaced);
+	CHECK_EQ(1, pn->uap_stated);
+	/* and no clock, which is the honest answer: this piconet's headers do
+	 * not check out under the address part it was told to use */
+	CHECK(!btbb_piconet_get_flag(pn, BTBB_CLK27_VALID));
+	if (failures != 0)
+		printf("stderr was: %s\n", err);
+
+	btbb_piconet_unref(pn);
+	btbb_piconet_unref(device);
 }
 
 /*
@@ -3997,6 +4274,9 @@ int main(void)
 	test_a_clock_settled_by_elimination_records_the_header();
 	test_a_stated_uap_of_zero_starts_the_clock_search();
 	test_an_unstated_uap_still_goes_to_header_discovery();
+	test_a_discovered_uap_reaches_a_clock();
+	test_a_wrong_discovered_uap_is_given_up();
+	test_a_stated_uap_outlives_a_search_that_fails();
 	test_a_new_lap_does_not_keep_the_old_uap();
 	test_a_run_of_header_failures_gives_up_the_clock();
 	test_a_lost_lock_leaves_the_piconet_ready_to_search();
