@@ -924,10 +924,12 @@ static uint8_t uap_from_hec(uint16_t data, uint8_t hec)
  *
  * TYPE code 0111 is the one code two types share at this rate, an HV3 on the
  * synchronous link or an EV3 on the extended one, so this map has no answer
- * for it; each caller below names it from the type it decoded. That is also
- * the case a reader cannot work out for itself: the two are the same code and
- * the same length, and only this byte says which the record holds, and so
- * whether its payload ends in a CRC.
+ * for it. btbb_decode_payload() names it from the type it decoded; the search
+ * for a piconet's address part never settles on that code, which the rule
+ * that demotes it in crc_check() explains. That code is also the case a
+ * reader cannot work out for itself: the two types are the same length as
+ * well as the same code, so only this byte says which one a record holds, and
+ * so whether its payload ends in a CRC.
  */
 static uint8_t transport_for_type(uint8_t packet_type)
 {
@@ -1021,7 +1023,13 @@ int crc_check(int clock, btbb_packet* pkt)
 			pkt->packet_type != 5))
 		retval = 1;
 
-	/* EV3 and EV5 have a relatively high false positive rate */
+	/* EV3 and EV5 have a relatively high false positive rate.
+	 *
+	 * It is also why nothing below has to tell an HV3 from an EV3: the
+	 * switch above tries only the EV3, and this line keeps whatever it
+	 * decoded from counting as settled, so a payload of TYPE code 0111
+	 * never reaches the transport named at the end. Code that lets one
+	 * through has to name it, as btbb_decode_payload() does. */
 	if (retval > 1 && (pkt->packet_type == 7 || pkt->packet_type == 13))
 		retval = 1;
 
@@ -1064,14 +1072,7 @@ int crc_check(int clock, btbb_packet* pkt)
 		 * see. */
 		btbb_packet_set_flag(pkt, BTBB_HAS_PAYLOAD,
 				     pkt->payload_length > 0);
-		/* The switch above decodes TYPE code 0111 as an EV3 and never
-		 * as an HV3, so a payload settled here rides the extended
-		 * link. (No such payload reaches this branch today: the
-		 * false-positive rule above demotes that code's result.) */
-		record_transport(pkt,
-				 pkt->packet_type == PACKET_TYPE_HV3
-				 ? BTBB_TRANSPORT_ESCO
-				 : transport_for_type(pkt->packet_type));
+		record_transport(pkt, transport_for_type(pkt->packet_type));
 	}
 
 	return retval;

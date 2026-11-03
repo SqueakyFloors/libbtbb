@@ -272,10 +272,17 @@ BTBB_API uint16_t btbb_packet_get_nap(const btbb_packet *pkt);
    the payload as, from the packet type (Vol 2, Part B, Section 6.5, Table
    6.2), and leaves BTBB_TRANSPORT_ANY where it decoded no payload to
    describe; the search for a piconet's address part does the same for the
-   payload it settles on. btbb_packet_set_transport() therefore only holds
-   until the packet is decoded or handed new symbols, each of which takes it
-   back to BTBB_TRANSPORT_ANY. To put a transport of your own in a record,
-   set it after decoding the packet and before writing the record. */
+   payload it settles on. So btbb_packet_set_transport() does not survive
+   either of those: a decode that read a payload replaces the value with the
+   payload's own, and one that read none, a header decode on its own, and new
+   symbols all leave BTBB_TRANSPORT_ANY. To put a transport of your own in a
+   record, set it after decoding the packet and before writing the record.
+
+   Two things the decoder's answer cannot say. It reads the table's
+   basic-rate column, so a caller that states an Enhanced Data Rate
+   modulation has to name the transport itself; and a DM1 or an FHS is named
+   ACL even though a voice link may carry one, because nothing in the packet
+   says which link it came from. */
 BTBB_API void btbb_packet_set_modulation(btbb_packet *pkt, uint8_t modulation);
 BTBB_API void btbb_packet_set_transport(btbb_packet *pkt, uint8_t transport);
 BTBB_API uint8_t btbb_packet_get_modulation(const btbb_packet *pkt);

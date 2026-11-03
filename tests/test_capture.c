@@ -386,7 +386,12 @@ static btbb_packet *decode_bredr(char *stream, int length, uint8_t uap)
 	   library leaves behind, so a record's payload_transport_rate byte
 	   pins that nibble. The transport below is a value the decoder never
 	   produces: the byte must then hold the transport it read the payload
-	   as, and not this. */
+	   as, and not this.
+
+	   The pair is deliberately odd. These packets are basic-rate ones, so
+	   a real capture of them would carry GFSK in the low nibble; a record
+	   here reads 8DPSK beside a basic-rate transport only because the two
+	   nibbles have to differ for a test to tell them apart. */
 	btbb_packet_set_modulation(pkt, BTBB_MOD_8DPSK);
 	btbb_packet_set_transport(pkt, BTBB_TRANSPORT_CSB);
 	if (btbb_decode_header(pkt))
