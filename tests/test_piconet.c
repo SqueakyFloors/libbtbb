@@ -3525,6 +3525,53 @@ static void test_discovery_complaints_go_to_stderr(void)
 }
 
 /*
+ * A piconet that has observed no hops has nothing for hop reversal to work
+ * from, which is the zero its documented contract promises.  The candidates
+ * are chosen from the channel the first remembered packet arrived on, and
+ * there is none: asking anyway used to hand back the tens of thousands of
+ * clock values that hop to channel 0.  Discovery that has started over is the
+ * same position with a channel left over from the search before.
+ */
+static void test_hop_reversal_without_an_observed_hop_is_refused(void)
+{
+	btbb_piconet *pn = discovered(NULL, 0);
+	char out[4096], err[4096];
+	int count;
+
+	CHECK_EQ(0, pn->packets_observed);
+	if (capture_or_fail() != 0) {
+		btbb_piconet_unref(pn);
+		return;
+	}
+	CHECK_EQ(0, btbb_init_hop_reversal(0, pn));
+	capture_stop(out, sizeof(out), err, sizeof(err));
+
+	CHECK(strstr(err, "no packets observed yet") != NULL);
+	CHECK_EQ(0, strlen(out));
+	/* nothing was started, so nothing has to be given up either */
+	CHECK_EQ(0, pn->num_candidates);
+	CHECK(pn->clock_candidates == NULL);
+	CHECK(!btbb_piconet_get_flag(pn, BTBB_HOP_REVERSAL_INIT));
+
+	/* one observed hop is all it takes, and it chooses as it always did */
+	first_hop(pn, channel_at(pn, 0));
+	count = btbb_init_hop_reversal(0, pn);
+	CHECK(count > 1);
+	CHECK(btbb_piconet_get_flag(pn, BTBB_HOP_REVERSAL_INIT));
+	CHECK_EQ(count, pn->num_candidates);
+	CHECK(candidate_listed(pn, 0));
+
+	/* and discovery starting over leaves nothing to work from again */
+	reset(pn);
+	CHECK_EQ(0, btbb_init_hop_reversal(0, pn));
+	CHECK_EQ(0, pn->num_candidates);
+	CHECK(pn->clock_candidates == NULL);
+	if (failures != 0)
+		printf("stdout was: %s\nstderr was: %s\n", out, err);
+	btbb_piconet_unref(pn);
+}
+
+/*
  * Reversing the hops an aliased receiver observes is not implemented, so
  * asking for it is refused rather than served with ordinary hop reversal.
  * The piconet's 'aliased' field, which decided this, was never assigned, so
@@ -3935,6 +3982,7 @@ int main(void)
 	test_a_callers_restart_gets_a_fresh_attempt();
 	test_discovery_notes_go_to_stderr();
 	test_discovery_complaints_go_to_stderr();
+	test_hop_reversal_without_an_observed_hop_is_refused();
 	test_aliased_hop_reversal_is_refused();
 	test_the_clocks_of_the_device_and_the_observer_differ();
 	test_every_candidate_agrees_on_clk1_6();
