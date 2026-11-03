@@ -1692,6 +1692,8 @@ btbb_piconet *get_piconet(uint32_t lap)
 {
 	survey_hash *s;
 	btbb_piconet *pn;
+	int added;
+
 	HASH_FIND(hh, piconet_survey, &lap, 4, s);
 
 	if (s == NULL) {
@@ -1713,7 +1715,18 @@ btbb_piconet *get_piconet(uint32_t lap)
 
 		s->key = lap;
 		s->pn = pn;
-		HASH_ADD(hh, piconet_survey, key, 4, s);
+		BTBB_HASH_ADD(hh, piconet_survey, key, 4, s, added);
+		if (!added) {
+			/* The table could not be grown, and it is as it was,
+			 * so the LAPs already in the survey are unaffected and
+			 * this packet is dropped like one whose entry or
+			 * piconet could not be allocated. */
+			piconet_note("error: could not grow the survey "
+				     "table\n");
+			btbb_piconet_unref(pn);
+			free(s);
+			return NULL;
+		}
 	} else {
 		pn = s->pn;
 	}

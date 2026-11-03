@@ -16,32 +16,26 @@
 #ifndef INCLUDED_BTBB_UTHASH_H
 #define INCLUDED_BTBB_UTHASH_H
 
-#include <stdio.h>
-#include <stdlib.h>
-
-/* An allocation failure inside a hash table ends the process, and this is
- * what it says first.
+/*
+ * An allocation failure inside a hash table is reported to the caller, which
+ * is what HASH_NONFATAL_OOM asks of uthash.
  *
  * Adding an entry allocates the table and its bucket array, and a growing
  * bucket chain allocates a larger one. Those allocations are made inside
- * uthash's macros, which expand in the caller and have no error path: a
- * HASH_ADD that carried on after one failed would work through a table that
- * is not there. So uthash calls uthash_fatal(), and the library ends the
- * process rather than write through nothing. The message goes to standard
- * error with the exit status every other failure uses, where uthash's own
- * default prints nothing and exits 255.
+ * uthash's macros, which expand in the caller and have no value to return.
+ * With this setting uthash puts the table back as it was, frees whatever it
+ * had got, and calls uthash_nonfatal_oom() with the entry it did not add;
+ * without it a failure ends the process, taking the caller's program with it.
  *
  * The library keeps two hash tables: the access code error correction table
  * btbb_init() builds, which is the larger of the two by far, and the piconet
- * survey's table of the LAPs it has heard. btbb.h records this for both.
+ * survey's table of the LAPs it has heard. btbb.h records for both what a
+ * caller gets when the allocation fails.
  */
-#define uthash_fatal(msg)                                                 \
+#define HASH_NONFATAL_OOM 1
+#define uthash_nonfatal_oom(elt)                                          \
 	do {                                                              \
-		/* keep the two streams in order when both are a terminal */ \
-		fflush(stdout);                                           \
-		fputs("error: libbtbb: out of memory\n", stderr);         \
-		fflush(stderr);                                           \
-		exit(1);                                                  \
+		btbb_hash_oom = 1;                                        \
 	} while (0)
 
 /* The settings above are in place, which is what uthash.h asks for before it
@@ -49,5 +43,24 @@
 #define BTBB_UTHASH_SETTINGS 1
 
 #include "uthash.h"
+
+/*
+ * Put `add` in the hash table `head`, under its `keylen`-byte key field
+ * `fieldname`, and set `added` to 1 where the entry went in or to 0 where a
+ * hash table allocation failed. On 0 the table is as it was and `add` is
+ * still the caller's to free.
+ *
+ * The flag the handler above sets is this macro's own local variable, so the
+ * flag is not shared between threads (the tables themselves are not guarded;
+ * btbb.h says which calls belong on one thread), and a HASH_ADD written
+ * outside the wrapper does not compile: there would be no such variable in
+ * scope.
+ */
+#define BTBB_HASH_ADD(hh, head, fieldname, keylen, add, added)            \
+	do {                                                              \
+		int btbb_hash_oom = 0;                                    \
+		HASH_ADD(hh, head, fieldname, keylen, add);               \
+		(added) = !btbb_hash_oom;                                 \
+	} while (0)
 
 #endif /* INCLUDED_BTBB_UTHASH_H */

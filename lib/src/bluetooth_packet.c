@@ -145,13 +145,19 @@ static syndrome_struct *syndrome_map = NULL;
 static int add_syndrome(uint64_t syndrome, uint64_t error)
 {
 	syndrome_struct *s;
+	int added;
+
 	s = malloc(sizeof(syndrome_struct));
 	if (s == NULL)
 		return 0;
 	s->syndrome = syndrome;
 	s->error = error;
 
-    HASH_ADD(hh, syndrome_map, syndrome, 8, s);
+	BTBB_HASH_ADD(hh, syndrome_map, syndrome, 8, s, added);
+	if (!added) {
+		free(s);
+		return 0;
+	}
 	return 1;
 }
 
