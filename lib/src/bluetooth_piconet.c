@@ -1810,9 +1810,10 @@ static void drop_followed_clock(btbb_piconet *pn, int rule_it_out)
 		pn->lock_loss_reported = 1;
 	}
 
-	/* The UAP goes with the clock. Discovery cannot find another while
-	 * try_hop() is still filtering on this one, which it does for as long
-	 * as the piconet has one. */
+	/* The UAP goes with the clock: the two were followed as one answer,
+	 * and giving that up leaves the piconet with no address part. Nothing
+	 * may read the old one as the piconet's while discovery looks for
+	 * another. */
 	pn->UAP = 0;
 	reset(pn);
 }
@@ -2059,8 +2060,11 @@ int btbb_process_packet(btbb_packet *pkt, btbb_piconet *pn) {
 			}
 		}
 
-		/* Have LAP/UAP, need clocks. */
-		else if (btbb_piconet_get_uap(pn)) {
+		/* Have LAP/UAP, need clocks.  What decides this is the flag
+		 * and not the UAP's value: 0x00 is a UAP a device really has,
+		 * so a caller stating it has said as much as one stating any
+		 * other value. */
+		else if (btbb_piconet_get_flag(pn, BTBB_UAP_VALID)) {
 			/* The clock the search holds as this packet arrives,
 			 * read before the search is given the packet, because
 			 * an attempt that ends gives its clock up while

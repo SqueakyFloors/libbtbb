@@ -373,6 +373,10 @@ BTBB_API void btbb_piconet_unref(btbb_piconet *pn);
 /* initialize the piconet struct */
 BTBB_API void btbb_init_piconet(btbb_piconet *pn, uint32_t lap);
 
+/* The piconet's UAP, as a caller that already knows it gives it: from here on
+   BTBB_UAP_VALID is set and btbb_process_packet() works toward the clock
+   rather than toward the UAP. It is that flag, and not the value, that says a
+   UAP is known, because 0x00 is a UAP a device really has. */
 BTBB_API void btbb_piconet_set_uap(btbb_piconet *pn, uint8_t uap);
 BTBB_API uint8_t btbb_piconet_get_uap(const btbb_piconet *pn);
 BTBB_API uint32_t btbb_piconet_get_lap(const btbb_piconet *pn);

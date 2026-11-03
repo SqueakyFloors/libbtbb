@@ -1996,6 +1996,127 @@ static void test_a_clock_settled_by_elimination_records_the_header(void)
 	btbb_piconet_unref(pn);
 }
 
+/* An address part that really is zero, which `ubertooth-rx -u 00` states the
+ * way it states any other. */
+#define ZERO_UAP 0x00
+
+/*
+ * A caller that states an address part of 0x00 gets the clock search, as a
+ * caller stating any other value does.
+ *
+ * What starts the search is the address part having been given, so what the
+ * library goes by is BTBB_UAP_VALID rather than the value: zero is a value
+ * like any other, and 0x00 is a real address part that devices have.  Reading
+ * the value instead left a piconet whose address part is 0x00 going through
+ * the address-part search on every packet, which is what the clock search is
+ * reached from but never past, so CLK1-27 never came.
+ */
+static void test_a_stated_uap_of_zero_starts_the_clock_search(void)
+{
+	/* Clocks far enough apart that each one picks a different whitening
+	 * sequence, as packets of a real piconet do. */
+	static const uint32_t clocks[8] = {
+		3, 11, 20, 29, 38, 47, 55, 62
+	};
+	/* how far the board's clock runs ahead of the piconet's */
+	const int slots_late = 7;
+	/* the device under observation, whose hops the packets below land on */
+	btbb_piconet *device = discovered_as(TEST_LAP, ZERO_UAP, NULL, 0);
+	btbb_piconet *pn = btbb_piconet_new();
+	int searching = 0;
+	int i;
+
+	CHECK(pn != NULL);
+	CHECK(device != NULL);
+	if (pn == NULL || device == NULL) {
+		btbb_piconet_unref(pn);
+		btbb_piconet_unref(device);
+		return;
+	}
+	btbb_init_piconet(pn, TEST_LAP);
+	btbb_piconet_set_uap(pn, ZERO_UAP);
+	/* the address part is given, whatever it is */
+	CHECK(btbb_piconet_get_flag(pn, BTBB_UAP_VALID));
+
+	for (i = 0; i < 8 && !searching; i++) {
+		/* NULL and POLL packets of several members of the piconet,
+		 * which is what an idle link carries, each on the channel the
+		 * device hops to at that clock. */
+		uint16_t header = (uint16_t) ((i % 7 + 1) |
+					      (((i & 1) ? PACKET_TYPE_POLL :
+						PACKET_TYPE_NULL) << 3));
+		btbb_packet *pkt = packet_read_slots_late(
+			TEST_LAP, channel_at(device, clocks[i]), header,
+			hec_for(header, ZERO_UAP), (int) clocks[i],
+			slots_late);
+
+		CHECK(pkt != NULL);
+		if (pkt == NULL)
+			break;
+		CHECK_EQ(0, btbb_process_packet(pkt, pn));
+		searching = btbb_piconet_get_flag(pn, BTBB_HOP_REVERSAL_INIT);
+		btbb_packet_unref(pkt);
+	}
+
+	/* The clock search is under way: CLK1-6 settled, and candidate
+	 * CLK1-27 values chosen from the first hop for the hops that follow to
+	 * narrow. */
+	CHECK(searching);
+	CHECK(btbb_piconet_get_flag(pn, BTBB_CLK6_VALID));
+	CHECK(pn->num_candidates > 1);
+	/* and on the address part the caller gave, which the search confirmed
+	 * rather than replaced */
+	CHECK(btbb_piconet_get_flag(pn, BTBB_UAP_VALID));
+	CHECK_EQ(ZERO_UAP, btbb_piconet_get_uap(pn));
+
+	btbb_piconet_unref(pn);
+	btbb_piconet_unref(device);
+}
+
+/*
+ * A caller that states no address part still gets the address-part search,
+ * and nothing else: there is no given value for the packets to confirm, so
+ * the clock search is not started for it.
+ */
+static void test_an_unstated_uap_still_goes_to_header_discovery(void)
+{
+	const int piconet_clk6 = 0x25;
+	const uint32_t board_clkn = 10;
+	char stream[MAX_SYMBOLS];
+	btbb_piconet *pn = btbb_piconet_new();
+	btbb_packet *pkt;
+	int length;
+
+	CHECK(pn != NULL);
+	if (pn == NULL)
+		return;
+	btbb_init_piconet(pn, SPEC_DH1_LAP);
+	CHECK(!btbb_piconet_get_flag(pn, BTBB_UAP_VALID));
+	CHECK_EQ(0, btbb_piconet_get_uap(pn));
+
+	length = spec_dh1_symbols(stream, piconet_clk6);
+	pkt = spec_dh1_packet(stream, length, board_clkn);
+	CHECK(pkt != NULL);
+	if (pkt == NULL) {
+		btbb_piconet_unref(pn);
+		return;
+	}
+	CHECK_EQ(0, btbb_process_packet(pkt, pn));
+
+	/* the address part this packet's CRC singled out, and the clock it
+	 * came out at */
+	CHECK(btbb_piconet_get_flag(pn, BTBB_UAP_VALID));
+	CHECK_EQ(SPEC_DH1_UAP, btbb_piconet_get_uap(pn));
+	CHECK(btbb_piconet_get_flag(pn, BTBB_CLK6_VALID));
+	/* and no clock search, as before: the caller gave nothing for this
+	 * packet to confirm */
+	CHECK(!btbb_piconet_get_flag(pn, BTBB_HOP_REVERSAL_INIT));
+	CHECK_EQ(0, pn->num_candidates);
+
+	btbb_packet_unref(pkt);
+	btbb_piconet_unref(pn);
+}
+
 /*
  * Header after header of the piconet failing its HEC means the clock or the
  * UAP being followed is not the piconet's. Nothing winnows while following, so
@@ -3757,6 +3878,8 @@ int main(void)
 	test_a_failed_header_leaves_no_address_part_behind();
 	test_the_settling_packet_carries_its_own_header();
 	test_a_clock_settled_by_elimination_records_the_header();
+	test_a_stated_uap_of_zero_starts_the_clock_search();
+	test_an_unstated_uap_still_goes_to_header_discovery();
 	test_a_run_of_header_failures_gives_up_the_clock();
 	test_a_lost_lock_leaves_the_piconet_ready_to_search();
 	test_a_header_that_checks_out_ends_the_run();
