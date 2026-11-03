@@ -102,8 +102,11 @@ void btbb_init_piconet(btbb_piconet *pn, uint32_t lap)
 	 * another piconet, whose clock has nothing to do with them. */
 	if (lap != pn->LAP) {
 		/* Another piconet, so none of the discovery done for the last
-		 * one describes it: the candidates, the hops remembered, the
-		 * address part and the clock offsets all go. */
+		 * one describes it: the candidates, the hops remembered and
+		 * the clock offsets all go, and the address part stops
+		 * counting as known.  Its value stays in the piconet with
+		 * BTBB_UAP_VALID clear, and it is the flag that says whether
+		 * an address part is known. */
 		reset(pn);
 		pn->num_rejected = 0;
 		pn->lock_losses = 0;
@@ -1823,9 +1826,11 @@ static void drop_followed_clock(btbb_piconet *pn, int rule_it_out)
 		pn->lock_loss_reported = 1;
 	}
 
-	/* The UAP goes with the clock. Discovery cannot find another while
-	 * try_hop() is still filtering on this one, which it does for as long
-	 * as the piconet has one. */
+	/* The UAP goes with the clock: the two were followed as one answer,
+	 * so a UAP this clock was wrong about is not one to hand a reader
+	 * while discovery looks for another. A reset for any other reason
+	 * leaves the value where it is, with the flag clear; it is the flag
+	 * that says whether a UAP is known. */
 	pn->UAP = 0;
 	reset(pn);
 }
@@ -2072,8 +2077,11 @@ int btbb_process_packet(btbb_packet *pkt, btbb_piconet *pn) {
 			}
 		}
 
-		/* Have LAP/UAP, need clocks. */
-		else if (btbb_piconet_get_uap(pn)) {
+		/* Have LAP/UAP, need clocks.  What decides this is the flag
+		 * and not the UAP's value: 0x00 is a UAP a device really has,
+		 * so a caller stating it has said as much as one stating any
+		 * other value. */
+		else if (btbb_piconet_get_flag(pn, BTBB_UAP_VALID)) {
 			/* The clock the search holds as this packet arrives,
 			 * read before the search is given the packet, because
 			 * an attempt that ends gives its clock up while
