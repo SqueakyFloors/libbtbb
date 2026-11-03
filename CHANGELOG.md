@@ -92,6 +92,9 @@
   leaves it in the survey, so a tool can read a recovered UAP.
 - Fixed: btbb_init_hop_reversal() reversed hops where 79 channels are
   observed folded into 25; it now refuses, with a note on standard error.
+- Fixed: btbb_init_hop_reversal() chose tens of thousands of clock candidates
+  for a piconet that had observed no packets; it now returns none, as
+  documented, with a note on standard error.
 - Fixed: reading a piconet's AFH map cost a 128 MB allocation and the wait a
   whole hopping sequence took; it now answers hops one at a time.
 - The hopping sequence is gone, with its notes on standard output and the

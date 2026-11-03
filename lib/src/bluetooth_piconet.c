@@ -841,6 +841,23 @@ static int init_hop_reversal(int aliased, btbb_piconet *pn, int rechoosing)
 		return 0;
 	}
 
+	/*
+	 * The candidates are the clock values that hop to the channel the
+	 * first remembered packet arrived on, so a piconet with no remembered
+	 * packets has nothing to choose them from: pattern_channels[0] holds
+	 * no channel the receiver reported. Searching against it used to hand
+	 * back every clock value that hops to channel 0, tens of thousands of
+	 * them, which narrows toward nothing - and after discovery has started
+	 * over, against a channel left from the search before.
+	 *
+	 * A refused request changes nothing, as an aliased one does not.
+	 */
+	if (pn->packets_observed < 1) {
+		piconet_note("no hops observed yet, so there is nothing to "
+			     "reverse\n");
+		return 0;
+	}
+
 	/* A second call replaces the candidates of the first. */
 	free(pn->clock_candidates);
 	pn->clock_candidates = NULL;
