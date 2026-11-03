@@ -935,6 +935,14 @@ int btbb_init_hop_reversal(int aliased, btbb_piconet *pn)
 	return init_hop_reversal(aliased, pn, 0);
 }
 
+/* The two lines the library writes once the search has the whole clock: that
+ * it has it, and the offset the caller puts its receiver on. */
+static void report_clock(btbb_piconet *pn)
+{
+	piconet_note("got CLK1-27\n");
+	piconet_note("clock offset = %d.\n", pn->clk_offset);
+}
+
 void try_hop(btbb_packet *pkt, btbb_piconet *pn)
 {
 	uint8_t filter_uap = pn->UAP;
@@ -966,17 +974,13 @@ void try_hop(btbb_packet *pkt, btbb_piconet *pn)
 		 * score a list the clock has gone from. */
 		note_hop(pn, pkt->clkn, pkt->channel);
 		btbb_winnow(pn);
-		if (btbb_piconet_get_flag(pn, BTBB_CLK27_VALID)) {
-			piconet_note("got CLK1-27\n");
-			piconet_note("clock offset = %d.\n", pn->clk_offset);
-		}
+		if (btbb_piconet_get_flag(pn, BTBB_CLK27_VALID))
+			report_clock(pn);
 	} else {
 		if (btbb_piconet_get_flag(pn, BTBB_CLK6_VALID)) {
 			btbb_uap_from_header(pkt, pn);
-			if (btbb_piconet_get_flag(pn, BTBB_CLK27_VALID)) {
-				piconet_note("got CLK1-27\n");
-				piconet_note("clock offset = %d.\n", pn->clk_offset);
-			}
+			if (btbb_piconet_get_flag(pn, BTBB_CLK27_VALID))
+				report_clock(pn);
 		} else {
 			if (btbb_uap_from_header(pkt, pn)) {
 				if (filter_uap == pn->UAP) {
@@ -1598,12 +1602,20 @@ int btbb_uap_from_header(btbb_packet *pkt, btbb_piconet *pn)
 				 * LT_ADDR of 0 and a NULL packet, which
 				 * carries no payload at all. */
 				record_header_at_clock(pkt, clock);
-				if (!btbb_piconet_get_flag(pn, BTBB_UAP_VALID))
+				if (!btbb_piconet_get_flag(pn, BTBB_UAP_VALID)) {
 					piconet_note("Correct CRC! UAP = 0x%x found after %d total packets.\n",
 						     UAP, pn->total_packets_observed);
-				else
+					/* The search found it, so it is the
+					 * library's own and goes again when
+					 * discovery starts over; see
+					 * try_hop(). A UAP the caller stated
+					 * and this clock has confirmed is
+					 * still the caller's. */
+					pn->uap_stated = 0;
+				} else {
 					piconet_note("Correct CRC! CLK6 = 0x%x found after %d total packets.\n",
 						     pn->clk6_offset, pn->total_packets_observed);
+				}
 				pn->UAP = UAP;
 				btbb_piconet_set_flag(pn, BTBB_CLK6_VALID, 1);
 				btbb_piconet_set_flag(pn, BTBB_UAP_VALID, 1);
@@ -1622,14 +1634,17 @@ int btbb_uap_from_header(btbb_packet *pkt, btbb_piconet *pn)
 				    pn->first_pkt_time) % 64);
 
 		settle_clk6_offset(pn, first_clock);
-		if (!btbb_piconet_get_flag(pn, BTBB_UAP_VALID))
+		if (!btbb_piconet_get_flag(pn, BTBB_UAP_VALID)) {
 			piconet_note("UAP = 0x%x found after %d total packets.\n",
 				     pn->clock6_candidates[first_clock],
 				     pn->total_packets_observed);
-		else
+			/* the library's own, as above */
+			pn->uap_stated = 0;
+		} else {
 			piconet_note("CLK6 = 0x%x found after %d total packets.\n",
 				     pn->clk6_offset,
 				     pn->total_packets_observed);
+		}
 		pn->UAP = pn->clock6_candidates[first_clock];
 		btbb_piconet_set_flag(pn, BTBB_CLK6_VALID, 1);
 		btbb_piconet_set_flag(pn, BTBB_UAP_VALID, 1);
@@ -2030,12 +2045,12 @@ static void read_at_clk6(btbb_packet *pkt, uint8_t uap, int clk6_offset)
 }
 
 /*
- * The search has the whole clock, so the piconet is followed from here.  The
+ * Follow the piconet from here, where the search has the whole clock.  The
  * two clocks are checked together because each is reported on its own flag
  * and following takes both: CLK1-6 dewhitens a header, CLK1-27 says which
- * channel the next packet is on.
+ * channel the next packet is on.  Returns whether it started.
  */
-static int now_following(btbb_piconet *pn)
+static int start_following(btbb_piconet *pn)
 {
 	if (!btbb_piconet_get_flag(pn, BTBB_CLK6_VALID) ||
 	    !btbb_piconet_get_flag(pn, BTBB_CLK27_VALID))
@@ -2141,7 +2156,7 @@ int btbb_process_packet(btbb_packet *pkt, btbb_piconet *pn) {
 			int clk6_offset;
 
 			try_hop(pkt, pn);
-			if (now_following(pn))
+			if (start_following(pn))
 				return -1;
 			/* The clock the search holds now wins where it has
 			 * one: this packet may be the one that settled it, or
@@ -2190,9 +2205,12 @@ int btbb_process_packet(btbb_packet *pkt, btbb_piconet *pn) {
 			 * already narrowing the list.
 			 */
 			if (btbb_uap_from_header(pkt, pn)) {
-				if (btbb_init_hop_reversal(0, pn) > 0)
-					btbb_winnow(pn);
-				if (now_following(pn))
+				btbb_init_hop_reversal(0, pn);
+				btbb_winnow(pn);
+				if (btbb_piconet_get_flag(pn,
+							  BTBB_CLK27_VALID))
+					report_clock(pn);
+				if (start_following(pn))
 					return -1;
 			}
 		}

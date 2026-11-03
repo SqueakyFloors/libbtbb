@@ -2270,7 +2270,7 @@ static void test_a_wrong_discovered_uap_is_given_up(void)
 	const int damaged = 3;
 	btbb_piconet *device = discovered_as(TEST_LAP, uap, NULL, 0);
 	btbb_piconet *pn = btbb_piconet_new();
-	char out[4096], err[65536];
+	char out[4096], err[8192];
 	int wrong_at = 0, given_up_at = 0, right_at = 0, clock_at = 0, i;
 
 	CHECK(pn != NULL);
@@ -2350,7 +2350,6 @@ static void test_a_stated_uap_outlives_a_search_that_fails(void)
 	const uint8_t stated = 0x11;
 	btbb_piconet *device = discovered_as(TEST_LAP, uap, NULL, 0);
 	btbb_piconet *pn = btbb_piconet_new();
-	char out[4096], err[65536];
 	int forgotten = 0, replaced = 0, i;
 
 	CHECK(pn != NULL);
@@ -2362,11 +2361,6 @@ static void test_a_stated_uap_outlives_a_search_that_fails(void)
 	}
 	btbb_init_piconet(pn, TEST_LAP);
 	btbb_piconet_set_uap(pn, stated);
-	if (capture_or_fail() != 0) {
-		btbb_piconet_unref(pn);
-		btbb_piconet_unref(device);
-		return;
-	}
 
 	for (i = 0; i < 60; i++) {
 		btbb_packet *pkt = discovery_packet(device, uap, i);
@@ -2380,7 +2374,6 @@ static void test_a_stated_uap_outlives_a_search_that_fails(void)
 		if (btbb_piconet_get_uap(pn) != stated)
 			replaced++;
 	}
-	capture_stop(out, sizeof(out), err, sizeof(err));
 
 	/* the caller's value, known on every packet of the capture */
 	CHECK_EQ(0, forgotten);
@@ -2389,8 +2382,6 @@ static void test_a_stated_uap_outlives_a_search_that_fails(void)
 	/* and no clock, which is the honest answer: this piconet's headers do
 	 * not check out under the address part it was told to use */
 	CHECK(!btbb_piconet_get_flag(pn, BTBB_CLK27_VALID));
-	if (failures != 0)
-		printf("stderr was: %s\n", err);
 
 	btbb_piconet_unref(pn);
 	btbb_piconet_unref(device);
