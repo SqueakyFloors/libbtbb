@@ -102,8 +102,11 @@ void btbb_init_piconet(btbb_piconet *pn, uint32_t lap)
 	 * another piconet, whose clock has nothing to do with them. */
 	if (lap != pn->LAP) {
 		/* Another piconet, so none of the discovery done for the last
-		 * one describes it: the candidates, the hops remembered, the
-		 * address part and the clock offsets all go. */
+		 * one describes it: the candidates, the hops remembered and
+		 * the clock offsets all go, and the address part stops
+		 * counting as known.  Its value stays in the piconet with
+		 * BTBB_UAP_VALID clear, and it is the flag that says whether
+		 * an address part is known. */
 		reset(pn);
 		pn->num_rejected = 0;
 		pn->lock_losses = 0;

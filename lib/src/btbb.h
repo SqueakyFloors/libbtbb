@@ -373,10 +373,14 @@ BTBB_API void btbb_piconet_unref(btbb_piconet *pn);
 /* initialize the piconet struct */
 BTBB_API void btbb_init_piconet(btbb_piconet *pn, uint32_t lap);
 
-/* The piconet's UAP, as a caller that already knows it gives it: from here on
-   BTBB_UAP_VALID is set and btbb_process_packet() works toward the clock
-   rather than toward the UAP. It is that flag, and not the value, that says a
-   UAP is known, because 0x00 is a UAP a device really has. */
+/* The piconet's UAP, as a caller that already knows it gives it: BTBB_UAP_VALID
+   is set from here, and btbb_process_packet() works toward the clock rather
+   than toward the UAP. It is that flag, and not the value, that says a UAP is
+   known, because 0x00 is a UAP a device really has.
+
+   The library clears the flag again where it has no UAP to stand behind: this
+   piconet pointed at another LAP, or a followed clock and the UAP with it
+   given up. A caller whose UAP should outlast that states it again. */
 BTBB_API void btbb_piconet_set_uap(btbb_piconet *pn, uint8_t uap);
 BTBB_API uint8_t btbb_piconet_get_uap(const btbb_piconet *pn);
 BTBB_API uint32_t btbb_piconet_get_lap(const btbb_piconet *pn);
@@ -551,7 +555,9 @@ BTBB_API btbb_piconet *btbb_next_survey_result(void);
  * This is how a tool reads what the survey has recovered for a LAP -
  * the UAP, for a capture record's reference address - without taking
  * the piconet out of the survey. The UAP is only the piconet's once
- * BTBB_UAP_VALID is set; before that btbb_piconet_get_uap() reads 0.
+ * BTBB_UAP_VALID is set. A survey piconet reads 0 until then, the
+ * survey keeping one piconet per LAP, so there is no earlier answer in
+ * it to read.
  *
  * The reference belongs to the survey, so the pointer is good until
  * that piconet is taken out of the survey and released. A caller that
