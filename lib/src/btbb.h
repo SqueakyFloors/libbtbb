@@ -498,9 +498,8 @@ BTBB_API int btbb_decode(btbb_packet* pkt);
  * number of candidate clock values left, which is zero where there is
  * nothing to work with.
  *
- * A piconet that has observed no hops is one such: the candidates come
- * from the channel the first of them arrived on, so there is none to
- * choose, and the piconet is left as it was, with a note on stderr.
+ * A piconet that has observed no packets has nothing to work with: no
+ * candidates are chosen, and a note goes to stderr.
  *
  * Hops as an aliased receiver observes them, folded from 79 channels
  * into 25, are not reversed: a nonzero 'aliased' chooses no

@@ -3356,7 +3356,7 @@ static void test_hop_reversal_without_an_observed_hop_is_refused(void)
 	CHECK_EQ(0, btbb_init_hop_reversal(0, pn));
 	capture_stop(out, sizeof(out), err, sizeof(err));
 
-	CHECK(strstr(err, "no hops observed yet") != NULL);
+	CHECK(strstr(err, "no packets observed yet") != NULL);
 	CHECK_EQ(0, strlen(out));
 	/* nothing was started, so nothing has to be given up either */
 	CHECK_EQ(0, pn->num_candidates);
