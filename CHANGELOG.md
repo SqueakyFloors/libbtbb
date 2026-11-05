@@ -210,8 +210,8 @@
 
 ### Python tools
 
-- Fixed: btaptap decoded no keystrokes; it does again, and the recorded
-  Ellisys export, 864 keyboard reports, gives up the paragraph typed into it.
+- Fixed: btaptap decoded no keystrokes; it does again, and a recorded
+  Ellisys export gives up the line typed into it.
 - Fixed: btaptap exited 0 or raised a traceback on a capture it cannot read
   through; it now reports one "error:" line and a non-zero exit.
 - Fixed: btaptap took a bad command line; an unknown option, a missing value,

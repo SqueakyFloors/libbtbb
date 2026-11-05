@@ -147,6 +147,27 @@ class Keystrokes(CaptureFileTestCase):
         self.assertEqual(done.stdout, "CTRL^c\n")
         self.assertEqual(done.returncode, 0)
 
+    def test_an_unmapped_scancode_is_reported_as_reserved(self):
+        # 0x01 is ErrorRollOver, which no key produces and the map has no
+        # entry for. It must come out as "[Reserved]" rather than raising.
+        cap = pcap_file(self.path("reserved.pcap"), DLT_EN10MB,
+                        [dm1_frame(l2cap_keystroke([0x01]))])
+
+        done = btaptap("-r", cap)
+        self.assertEqual(done.stdout, "[Reserved]\n")
+        self.assertEqual(done.stderr, "")
+        self.assertEqual(done.returncode, 0)
+
+    def test_three_keys_in_one_report_are_all_read(self):
+        # A report has room for six scancodes and btaptap reads the first
+        # three, so a report that fills all three has to give up all three.
+        cap = pcap_file(self.path("three.pcap"), DLT_EN10MB,
+                        [dm1_frame(l2cap_keystroke([0x04, 0x05, 0x06]))])
+
+        done = btaptap("-r", cap)
+        self.assertEqual(done.stdout, "abc\n")
+        self.assertEqual(done.returncode, 0)
+
     def test_held_key_is_not_repeated(self):
         report = l2cap_keystroke([0x04])
         cap = pcap_file(self.path("held.pcap"), DLT_EN10MB,
@@ -226,7 +247,9 @@ class Keystrokes(CaptureFileTestCase):
         self.assertEqual(done.returncode, 0)
 
     def test_ellisys_export(self):
-        # A recording of someone typing, 864 HID reports.
+        # An excerpt of a recording of someone typing, 79 HID reports: four
+        # Returns and the start of a typed line. The checks below are
+        # complete by the 72nd report; the rest is the excerpt's margin.
         done = btaptap("-e", ELLISYS_CSV)
         self.assertIn("Enter the TCP sequence number:", done.stdout)
         self.assertIn("[Return]", done.stdout)
