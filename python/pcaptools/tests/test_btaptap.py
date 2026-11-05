@@ -226,7 +226,9 @@ class Keystrokes(CaptureFileTestCase):
         self.assertEqual(done.returncode, 0)
 
     def test_ellisys_export(self):
-        # A recording of someone typing, 864 HID reports.
+        # An excerpt of a recording of someone typing, 79 HID reports: four
+        # Returns and the start of a typed line, which is as much as the
+        # checks below read.
         done = btaptap("-e", ELLISYS_CSV)
         self.assertIn("Enter the TCP sequence number:", done.stdout)
         self.assertIn("[Return]", done.stdout)
