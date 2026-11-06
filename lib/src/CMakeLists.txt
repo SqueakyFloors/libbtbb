@@ -20,6 +20,9 @@
 
 include(${PROJECT_SOURCE_DIR}/../cmake/set_release.cmake)
 add_definitions( -DRELEASE="${RELEASE_STRING}" )
+# The commit, beside the release: btbb_get_commit() answers with it, for a
+# build that has to check which libbtbb it found.
+add_definitions( -DCOMMIT="${BTBB_COMMIT}" )
 message(STATUS "Setting version string ${RELEASE_STRING}")
 
 # Source

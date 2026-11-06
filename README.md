@@ -248,8 +248,11 @@ working: functions and constants may be added to the header, so the version's
 second number moves and the soname does not. Removing one, or changing a
 signature, would move the soname to 2 and every program linking libbtbb would
 have to be rebuilt. The library's own release string, which
-`btbb_get_release()` returns, is a separate thing: it is the git commit the
-build came from, or the release it was cut at.
+`btbb_get_release()` returns, is a separate thing: it is the release the build
+came from, or the nearest release and how many commits are past it, as in
+`2020-12-R1+22`, with a `*` where the tree had uncommitted changes. The commit
+itself is recorded beside it and returned by `btbb_get_commit()`, for a build
+that has to check which libbtbb it found.
 
 To build the static library instead, or as well, see
 [README.cmake](README.cmake). On Windows a program linking the static library

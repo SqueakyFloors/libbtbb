@@ -180,6 +180,11 @@
 - Fixed: btbb_pcap_create_file() printed "PCAP error:" of its own beside
   the caller's report of the same failure; the caller, which knows the file
   name, now reports it alone, as it already did for every other writer.
+- btbb_get_release() now names a release rather than a commit: the release
+  tag the build came from, or the nearest one and how many commits are past
+  it, as in `2020-12-R1+22`, keeping the `*` for a modified tree.
+- New btbb_get_commit() returns the commit the library was built from, which
+  is what a build that needs a particular libbtbb checks.
 
 ### Build and install
 

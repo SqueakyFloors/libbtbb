@@ -30,8 +30,14 @@ Where the library and the header are installed is in README.md, under
     TESTING.md.
  * RELEASE_STRING
   * The version the library reports from btbb_get_release(). It defaults to
-    the current git commit, or to the latest release when the source is not a
-    git checkout. It is not the library's version or soname, which are in
-    README.md under "What a program links".
+    the nearest release tag and how many commits the checkout is past it
+    (`2020-12-R1+22`, with a trailing `*` for uncommitted changes), or to the
+    latest release when the source is not a git checkout. It is not the
+    library's version or soname, which are in README.md under "What a program
+    links".
+ * BTBB_COMMIT
+  * The commit the library records and reports from btbb_get_commit(). It
+    defaults to the checkout's HEAD, and is `unknown` when the source is not
+    a git checkout.
 
 CMake 3.5 or newer is required, and CMake 4 builds this project.

@@ -174,10 +174,13 @@ else()
     message(STATUS "no Python 3 interpreter was found: leaving out the py_generators test")
 endif()
 
+# WORK_DIR is where the test makes the scratch checkouts it reads a version
+# from, so they are inside the build directory and go when it does.
 add_test(NAME release_version COMMAND ${CMAKE_COMMAND}
          -DSET_RELEASE_CMAKE=${PROJECT_SOURCE_DIR}/cmake/set_release.cmake
+         -DWORK_DIR=${CMAKE_CURRENT_BINARY_DIR}/release_version
          -P ${CMAKE_CURRENT_SOURCE_DIR}/test_release_version.cmake)
-set_tests_properties(release_version PROPERTIES TIMEOUT 30)
+set_tests_properties(release_version PROPERTIES TIMEOUT 60)
 
 # Capture file writers, checked by reading the bytes back out of a file.
 # Two of its cases call the generic PCAPNG writer, which is internal, so
