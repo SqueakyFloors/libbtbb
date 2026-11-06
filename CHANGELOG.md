@@ -187,8 +187,10 @@
   is what a build that needs a particular libbtbb checks.
 - A build from a source archive now reports the release the archive was made
   from, which git writes into the RELEASE-VERSION file as the archive is
-  made; no version is kept by hand any more. A build that can read neither
-  git nor that file reports `unknown`.
+  made; no version is kept by hand any more. A build with no release to read
+  reports `unknown` rather than the last release there was, which includes a
+  shallow clone and one fetched without tags: btbb_get_commit() is what
+  identifies such a build, and the Python version is then `0+unknown`.
 
 ### Build and install
 

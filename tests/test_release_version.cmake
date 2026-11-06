@@ -234,6 +234,159 @@ else()
 	endif()
 endif()
 
+# The release tag patterns are written twice: as the globs above, which a
+# checkout is matched against, and inside the placeholder in RELEASE-VERSION,
+# which is what git matches against when it makes an archive. A kind of tag
+# added to one and not the other would cost archives their release, with
+# nothing failing, so the two are counted against each other here.
+list(LENGTH BTBB_RELEASE_TAG_GLOBS glob_count)
+file(READ "${repo_root}/RELEASE-VERSION" version_file_text)
+string(REGEX MATCHALL "match=" placeholder_matches "${version_file_text}")
+list(LENGTH placeholder_matches placeholder_count)
+if(NOT placeholder_count EQUAL glob_count)
+	fail("RELEASE-VERSION asks git to match ${placeholder_count} tag "
+	     "patterns and this file has ${glob_count}")
+endif()
+foreach(glob IN LISTS BTBB_RELEASE_TAG_GLOBS)
+	# As text: a glob is full of regex characters of its own.
+	string(FIND "${version_file_text}" "match=${glob}" glob_at)
+	if(glob_at LESS 0)
+		fail("RELEASE-VERSION does not ask git to match '${glob}', so an "
+		     "archive made at such a tag would report no release")
+	endif()
+endforeach()
+
+# -----------------------------------------------------------------------------
+# The module deciding for itself, in the order it asks
+# -----------------------------------------------------------------------------
+# Everything above calls the module's functions directly. These cases run the
+# module with neither answer given, so what is tested is the order it asks in:
+# a git checkout first, then the version file, then nothing known.
+#
+# A copy of the module goes into a scratch tree laid out the way this project
+# is -- the module in cmake/, the version file above it -- because the module
+# asks git and reads the file relative to its own directory. It runs in a cmake
+# of its own, so one case cannot leave a variable behind for the next.
+set(driver_text
+	"include(\"\${CMAKE_CURRENT_LIST_DIR}/set_release.cmake\")\n"
+	"message(STATUS \"RELEASE_STRING=\${RELEASE_STRING}\")\n")
+
+function(lay_out_module dir)
+	file(MAKE_DIRECTORY "${dir}/cmake")
+	configure_file("${SET_RELEASE_CMAKE}" "${dir}/cmake/set_release.cmake"
+		COPYONLY)
+	file(WRITE "${dir}/cmake/driver.cmake" ${driver_text})
+endfunction()
+
+function(expect_module what dir expected)
+	execute_process(
+		COMMAND "${CMAKE_COMMAND}" -P "${dir}/cmake/driver.cmake"
+		OUTPUT_VARIABLE printed
+		ERROR_VARIABLE printed
+		RESULT_VARIABLE status
+	)
+	if(NOT status EQUAL 0)
+		fail("${what}: the module would not run: ${printed}")
+		set(failures ${failures} PARENT_SCOPE)
+		return()
+	endif()
+	if(NOT printed MATCHES "RELEASE_STRING=([^\n\r]*)")
+		fail("${what}: the module printed no version: ${printed}")
+		set(failures ${failures} PARENT_SCOPE)
+		return()
+	endif()
+	if(NOT CMAKE_MATCH_1 STREQUAL expected)
+		fail("${what}: version '${CMAKE_MATCH_1}', expected '${expected}'")
+	endif()
+	set(failures ${failures} PARENT_SCOPE)
+endfunction()
+
+# No git history and no version file: nothing says which release this is.
+set(bare "${WORK_DIR}/bare")
+file(REMOVE_RECURSE "${bare}")
+lay_out_module("${bare}")
+expect_module("no git history and no version file" "${bare}" "unknown")
+
+# The version file as git archive fills it in, which is the only other place a
+# release comes from.
+file(WRITE "${bare}/RELEASE-VERSION" "2020-12-R1-22-gf0fe176\n")
+expect_module("no git history, a filled-in version file" "${bare}"
+	"2020-12-R1+22")
+
+# The file this repository ships, which holds the placeholder: it names no
+# release, so a tree that has it and no git history knows nothing.
+configure_file("${repo_root}/RELEASE-VERSION" "${bare}/RELEASE-VERSION"
+	COPYONLY)
+expect_module("no git history, the placeholder as shipped" "${bare}"
+	"unknown")
+
+# A git checkout at a release tag, with a version file naming a different
+# release: git is asked first, so the tag wins. An archive unpacked into a
+# checkout is how the two come to disagree.
+set(both "${WORK_DIR}/both")
+new_repo("${both}")
+lay_out_module("${both}")
+file(WRITE "${both}/RELEASE-VERSION" "2015-09-R2\n")
+run_git("${both}" add cmake RELEASE-VERSION)
+run_git("${both}" commit -q -m "the module and a version file")
+run_git("${both}" tag 2026-11-RC1)
+expect_module("a release tag, and a version file naming another release"
+	"${both}" "2026-11-RC1")
+
+# The same checkout with the tag gone, which is what a shallow clone or one
+# fetched without tags has: git names no release, so the file is read.
+run_git("${both}" tag -d 2026-11-RC1)
+expect_module("no release tag, and a filled-in version file" "${both}"
+	"2015-09-R2")
+
+# And the whole path as it really runs: a git archive of a tag, with the
+# file and the attribute this repository ships. git fills the release in as it
+# makes the archive, so this is the one case that pins the placeholder's own
+# syntax -- a typo in it leaves every archive reporting no release, and git
+# says nothing about that.
+execute_process(COMMAND "${GIT}" --version OUTPUT_VARIABLE git_version_text)
+if(NOT git_version_text MATCHES "([0-9]+)\\.([0-9]+)")
+	fail("git did not say which version it is: ${git_version_text}")
+elseif(CMAKE_MATCH_1 LESS 2
+       OR (CMAKE_MATCH_1 EQUAL 2 AND CMAKE_MATCH_2 LESS 32))
+	message(STATUS "git is older than 2.32, so the archive it makes goes "
+		"unchecked")
+else()
+	set(to_archive "${WORK_DIR}/to-archive")
+	new_repo("${to_archive}")
+	lay_out_module("${to_archive}")
+	configure_file("${repo_root}/RELEASE-VERSION"
+		"${to_archive}/RELEASE-VERSION" COPYONLY)
+	configure_file("${repo_root}/.gitattributes"
+		"${to_archive}/.gitattributes" COPYONLY)
+	run_git("${to_archive}" add cmake RELEASE-VERSION .gitattributes)
+	run_git("${to_archive}" commit -q -m "the module and the version file")
+	run_git("${to_archive}" tag 2026-11-R3)
+
+	set(archived "${WORK_DIR}/archived")
+	file(REMOVE_RECURSE "${archived}")
+	file(MAKE_DIRECTORY "${archived}")
+	run_git("${to_archive}" archive --format=tar
+		-o "${WORK_DIR}/archived.tar" 2026-11-R3)
+	execute_process(COMMAND "${CMAKE_COMMAND}" -E tar xf
+		"${WORK_DIR}/archived.tar" WORKING_DIRECTORY "${archived}")
+	expect_module("a git archive of a release tag" "${archived}"
+		"2026-11-R3")
+
+	# One commit past the tag, archived again: the release it comes after
+	# and how far past, which is the other form git writes.
+	commit_file("${to_archive}" "past the tag")
+	set(archived_past "${WORK_DIR}/archived-past")
+	file(REMOVE_RECURSE "${archived_past}")
+	file(MAKE_DIRECTORY "${archived_past}")
+	run_git("${to_archive}" archive --format=tar
+		-o "${WORK_DIR}/archived.tar" HEAD)
+	execute_process(COMMAND "${CMAKE_COMMAND}" -E tar xf
+		"${WORK_DIR}/archived.tar" WORKING_DIRECTORY "${archived_past}")
+	expect_module("a git archive made past a release tag" "${archived_past}"
+		"2026-11-R3+1")
+endif()
+
 # -----------------------------------------------------------------------------
 # Release string -> PEP 440 version
 # -----------------------------------------------------------------------------

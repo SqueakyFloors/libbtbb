@@ -24,11 +24,12 @@
 #   a source archive  git archive filled the release into RELEASE-VERSION
 #                     when the archive was made; see that file. No commit is
 #                     recorded, because the archive does not carry one.
-#   neither           the release is "unknown" and so is the commit. That is
-#                     a checkout with no release tag in reach -- one fetched
-#                     without tags, a shallow one, a history with none yet --
-#                     and sources copied out of any archive by hand. The
-#                     commit is still recorded where git could name it.
+#   neither           the release is "unknown". That is a checkout with no
+#                     release tag in reach -- one fetched without tags, a
+#                     shallow one, a history with none yet -- and a partial
+#                     copy of these sources with no RELEASE-VERSION in it. The
+#                     commit is still recorded where git could name it, and is
+#                     then what identifies the build.
 #
 # A checkout with no release tag could report the last release the sources
 # know about instead, but the distance from it would be unknown, and no
@@ -98,6 +99,12 @@ function(btbb_release_from_file out path)
 		if(line STREQUAL "" OR line MATCHES "^#")
 			continue()
 		endif()
+		# An untouched placeholder keeps the "$Format:" wrapper git
+		# wrote it with, which is what a checkout has. git strips that
+		# wrapper where it applied export-subst but could not expand
+		# the placeholder, so the describe check below is the one that
+		# has to hold either way; this is for the plain case, where
+		# what the file holds is the placeholder itself.
 		if(NOT line MATCHES "^\\$Format:")
 			btbb_release_from_describe(release "${line}")
 			set(${out} "${release}" PARENT_SCOPE)
