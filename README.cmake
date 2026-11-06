@@ -29,12 +29,13 @@ Where the library and the header are installed is in README.md, under
   * Whether to build the test suite, on by default. Run it with ctest; see
     TESTING.md.
  * RELEASE_STRING
-  * The version the library reports from btbb_get_release(). It defaults to
-    the nearest release tag and how many commits the checkout is past it
-    (`2020-12-R1+22`, with a trailing `*` for uncommitted changes), or to the
-    latest release when the source is not a git checkout. It is not the
-    library's version or soname, which are in README.md under "What a program
-    links".
+  * The version the library reports from btbb_get_release(). In a git checkout
+    it defaults to the nearest release tag and how many commits the checkout
+    is past it (`2020-12-R1+22`, with a trailing `*` for uncommitted changes).
+    In a source archive it defaults to the release the archive was made from,
+    which git wrote into the RELEASE-VERSION file as the archive was made, and
+    it is `unknown` where neither says. It is not the library's version or
+    soname, which are in README.md under "What a program links".
  * BTBB_COMMIT
   * The commit the library records and reports from btbb_get_commit(). It
     defaults to the checkout's HEAD, and is `unknown` when the source is not

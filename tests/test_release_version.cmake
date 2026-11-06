@@ -132,8 +132,7 @@ commit_file("${untagged}" "first")
 run_git("${untagged}" tag wip-something)
 run_git("${untagged}" tag 2025-03-snapshot)
 head_commit(sha "${untagged}")
-expect_version("${untagged}" "no release tag reachable"
-	"${LATEST_RELEASE}+unknown" "${sha}")
+expect_version("${untagged}" "no release tag reachable" "" "${sha}")
 
 # A shallow clone, which is what a continuous integration checkout is by
 # default: its depth is not the distance from a release either.
@@ -142,8 +141,7 @@ file(REMOVE_RECURSE "${shallow}")
 run_git("${WORK_DIR}" clone -q --depth 1 --no-tags
 	"file://${tagged}" "${shallow}")
 head_commit(sha "${shallow}")
-expect_version("${shallow}" "a shallow clone"
-	"${LATEST_RELEASE}+unknown" "${sha}")
+expect_version("${shallow}" "a shallow clone" "" "${sha}")
 
 # No git history at all, which is what a source archive is.
 set(plain "${WORK_DIR}/plain")
@@ -159,8 +157,89 @@ set(nested "${tagged}/vendor/libbtbb")
 file(MAKE_DIRECTORY "${nested}")
 expect_version("${nested}" "an archive inside another repository" "" "")
 
-# Release string -> expected PACKAGE_VERSION. The expectations spell out the
-# version LATEST_RELEASE maps to, so moving that release moves these too.
+# -----------------------------------------------------------------------------
+# The release a source archive carries
+# -----------------------------------------------------------------------------
+
+function(expect_describe describe expected)
+	btbb_release_from_describe(got "${describe}")
+	if(NOT got STREQUAL expected)
+		fail("describe '${describe}' gave '${got}', expected '${expected}'")
+	endif()
+	set(failures ${failures} PARENT_SCOPE)
+endfunction()
+
+# What git describe lines reduce to. The first forms are what git writes for a
+# release tag and for a commit past one.
+expect_describe("2020-12-R1" "2020-12-R1")
+expect_describe("2020-12-R1-22-gf0fe176" "2020-12-R1+22")
+expect_describe("2026-11-RC1" "2026-11-RC1")
+expect_describe("2026-11-DEV2-7-gabc1234" "2026-11-DEV2+7")
+
+# Tags the globs let through that name no release, and a repository with no
+# release tag at all, which leaves the line empty.
+expect_describe("2026-11-R1-local" "")
+expect_describe("2026-11-R1-local-2-gf0fe176" "")
+expect_describe("wip-something" "")
+expect_describe("" "")
+
+# The file itself. In a checkout it still holds the placeholder git wrote,
+# which names no release; git archive replaces that line with a describe of
+# the commit the archive was made from, and a repository with no release tag
+# leaves it empty.
+set(version_file "${WORK_DIR}/RELEASE-VERSION")
+
+function(expect_file what contents expected)
+	file(WRITE "${version_file}" "${contents}")
+	btbb_release_from_file(got "${version_file}")
+	if(NOT got STREQUAL expected)
+		fail("${what}: gave '${got}', expected '${expected}'")
+	endif()
+	set(failures ${failures} PARENT_SCOPE)
+endfunction()
+
+expect_file("a filled-in archive" "# a comment\n2020-12-R1\n" "2020-12-R1")
+expect_file("an archive made past a release"
+	"2020-12-R1-22-gf0fe176\n" "2020-12-R1+22")
+expect_file("a checkout, placeholder untouched"
+	"# a comment\n$Format:%(describe:tags)$\n" "")
+expect_file("an archive of a history with no release tag"
+	"# a comment\n\n" "")
+expect_file("a file holding something else" "a local build\n" "")
+
+# No such file, which is what a directory holding only part of these sources
+# has.
+file(REMOVE "${version_file}")
+btbb_release_from_file(got "${version_file}")
+if(NOT got STREQUAL "")
+	fail("no version file: gave '${got}', expected nothing")
+endif()
+
+# These sources carry the file, and .gitattributes asks git to fill it in.
+# Without the attribute git archive would copy the placeholder through
+# untouched and every source archive would report no release at all, which is
+# the one thing nothing else here would notice.
+get_filename_component(cmake_dir "${SET_RELEASE_CMAKE}" DIRECTORY)
+set(repo_root "${cmake_dir}/..")
+if(NOT EXISTS "${repo_root}/RELEASE-VERSION")
+	fail("these sources carry no RELEASE-VERSION file")
+endif()
+if(NOT EXISTS "${repo_root}/.gitattributes")
+	fail("these sources carry no .gitattributes")
+else()
+	file(READ "${repo_root}/.gitattributes" attributes)
+	if(NOT attributes MATCHES "RELEASE-VERSION[ \t]+export-subst")
+		fail(".gitattributes does not mark RELEASE-VERSION export-subst, "
+		     "so git archive would not fill the release in")
+	endif()
+endif()
+
+# -----------------------------------------------------------------------------
+# Release string -> PEP 440 version
+# -----------------------------------------------------------------------------
+
+# A release string that names no release takes "0" as its public version, so
+# nothing reads it as a release it is not.
 set(cases
 	"2020-12-R1|2020.12.1"
 	"2018-06-R1|2018.6.1"
@@ -168,18 +247,17 @@ set(cases
 	"2020-12-R1+fork1|2020.12.1+fork1"
 	"2020-12-R1+22|2020.12.1+22"
 	"2020-12-R1+22*|2020.12.1+22.dirty"
-	"2020-12-R1+unknown|2020.12.1+unknown"
-	"2020-12-R1+unknown*|2020.12.1+unknown.dirty"
 	"2020-12-R1*|2020.12.1+dirty"
 	"2026-11-RC1|2026.11.0rc1"
 	"2026-11-RC1+3|2026.11.0rc1+3"
 	"2026-11-DEV1|2026.11.0.dev1"
 	"2026-11-DEV2+7*|2026.11.0.dev2+7.dirty"
-	"git-f0fe176|2020.12.1+git.f0fe176"
-	"git-f0fe176*|2020.12.1+git.f0fe176.dirty"
-	"git-F0FE176|2020.12.1+git.f0fe176"
-	"my local build|2020.12.1+my.local.build"
-	"-|2020.12.1+unknown"
+	"unknown|0+unknown"
+	"git-f0fe176|0+git.f0fe176"
+	"git-f0fe176*|0+git.f0fe176.dirty"
+	"git-F0FE176|0+git.f0fe176"
+	"my local build|0+my.local.build"
+	"-|0+unknown"
 )
 
 foreach(case IN LISTS cases)

@@ -250,7 +250,9 @@ signature, would move the soname to 2 and every program linking libbtbb would
 have to be rebuilt. The library's own release string, which
 `btbb_get_release()` returns, is a separate thing: it is the release the build
 came from, or the nearest release and how many commits are past it, as in
-`2020-12-R1+22`, with a `*` where the tree had uncommitted changes. The commit
+`2020-12-R1+22`, with a `*` where the tree had uncommitted changes. A build
+from a source archive reports the release the archive was made from, which git
+writes into the `RELEASE-VERSION` file as the archive is made. The commit
 itself is recorded beside it and returned by `btbb_get_commit()`, for a build
 that has to check which libbtbb it found.
 

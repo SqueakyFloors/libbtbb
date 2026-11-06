@@ -185,6 +185,10 @@
   it, as in `2020-12-R1+22`, keeping the `*` for a modified tree.
 - New btbb_get_commit() returns the commit the library was built from, which
   is what a build that needs a particular libbtbb checks.
+- A build from a source archive now reports the release the archive was made
+  from, which git writes into the RELEASE-VERSION file as the archive is
+  made; no version is kept by hand any more. A build that can read neither
+  git nor that file reports `unknown`.
 
 ### Build and install
 
