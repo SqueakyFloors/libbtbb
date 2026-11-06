@@ -19,16 +19,33 @@
 # archive, a release tarball -- the release is LATEST_RELEASE, which
 # developers should set before a release is tagged, and no commit is recorded.
 #
+# Where there is history but no release tag in it -- a clone fetched without
+# tags, a shallow one, a history with none yet -- the release is
+# "<LATEST_RELEASE>+unknown": that names the release the sources are at least
+# as new as, and says plainly that the distance is not known. A count from the
+# start of history would be a different number, and a shallow clone would
+# answer it with its own depth.
+#
 # It also sets PACKAGE_VERSION, the same version expressed the way PEP 440
 # requires, for the Python tools. See btbb_pep440_version() below.
 
 set(LATEST_RELEASE "2020-12-R1")
 
 # A release tag is YYYY-MM-Rn, or YYYY-MM-RCn and YYYY-MM-DEVn for the
-# candidate and development tags that come before one. Matched as a glob, so
-# that another tag in the checkout -- a packager's, a developer's own -- is
-# not read as a release.
-set(BTBB_RELEASE_TAG_GLOB "[0-9][0-9][0-9][0-9]-[0-9][0-9]-*")
+# candidate and development tags that come before one. Three globs rather
+# than one YYYY-MM-* , so that another tag in the checkout -- a packager's, a
+# developer's own, a dated snapshot -- is not read as a release. git takes a
+# --match for each.
+set(BTBB_RELEASE_TAG_GLOBS
+	"[0-9][0-9][0-9][0-9]-[0-9][0-9]-R[0-9]*"
+	"[0-9][0-9][0-9][0-9]-[0-9][0-9]-RC[0-9]*"
+	"[0-9][0-9][0-9][0-9]-[0-9][0-9]-DEV[0-9]*")
+
+# The same list as git arguments.
+set(BTBB_RELEASE_TAG_MATCH "")
+foreach(glob IN LISTS BTBB_RELEASE_TAG_GLOBS)
+	list(APPEND BTBB_RELEASE_TAG_MATCH --match "${glob}")
+endforeach()
 
 # What the git checkout in <dir> is: its release name in <release_out> and its
 # commit in <commit_out>, both empty where there is no git history to read.
@@ -38,6 +55,24 @@ set(BTBB_RELEASE_TAG_GLOB "[0-9][0-9][0-9][0-9]-[0-9][0-9]-*")
 function(btbb_version_from_git release_out commit_out dir)
 	set(${release_out} "" PARENT_SCOPE)
 	set(${commit_out} "" PARENT_SCOPE)
+
+	# Does the checkout git would answer about hold these sources at all?
+	# git looks up the directory tree, so sources unpacked inside an
+	# unrelated repository -- a vendored copy, a tarball in someone's home
+	# -- would otherwise be given that repository's release and commit.
+	# Whether it tracks anything in this directory is what tells the two
+	# apart, and asks about no file by name, so moving this file does not
+	# quietly turn the answer off.
+	execute_process(
+		COMMAND git ls-files --error-unmatch .
+		WORKING_DIRECTORY "${dir}"
+		RESULT_VARIABLE not_ours
+		OUTPUT_QUIET
+		ERROR_QUIET
+	)
+	if(not_ours)
+		return()
+	endif()
 
 	execute_process(
 		COMMAND git rev-parse HEAD
@@ -70,7 +105,7 @@ function(btbb_version_from_git release_out commit_out dir)
 	# Exactly a release tag: that release, with nothing after it.
 	execute_process(
 		COMMAND git describe --tags --exact-match
-		        --match ${BTBB_RELEASE_TAG_GLOB} HEAD
+		        ${BTBB_RELEASE_TAG_MATCH} HEAD
 		WORKING_DIRECTORY "${dir}"
 		RESULT_VARIABLE not_tagged
 		ERROR_QUIET
@@ -88,7 +123,7 @@ function(btbb_version_from_git release_out commit_out dir)
 	# git would otherwise append.
 	execute_process(
 		COMMAND git describe --tags --abbrev=0
-		        --match ${BTBB_RELEASE_TAG_GLOB} HEAD
+		        ${BTBB_RELEASE_TAG_MATCH} HEAD
 		WORKING_DIRECTORY "${dir}"
 		RESULT_VARIABLE no_tag
 		ERROR_QUIET
@@ -96,16 +131,20 @@ function(btbb_version_from_git release_out commit_out dir)
 		OUTPUT_STRIP_TRAILING_WHITESPACE
 	)
 	if(no_tag)
-		# No release tag to count from: a clone made without tags, or a
-		# history that has none yet. The latest release this source knows
-		# about stands in for it, so the version still names a release.
-		set(tag "${LATEST_RELEASE}")
-		set(range HEAD)
-	else()
-		set(range "${tag}..HEAD")
+		# No release tag to count from: a clone made without tags, a
+		# shallow one, or a history that has none yet. The latest release
+		# this source knows about stands in for it, so the version still
+		# names a release, and the distance is reported as unknown rather
+		# than counted from the start of history -- that count is not the
+		# distance from the release, and a shallow clone would answer it
+		# with its own depth. A clone of one commit saying "+1" would
+		# read exactly like a real build one commit past a release.
+		set(${release_out} "${LATEST_RELEASE}+unknown${flag}" PARENT_SCOPE)
+		set(${commit_out} "${commit}${flag}" PARENT_SCOPE)
+		return()
 	endif()
 	execute_process(
-		COMMAND git rev-list --count ${range}
+		COMMAND git rev-list --count "${tag}..HEAD"
 		WORKING_DIRECTORY "${dir}"
 		RESULT_VARIABLE no_count
 		ERROR_QUIET
@@ -142,6 +181,7 @@ endfunction()
 #   2026-11-DEV1     -> 2026.11.0.dev1
 #   2020-12-R1+22    -> 2020.12.1+22
 #   2020-12-R1+22*   -> 2020.12.1+22.dirty
+#   2020-12-R1+unknown -> 2020.12.1+unknown
 #   2020-12-R1*      -> 2020.12.1+dirty
 #   2020-12-R1+fork1 -> 2020.12.1+fork1
 #
@@ -200,8 +240,17 @@ function(btbb_pep440_version out release fallback_public)
 	set(${out} "${fallback_public}${local}" PARENT_SCOPE)
 endfunction()
 
+# An override given as an empty value says nothing, so it is read as no
+# override: btbb_get_release() and btbb_get_commit() always have an answer.
+if("${RELEASE_STRING}" STREQUAL "")
+	unset(RELEASE_STRING)
+endif()
+if("${BTBB_COMMIT}" STREQUAL "")
+	unset(BTBB_COMMIT)
+endif()
+
 if(NOT DEFINED RELEASE_STRING OR NOT DEFINED BTBB_COMMIT)
-	btbb_version_from_git(GIT_RELEASE GIT_COMMIT "${PROJECT_SOURCE_DIR}")
+	btbb_version_from_git(GIT_RELEASE GIT_COMMIT "${CMAKE_CURRENT_LIST_DIR}")
 endif()
 
 if(NOT DEFINED RELEASE_STRING)
