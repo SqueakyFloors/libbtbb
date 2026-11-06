@@ -254,6 +254,10 @@ static void test_version_strings(void)
 {
 	CHECK(btbb_get_version() != NULL && btbb_get_version()[0] != '\0');
 	CHECK(btbb_get_release() != NULL && btbb_get_release()[0] != '\0');
+	/* The commit is read out of the library file by builds that pin a
+	 * libbtbb, so the prefix must not come back with it. */
+	CHECK(btbb_get_commit() != NULL && btbb_get_commit()[0] != '\0');
+	CHECK(strncmp(btbb_get_commit(), "libbtbb-commit:", 15) != 0);
 }
 
 int main(void)

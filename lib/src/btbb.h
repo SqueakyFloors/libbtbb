@@ -200,8 +200,19 @@ typedef struct btbb_packet btbb_packet;
  * rather than trusting a figure here. */
 BTBB_API int btbb_init(int max_ac_errors);
 
+/* The release this library was built from: a release name, how many commits
+ * it is past one ("2020-12-R1+22"), with a trailing "*" where the tree had
+ * uncommitted changes. btbb_get_version() is the library's own version, which
+ * moves with its interface rather than with a release. */
 BTBB_API const char* btbb_get_release(void);
 BTBB_API const char* btbb_get_version(void);
+
+/* The commit this library was built from, in full, with a trailing "*" where
+ * the tree had uncommitted changes, or "unknown" where the build had no git
+ * history to read. A program that needs a particular libbtbb can check this;
+ * a person reading a version wants btbb_get_release() above. The string
+ * belongs to the library; the caller must not free it. */
+BTBB_API const char* btbb_get_commit(void);
 
 /* The name the Bluetooth SIG gives a company identifier, the number that
  * appears in Manufacturer Specific Data and in the manufacturer field of an

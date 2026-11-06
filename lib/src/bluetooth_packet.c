@@ -317,6 +317,25 @@ const char* btbb_get_release(void) {
 	return RELEASE;
 }
 
+/* The commit this library was built from, which the build records separately
+ * from the release above; "unknown" where there was no git history to read.
+ *
+ * Kept as one string with a prefix, rather than the digits on their own,
+ * because a build that depends on a particular libbtbb has to read this out
+ * of the library file: asking the library means compiling and running a
+ * program against it, which a static or cross-compiled build cannot do. The
+ * prefix is what makes the digits findable among everything else the compiler
+ * put in the file, and btbb_get_commit() returns what follows it. */
+#ifndef COMMIT
+#define COMMIT "unknown"
+#endif
+#define COMMIT_PREFIX "libbtbb-commit:"
+static const char commit_string[] = COMMIT_PREFIX COMMIT;
+
+const char* btbb_get_commit(void) {
+	return commit_string + sizeof(COMMIT_PREFIX) - 1;
+}
+
 #ifndef VERSION
 #define VERSION "unknown"
 #endif
