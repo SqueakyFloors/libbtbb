@@ -368,8 +368,11 @@ execute_process(COMMAND "${GIT}" --version OUTPUT_VARIABLE git_version_text)
 if(NOT git_version_text MATCHES "([0-9]+)\\.([0-9]+)")
 	fail("git did not say which version it is: ${git_version_text}")
 elseif(CMAKE_MATCH_1 LESS 2
-       OR (CMAKE_MATCH_1 EQUAL 2 AND CMAKE_MATCH_2 LESS 32))
-	message(STATUS "git is older than 2.32, so the archive it makes goes "
+       OR (CMAKE_MATCH_1 EQUAL 2 AND CMAKE_MATCH_2 LESS 35))
+	# 2.35 is where git archive understands every option in the
+	# placeholder: %(describe) arrived in 2.32 and its "tags" option in
+	# 2.35.
+	message(STATUS "git is older than 2.35, so the archive it makes goes "
 		"unchecked")
 else()
 	set(to_archive "${WORK_DIR}/to-archive")
