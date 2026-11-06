@@ -54,9 +54,11 @@ A source archive reads the `RELEASE-VERSION` file at the top of the tree.
 `.gitattributes` marks that file `export-subst`, so `git archive` -- which is
 how a release tarball and GitHub's "Download ZIP" are made -- fills the release
 into it from the commit it archived. Nothing is kept by hand, and nothing has
-to be edited before a release is tagged. Filling it in needs git 2.32 or newer
-*where the archive is made*; the git that unpacks or builds it does not matter,
-and an archive made by an older git reports its release as `unknown`.
+to be edited before a release is tagged. Filling it in needs git 2.35 or newer
+*where the archive is made* -- `%(describe)` arrived in git 2.32 and its `tags`
+option in 2.35, and the placeholder uses both. The git that unpacks or builds
+the archive does not matter, and an archive made by an older git reports its
+release as `unknown`.
 
 Where neither says -- a checkout whose history reaches no release tag, which a
 shallow clone or one fetched without tags often is, or a partial copy of these
