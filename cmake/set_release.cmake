@@ -242,11 +242,15 @@ endfunction()
 
 # An override given as an empty value says nothing, so it is read as no
 # override: btbb_get_release() and btbb_get_commit() always have an answer.
-if("${RELEASE_STRING}" STREQUAL "")
+if(DEFINED RELEASE_STRING AND "${RELEASE_STRING}" STREQUAL "")
 	unset(RELEASE_STRING)
+	# A -D on the command line is a cache entry, which the line above does
+	# not reach.
+	unset(RELEASE_STRING CACHE)
 endif()
-if("${BTBB_COMMIT}" STREQUAL "")
+if(DEFINED BTBB_COMMIT AND "${BTBB_COMMIT}" STREQUAL "")
 	unset(BTBB_COMMIT)
+	unset(BTBB_COMMIT CACHE)
 endif()
 
 if(NOT DEFINED RELEASE_STRING OR NOT DEFINED BTBB_COMMIT)
