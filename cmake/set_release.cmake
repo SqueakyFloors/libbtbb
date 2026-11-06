@@ -15,21 +15,33 @@
 #                   cannot do.
 #
 # Either can be given instead: cmake -DRELEASE_STRING="your version"
-# -DBTBB_COMMIT=<commit>. Where there is no git history to read -- a source
-# archive, a release tarball -- the release is LATEST_RELEASE, which
-# developers should set before a release is tagged, and no commit is recorded.
+# -DBTBB_COMMIT=<commit>.
 #
-# Where there is history but no release tag in it -- a clone fetched without
-# tags, a shallow one, a history with none yet -- the release is
-# "<LATEST_RELEASE>+unknown": that names the release the sources are at least
-# as new as, and says plainly that the distance is not known. A count from the
-# start of history would be a different number, and a shallow clone would
-# answer it with its own depth.
+# Three sources, in this order:
+#
+#   a git checkout    git says which release it is and what has happened
+#                     since, as described above.
+#   a source archive  git archive filled the release into RELEASE-VERSION
+#                     when the archive was made; see that file. Read only
+#                     where git places these sources in no checkout of its
+#                     own, because a checkout's own history is the better
+#                     answer and a version file beside one was written for
+#                     some other source. No commit is recorded, because the
+#                     archive does not carry one.
+#   neither           the release is "unknown". That is a checkout whose
+#                     history reaches no release tag -- one fetched without
+#                     tags, a shallow one, a history with none yet -- and a
+#                     partial copy of these sources with no RELEASE-VERSION in
+#                     it. The commit is still recorded where git could name
+#                     it, and is then what identifies the build.
+#
+# A checkout with no release tag could report the last release the sources
+# know about instead, but the distance from it would be unknown, and no
+# version kept in this file can say which release a build really came from:
+# whoever edited it last decided that, not the release that was tagged.
 #
 # It also sets PACKAGE_VERSION, the same version expressed the way PEP 440
 # requires, for the Python tools. See btbb_pep440_version() below.
-
-set(LATEST_RELEASE "2020-12-R1")
 
 # A release tag is YYYY-MM-Rn, or YYYY-MM-RCn and YYYY-MM-DEVn for the
 # candidate and development tags that come before one. Three globs rather
@@ -46,6 +58,64 @@ set(BTBB_RELEASE_TAG_MATCH "")
 foreach(glob IN LISTS BTBB_RELEASE_TAG_GLOBS)
 	list(APPEND BTBB_RELEASE_TAG_MATCH --match "${glob}")
 endforeach()
+
+# One release name taken from a `git describe --tags` line, or empty where the
+# line names no release:
+#
+#   2020-12-R1               ->  2020-12-R1
+#   2020-12-R1-22-gf0fe176   ->  2020-12-R1+22
+#
+# git appends "-<commits>-g<commit>" where the commit described is past the
+# tag. A release name has dashes of its own, so the count is taken off the end
+# rather than the name read out of the front. What is left has to be a release
+# name: the globs above cannot say "digits and then nothing", so a tag like
+# "2026-11-R1-local" reaches here and is not a release.
+function(btbb_release_from_describe out describe)
+	string(STRIP "${describe}" text)
+	set(count "")
+	if(text MATCHES "^(.+)-([0-9]+)-g[0-9a-f]+$")
+		set(text "${CMAKE_MATCH_1}")
+		set(count "+${CMAKE_MATCH_2}")
+	endif()
+	if(NOT text MATCHES "^[0-9][0-9][0-9][0-9]-[0-9][0-9]-(R|RC|DEV)[0-9]+$")
+		set(${out} "" PARENT_SCOPE)
+		return()
+	endif()
+	set(${out} "${text}${count}" PARENT_SCOPE)
+endfunction()
+
+# The release the file at <path> carries, or empty where it carries none.
+#
+# That file is RELEASE-VERSION, and git archive fills the release into it when
+# an archive is made. In a git checkout nothing has filled it in and the line
+# is still the placeholder, which names no release: a checkout's version comes
+# from git, which is asked first.
+#
+# Comments and blank lines are skipped, so the file can explain itself.
+function(btbb_release_from_file out path)
+	set(${out} "" PARENT_SCOPE)
+	if(NOT EXISTS "${path}")
+		return()
+	endif()
+	file(STRINGS "${path}" lines)
+	foreach(line IN LISTS lines)
+		string(STRIP "${line}" line)
+		if(line STREQUAL "" OR line MATCHES "^#")
+			continue()
+		endif()
+		# An untouched placeholder keeps the "$Format:" wrapper git
+		# wrote it with, which is what a checkout has. git strips that
+		# wrapper where it applied export-subst but could not expand
+		# the placeholder, so the describe check below is the one that
+		# has to hold either way; this is for the plain case, where
+		# what the file holds is the placeholder itself.
+		if(NOT line MATCHES "^\\$Format:")
+			btbb_release_from_describe(release "${line}")
+			set(${out} "${release}" PARENT_SCOPE)
+		endif()
+		return()
+	endforeach()
+endfunction()
 
 # What the git checkout in <dir> is: its release name in <release_out> and its
 # commit in <commit_out>, both empty where there is no git history to read.
@@ -102,7 +172,11 @@ function(btbb_version_from_git release_out commit_out dir)
 		set(flag "*")
 	endif()
 
-	# Exactly a release tag: that release, with nothing after it.
+	# Exactly a release tag: that release, with nothing after it. The name
+	# git found is checked as well, here and below, because a glob cannot
+	# say "digits and then nothing": a packager's "2026-11-R1-local"
+	# matches the first glob and is not a release. A name that does not
+	# hold up is read as no release tag at all.
 	execute_process(
 		COMMAND git describe --tags --exact-match
 		        ${BTBB_RELEASE_TAG_MATCH} HEAD
@@ -113,9 +187,12 @@ function(btbb_version_from_git release_out commit_out dir)
 		OUTPUT_STRIP_TRAILING_WHITESPACE
 	)
 	if(NOT not_tagged)
-		set(${release_out} "${tag}${flag}" PARENT_SCOPE)
-		set(${commit_out} "${commit}${flag}" PARENT_SCOPE)
-		return()
+		btbb_release_from_describe(release "${tag}")
+		if(NOT release STREQUAL "")
+			set(${release_out} "${release}${flag}" PARENT_SCOPE)
+			set(${commit_out} "${commit}${flag}" PARENT_SCOPE)
+			return()
+		endif()
 	endif()
 
 	# Otherwise the release this one comes after, and how far past it this
@@ -130,16 +207,24 @@ function(btbb_version_from_git release_out commit_out dir)
 		OUTPUT_VARIABLE tag
 		OUTPUT_STRIP_TRAILING_WHITESPACE
 	)
+	if(NOT no_tag)
+		btbb_release_from_describe(release "${tag}")
+		if(release STREQUAL "")
+			# A name the glob let through that is not a release
+			# after all, so there is no release here to count from.
+			set(no_tag 1)
+		endif()
+	endif()
 	if(no_tag)
 		# No release tag to count from: a clone made without tags, a
-		# shallow one, or a history that has none yet. The latest release
-		# this source knows about stands in for it, so the version still
-		# names a release, and the distance is reported as unknown rather
-		# than counted from the start of history -- that count is not the
-		# distance from the release, and a shallow clone would answer it
-		# with its own depth. A clone of one commit saying "+1" would
-		# read exactly like a real build one commit past a release.
-		set(${release_out} "${LATEST_RELEASE}+unknown${flag}" PARENT_SCOPE)
+		# shallow one, or a history that has none yet. There is no
+		# release to name, and counting from the start of history would
+		# not be the distance from one -- a shallow clone would answer
+		# that with its own depth, and a clone of one commit saying "+1"
+		# would read exactly like a real build one commit past a
+		# release. The caller reports the release as unknown; the commit
+		# is still here, and still identifies the build.
+		set(${release_out} "" PARENT_SCOPE)
 		set(${commit_out} "${commit}${flag}" PARENT_SCOPE)
 		return()
 	endif()
@@ -181,13 +266,14 @@ endfunction()
 #   2026-11-DEV1     -> 2026.11.0.dev1
 #   2020-12-R1+22    -> 2020.12.1+22
 #   2020-12-R1+22*   -> 2020.12.1+22.dirty
-#   2020-12-R1+unknown -> 2020.12.1+unknown
 #   2020-12-R1*      -> 2020.12.1+dirty
 #   2020-12-R1+fork1 -> 2020.12.1+fork1
+#   unknown          -> 0+unknown      (with fallback_public "0")
 #
-# A release string in no recognized form keeps the latest release as the
-# public version and carries the string itself in the local version, with
-# anything PEP 440 does not allow there replaced by a dot.
+# A release string in no recognized form takes fallback_public as its public
+# version and carries the string itself in the local version, with anything
+# PEP 440 does not allow there replaced by a dot. The caller passes "0",
+# because a version that names no release should not be read as one.
 function(btbb_pep440_version out release fallback_public)
 	set(rest "${release}")
 	set(local_parts "")
@@ -258,10 +344,27 @@ if(NOT DEFINED RELEASE_STRING OR NOT DEFINED BTBB_COMMIT)
 endif()
 
 if(NOT DEFINED RELEASE_STRING)
-	if("${GIT_RELEASE}" STREQUAL "")
-		set(RELEASE_STRING ${LATEST_RELEASE})
-	else()
+	if(NOT "${GIT_RELEASE}" STREQUAL "")
 		set(RELEASE_STRING "${GIT_RELEASE}")
+	elseif(NOT "${GIT_COMMIT}" STREQUAL "")
+		# git placed these sources in a checkout of its own and found
+		# no release in its history. The version file is not read here:
+		# whatever it says was written for some other source -- an
+		# archive unpacked and committed to a repository of its own
+		# carries the release the archive was made from, and this
+		# checkout's HEAD is not that -- so there is no release to
+		# name. btbb_get_commit() identifies the build.
+		set(RELEASE_STRING "unknown")
+	else()
+		# No git at all, so these sources came out of an archive if
+		# they came from anywhere: the release it carries.
+		btbb_release_from_file(ARCHIVE_RELEASE
+			"${CMAKE_CURRENT_LIST_DIR}/../RELEASE-VERSION")
+		if(NOT "${ARCHIVE_RELEASE}" STREQUAL "")
+			set(RELEASE_STRING "${ARCHIVE_RELEASE}")
+		else()
+			set(RELEASE_STRING "unknown")
+		endif()
 	endif()
 endif()
 
@@ -275,8 +378,7 @@ if(NOT DEFINED BTBB_COMMIT)
 	endif()
 endif()
 
-btbb_pep440_version(LATEST_RELEASE_VERSION "${LATEST_RELEASE}" "0")
-btbb_pep440_version(PACKAGE_VERSION "${RELEASE_STRING}" "${LATEST_RELEASE_VERSION}")
+btbb_pep440_version(PACKAGE_VERSION "${RELEASE_STRING}" "0")
 
 # A version the Python tools would reject is a build failure, not something to
 # discover at install time.

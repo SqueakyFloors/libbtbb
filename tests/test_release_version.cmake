@@ -132,8 +132,23 @@ commit_file("${untagged}" "first")
 run_git("${untagged}" tag wip-something)
 run_git("${untagged}" tag 2025-03-snapshot)
 head_commit(sha "${untagged}")
-expect_version("${untagged}" "no release tag reachable"
-	"${LATEST_RELEASE}+unknown" "${sha}")
+expect_version("${untagged}" "no release tag reachable" "" "${sha}")
+
+# A name that starts like a release and goes on, which a glob cannot rule out:
+# a packager's tag on a release, or a developer's. HEAD carries it here, and it
+# is the nearest tag for the commit after it, so both paths that read a tag
+# have to turn it down.
+set(near "${WORK_DIR}/near")
+new_repo("${near}")
+commit_file("${near}" "first")
+run_git("${near}" tag 2026-11-R1-local)
+head_commit(sha "${near}")
+expect_version("${near}" "a tag that only starts like a release" ""
+	"${sha}")
+commit_file("${near}" "second")
+head_commit(sha "${near}")
+expect_version("${near}" "a commit past a tag that is not a release" ""
+	"${sha}")
 
 # A shallow clone, which is what a continuous integration checkout is by
 # default: its depth is not the distance from a release either.
@@ -142,8 +157,7 @@ file(REMOVE_RECURSE "${shallow}")
 run_git("${WORK_DIR}" clone -q --depth 1 --no-tags
 	"file://${tagged}" "${shallow}")
 head_commit(sha "${shallow}")
-expect_version("${shallow}" "a shallow clone"
-	"${LATEST_RELEASE}+unknown" "${sha}")
+expect_version("${shallow}" "a shallow clone" "" "${sha}")
 
 # No git history at all, which is what a source archive is.
 set(plain "${WORK_DIR}/plain")
@@ -159,8 +173,246 @@ set(nested "${tagged}/vendor/libbtbb")
 file(MAKE_DIRECTORY "${nested}")
 expect_version("${nested}" "an archive inside another repository" "" "")
 
-# Release string -> expected PACKAGE_VERSION. The expectations spell out the
-# version LATEST_RELEASE maps to, so moving that release moves these too.
+# -----------------------------------------------------------------------------
+# The release a source archive carries
+# -----------------------------------------------------------------------------
+
+function(expect_describe describe expected)
+	btbb_release_from_describe(got "${describe}")
+	if(NOT got STREQUAL expected)
+		fail("describe '${describe}' gave '${got}', expected '${expected}'")
+	endif()
+	set(failures ${failures} PARENT_SCOPE)
+endfunction()
+
+# What git describe lines reduce to. The first forms are what git writes for a
+# release tag and for a commit past one.
+expect_describe("2020-12-R1" "2020-12-R1")
+expect_describe("2020-12-R1-22-gf0fe176" "2020-12-R1+22")
+expect_describe("2026-11-RC1" "2026-11-RC1")
+expect_describe("2026-11-DEV2-7-gabc1234" "2026-11-DEV2+7")
+
+# Tags the globs let through that name no release, and a repository with no
+# release tag at all, which leaves the line empty.
+expect_describe("2026-11-R1-local" "")
+expect_describe("2026-11-R1-local-2-gf0fe176" "")
+expect_describe("wip-something" "")
+expect_describe("" "")
+
+# The file itself. In a checkout it still holds the placeholder git wrote,
+# which names no release; git archive replaces that line with a describe of
+# the commit the archive was made from, and a repository with no release tag
+# leaves it empty.
+set(version_file "${WORK_DIR}/RELEASE-VERSION")
+
+function(expect_file what contents expected)
+	file(WRITE "${version_file}" "${contents}")
+	btbb_release_from_file(got "${version_file}")
+	if(NOT got STREQUAL expected)
+		fail("${what}: gave '${got}', expected '${expected}'")
+	endif()
+	set(failures ${failures} PARENT_SCOPE)
+endfunction()
+
+expect_file("a filled-in archive" "# a comment\n2020-12-R1\n" "2020-12-R1")
+expect_file("an archive made past a release"
+	"2020-12-R1-22-gf0fe176\n" "2020-12-R1+22")
+expect_file("a checkout, placeholder untouched"
+	"# a comment\n$Format:%(describe:tags)$\n" "")
+expect_file("an archive of a history with no release tag"
+	"# a comment\n\n" "")
+expect_file("a file holding something else" "a local build\n" "")
+
+# No such file, which is what a directory holding only part of these sources
+# has.
+file(REMOVE "${version_file}")
+btbb_release_from_file(got "${version_file}")
+if(NOT got STREQUAL "")
+	fail("no version file: gave '${got}', expected nothing")
+endif()
+
+# These sources carry the file, and .gitattributes asks git to fill it in.
+# Without the attribute git archive would copy the placeholder through
+# untouched and every source archive would report no release at all, which is
+# the one thing nothing else here would notice.
+get_filename_component(cmake_dir "${SET_RELEASE_CMAKE}" DIRECTORY)
+set(repo_root "${cmake_dir}/..")
+if(NOT EXISTS "${repo_root}/RELEASE-VERSION")
+	fail("these sources carry no RELEASE-VERSION file")
+endif()
+if(NOT EXISTS "${repo_root}/.gitattributes")
+	fail("these sources carry no .gitattributes")
+else()
+	file(READ "${repo_root}/.gitattributes" attributes)
+	if(NOT attributes MATCHES "RELEASE-VERSION[ \t]+export-subst")
+		fail(".gitattributes does not mark RELEASE-VERSION export-subst, "
+		     "so git archive would not fill the release in")
+	endif()
+endif()
+
+# The release tag patterns are written twice: as the globs above, which a
+# checkout is matched against, and inside the placeholder in RELEASE-VERSION,
+# which is what git matches against when it makes an archive. A kind of tag
+# added to one and not the other would cost archives their release, with
+# nothing failing, so the two are counted against each other here.
+list(LENGTH BTBB_RELEASE_TAG_GLOBS glob_count)
+file(READ "${repo_root}/RELEASE-VERSION" version_file_text)
+string(REGEX MATCHALL "match=" placeholder_matches "${version_file_text}")
+list(LENGTH placeholder_matches placeholder_count)
+if(NOT placeholder_count EQUAL glob_count)
+	fail("RELEASE-VERSION asks git to match ${placeholder_count} tag "
+	     "patterns and this file has ${glob_count}")
+endif()
+foreach(glob IN LISTS BTBB_RELEASE_TAG_GLOBS)
+	# As text: a glob is full of regex characters of its own.
+	string(FIND "${version_file_text}" "match=${glob}" glob_at)
+	if(glob_at LESS 0)
+		fail("RELEASE-VERSION does not ask git to match '${glob}', so an "
+		     "archive made at such a tag would report no release")
+	endif()
+endforeach()
+
+# -----------------------------------------------------------------------------
+# The module deciding for itself, in the order it asks
+# -----------------------------------------------------------------------------
+# Everything above calls the module's functions directly. These cases run the
+# module with neither answer given, so what is tested is the order it asks in:
+# a git checkout first, then the version file, then nothing known.
+#
+# A copy of the module goes into a scratch tree laid out the way this project
+# is -- the module in cmake/, the version file above it -- because the module
+# asks git and reads the file relative to its own directory. It runs in a cmake
+# of its own, so one case cannot leave a variable behind for the next.
+set(driver_text
+	"include(\"\${CMAKE_CURRENT_LIST_DIR}/set_release.cmake\")\n"
+	"message(STATUS \"RELEASE_STRING=\${RELEASE_STRING}\")\n")
+
+function(lay_out_module dir)
+	file(MAKE_DIRECTORY "${dir}/cmake")
+	configure_file("${SET_RELEASE_CMAKE}" "${dir}/cmake/set_release.cmake"
+		COPYONLY)
+	file(WRITE "${dir}/cmake/driver.cmake" ${driver_text})
+endfunction()
+
+function(expect_module what dir expected)
+	execute_process(
+		COMMAND "${CMAKE_COMMAND}" -P "${dir}/cmake/driver.cmake"
+		OUTPUT_VARIABLE printed
+		ERROR_VARIABLE printed
+		RESULT_VARIABLE status
+	)
+	if(NOT status EQUAL 0)
+		fail("${what}: the module would not run: ${printed}")
+		set(failures ${failures} PARENT_SCOPE)
+		return()
+	endif()
+	if(NOT printed MATCHES "RELEASE_STRING=([^\n\r]*)")
+		fail("${what}: the module printed no version: ${printed}")
+		set(failures ${failures} PARENT_SCOPE)
+		return()
+	endif()
+	if(NOT CMAKE_MATCH_1 STREQUAL expected)
+		fail("${what}: version '${CMAKE_MATCH_1}', expected '${expected}'")
+	endif()
+	set(failures ${failures} PARENT_SCOPE)
+endfunction()
+
+# No git history and no version file: nothing says which release this is.
+set(bare "${WORK_DIR}/bare")
+file(REMOVE_RECURSE "${bare}")
+lay_out_module("${bare}")
+expect_module("no git history and no version file" "${bare}" "unknown")
+
+# The version file as git archive fills it in, which is the only other place a
+# release comes from.
+file(WRITE "${bare}/RELEASE-VERSION" "2020-12-R1-22-gf0fe176\n")
+expect_module("no git history, a filled-in version file" "${bare}"
+	"2020-12-R1+22")
+
+# The file this repository ships, which holds the placeholder: it names no
+# release, so a tree that has it and no git history knows nothing.
+configure_file("${repo_root}/RELEASE-VERSION" "${bare}/RELEASE-VERSION"
+	COPYONLY)
+expect_module("no git history, the placeholder as shipped" "${bare}"
+	"unknown")
+
+# A git checkout at a release tag, with a version file naming a different
+# release: git is asked first, so the tag wins. An archive unpacked into a
+# checkout is how the two come to disagree.
+set(both "${WORK_DIR}/both")
+new_repo("${both}")
+lay_out_module("${both}")
+file(WRITE "${both}/RELEASE-VERSION" "2015-09-R2\n")
+run_git("${both}" add cmake RELEASE-VERSION)
+run_git("${both}" commit -q -m "the module and a version file")
+run_git("${both}" tag 2026-11-RC1)
+expect_module("a release tag, and a version file naming another release"
+	"${both}" "2026-11-RC1")
+
+# The same checkout with the tag gone, which is what a shallow clone or one
+# fetched without tags has. The file is NOT read: git placed these sources in a
+# checkout of its own, and the file beside them was written for some other
+# source -- an archive unpacked and committed to a repository of its own
+# carries the release the archive was made from, and this checkout's HEAD is
+# not that. So the release is unknown, and the commit identifies the build.
+run_git("${both}" tag -d 2026-11-RC1)
+expect_module("a checkout with no release tag, beside a filled-in version file"
+	"${both}" "unknown")
+
+# And the whole path as it really runs: a git archive of a tag, with the
+# file and the attribute this repository ships. git fills the release in as it
+# makes the archive, so this is the one case that pins the placeholder's own
+# syntax -- a typo in it leaves every archive reporting no release, and git
+# says nothing about that.
+execute_process(COMMAND "${GIT}" --version OUTPUT_VARIABLE git_version_text)
+if(NOT git_version_text MATCHES "([0-9]+)\\.([0-9]+)")
+	fail("git did not say which version it is: ${git_version_text}")
+elseif(CMAKE_MATCH_1 LESS 2
+       OR (CMAKE_MATCH_1 EQUAL 2 AND CMAKE_MATCH_2 LESS 32))
+	message(STATUS "git is older than 2.32, so the archive it makes goes "
+		"unchecked")
+else()
+	set(to_archive "${WORK_DIR}/to-archive")
+	new_repo("${to_archive}")
+	lay_out_module("${to_archive}")
+	configure_file("${repo_root}/RELEASE-VERSION"
+		"${to_archive}/RELEASE-VERSION" COPYONLY)
+	configure_file("${repo_root}/.gitattributes"
+		"${to_archive}/.gitattributes" COPYONLY)
+	run_git("${to_archive}" add cmake RELEASE-VERSION .gitattributes)
+	run_git("${to_archive}" commit -q -m "the module and the version file")
+	run_git("${to_archive}" tag 2026-11-R3)
+
+	set(archived "${WORK_DIR}/archived")
+	file(REMOVE_RECURSE "${archived}")
+	file(MAKE_DIRECTORY "${archived}")
+	run_git("${to_archive}" archive --format=tar
+		-o "${WORK_DIR}/archived.tar" 2026-11-R3)
+	execute_process(COMMAND "${CMAKE_COMMAND}" -E tar xf
+		"${WORK_DIR}/archived.tar" WORKING_DIRECTORY "${archived}")
+	expect_module("a git archive of a release tag" "${archived}"
+		"2026-11-R3")
+
+	# One commit past the tag, archived again: the release it comes after
+	# and how far past, which is the other form git writes.
+	commit_file("${to_archive}" "past the tag")
+	set(archived_past "${WORK_DIR}/archived-past")
+	file(REMOVE_RECURSE "${archived_past}")
+	file(MAKE_DIRECTORY "${archived_past}")
+	run_git("${to_archive}" archive --format=tar
+		-o "${WORK_DIR}/archived.tar" HEAD)
+	execute_process(COMMAND "${CMAKE_COMMAND}" -E tar xf
+		"${WORK_DIR}/archived.tar" WORKING_DIRECTORY "${archived_past}")
+	expect_module("a git archive made past a release tag" "${archived_past}"
+		"2026-11-R3+1")
+endif()
+
+# -----------------------------------------------------------------------------
+# Release string -> PEP 440 version
+# -----------------------------------------------------------------------------
+
+# A release string that names no release takes "0" as its public version, so
+# nothing reads it as a release it is not.
 set(cases
 	"2020-12-R1|2020.12.1"
 	"2018-06-R1|2018.6.1"
@@ -168,18 +420,17 @@ set(cases
 	"2020-12-R1+fork1|2020.12.1+fork1"
 	"2020-12-R1+22|2020.12.1+22"
 	"2020-12-R1+22*|2020.12.1+22.dirty"
-	"2020-12-R1+unknown|2020.12.1+unknown"
-	"2020-12-R1+unknown*|2020.12.1+unknown.dirty"
 	"2020-12-R1*|2020.12.1+dirty"
 	"2026-11-RC1|2026.11.0rc1"
 	"2026-11-RC1+3|2026.11.0rc1+3"
 	"2026-11-DEV1|2026.11.0.dev1"
 	"2026-11-DEV2+7*|2026.11.0.dev2+7.dirty"
-	"git-f0fe176|2020.12.1+git.f0fe176"
-	"git-f0fe176*|2020.12.1+git.f0fe176.dirty"
-	"git-F0FE176|2020.12.1+git.f0fe176"
-	"my local build|2020.12.1+my.local.build"
-	"-|2020.12.1+unknown"
+	"unknown|0+unknown"
+	"git-f0fe176|0+git.f0fe176"
+	"git-f0fe176*|0+git.f0fe176.dirty"
+	"git-F0FE176|0+git.f0fe176"
+	"my local build|0+my.local.build"
+	"-|0+unknown"
 )
 
 foreach(case IN LISTS cases)
