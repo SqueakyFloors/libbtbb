@@ -22,14 +22,18 @@
 #   a git checkout    git says which release it is and what has happened
 #                     since, as described above.
 #   a source archive  git archive filled the release into RELEASE-VERSION
-#                     when the archive was made; see that file. No commit is
-#                     recorded, because the archive does not carry one.
-#   neither           the release is "unknown". That is a checkout with no
-#                     release tag in reach -- one fetched without tags, a
-#                     shallow one, a history with none yet -- and a partial
-#                     copy of these sources with no RELEASE-VERSION in it. The
-#                     commit is still recorded where git could name it, and is
-#                     then what identifies the build.
+#                     when the archive was made; see that file. Read only
+#                     where git places these sources in no checkout of its
+#                     own, because a checkout's own history is the better
+#                     answer and a version file beside one was written for
+#                     some other source. No commit is recorded, because the
+#                     archive does not carry one.
+#   neither           the release is "unknown". That is a checkout whose
+#                     history reaches no release tag -- one fetched without
+#                     tags, a shallow one, a history with none yet -- and a
+#                     partial copy of these sources with no RELEASE-VERSION in
+#                     it. The commit is still recorded where git could name
+#                     it, and is then what identifies the build.
 #
 # A checkout with no release tag could report the last release the sources
 # know about instead, but the distance from it would be unknown, and no
@@ -168,7 +172,11 @@ function(btbb_version_from_git release_out commit_out dir)
 		set(flag "*")
 	endif()
 
-	# Exactly a release tag: that release, with nothing after it.
+	# Exactly a release tag: that release, with nothing after it. The name
+	# git found is checked as well, here and below, because a glob cannot
+	# say "digits and then nothing": a packager's "2026-11-R1-local"
+	# matches the first glob and is not a release. A name that does not
+	# hold up is read as no release tag at all.
 	execute_process(
 		COMMAND git describe --tags --exact-match
 		        ${BTBB_RELEASE_TAG_MATCH} HEAD
@@ -179,9 +187,12 @@ function(btbb_version_from_git release_out commit_out dir)
 		OUTPUT_STRIP_TRAILING_WHITESPACE
 	)
 	if(NOT not_tagged)
-		set(${release_out} "${tag}${flag}" PARENT_SCOPE)
-		set(${commit_out} "${commit}${flag}" PARENT_SCOPE)
-		return()
+		btbb_release_from_describe(release "${tag}")
+		if(NOT release STREQUAL "")
+			set(${release_out} "${release}${flag}" PARENT_SCOPE)
+			set(${commit_out} "${commit}${flag}" PARENT_SCOPE)
+			return()
+		endif()
 	endif()
 
 	# Otherwise the release this one comes after, and how far past it this
@@ -196,6 +207,14 @@ function(btbb_version_from_git release_out commit_out dir)
 		OUTPUT_VARIABLE tag
 		OUTPUT_STRIP_TRAILING_WHITESPACE
 	)
+	if(NOT no_tag)
+		btbb_release_from_describe(release "${tag}")
+		if(release STREQUAL "")
+			# A name the glob let through that is not a release
+			# after all, so there is no release here to count from.
+			set(no_tag 1)
+		endif()
+	endif()
 	if(no_tag)
 		# No release tag to count from: a clone made without tags, a
 		# shallow one, or a history that has none yet. There is no
@@ -327,9 +346,18 @@ endif()
 if(NOT DEFINED RELEASE_STRING)
 	if(NOT "${GIT_RELEASE}" STREQUAL "")
 		set(RELEASE_STRING "${GIT_RELEASE}")
+	elseif(NOT "${GIT_COMMIT}" STREQUAL "")
+		# git placed these sources in a checkout of its own and found
+		# no release in its history. The version file is not read here:
+		# whatever it says was written for some other source -- an
+		# archive unpacked and committed to a repository of its own
+		# carries the release the archive was made from, and this
+		# checkout's HEAD is not that -- so there is no release to
+		# name. btbb_get_commit() identifies the build.
+		set(RELEASE_STRING "unknown")
 	else()
-		# No git answer: the release an archive carries, if these
-		# sources came out of one.
+		# No git at all, so these sources came out of an archive if
+		# they came from anywhere: the release it carries.
 		btbb_release_from_file(ARCHIVE_RELEASE
 			"${CMAKE_CURRENT_LIST_DIR}/../RELEASE-VERSION")
 		if(NOT "${ARCHIVE_RELEASE}" STREQUAL "")

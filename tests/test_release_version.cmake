@@ -134,6 +134,22 @@ run_git("${untagged}" tag 2025-03-snapshot)
 head_commit(sha "${untagged}")
 expect_version("${untagged}" "no release tag reachable" "" "${sha}")
 
+# A name that starts like a release and goes on, which a glob cannot rule out:
+# a packager's tag on a release, or a developer's. HEAD carries it here, and it
+# is the nearest tag for the commit after it, so both paths that read a tag
+# have to turn it down.
+set(near "${WORK_DIR}/near")
+new_repo("${near}")
+commit_file("${near}" "first")
+run_git("${near}" tag 2026-11-R1-local)
+head_commit(sha "${near}")
+expect_version("${near}" "a tag that only starts like a release" ""
+	"${sha}")
+commit_file("${near}" "second")
+head_commit(sha "${near}")
+expect_version("${near}" "a commit past a tag that is not a release" ""
+	"${sha}")
+
 # A shallow clone, which is what a continuous integration checkout is by
 # default: its depth is not the distance from a release either.
 set(shallow "${WORK_DIR}/shallow")
@@ -334,10 +350,14 @@ expect_module("a release tag, and a version file naming another release"
 	"${both}" "2026-11-RC1")
 
 # The same checkout with the tag gone, which is what a shallow clone or one
-# fetched without tags has: git names no release, so the file is read.
+# fetched without tags has. The file is NOT read: git placed these sources in a
+# checkout of its own, and the file beside them was written for some other
+# source -- an archive unpacked and committed to a repository of its own
+# carries the release the archive was made from, and this checkout's HEAD is
+# not that. So the release is unknown, and the commit identifies the build.
 run_git("${both}" tag -d 2026-11-RC1)
-expect_module("no release tag, and a filled-in version file" "${both}"
-	"2015-09-R2")
+expect_module("a checkout with no release tag, beside a filled-in version file"
+	"${both}" "unknown")
 
 # And the whole path as it really runs: a git archive of a tag, with the
 # file and the attribute this repository ships. git fills the release in as it

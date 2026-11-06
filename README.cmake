@@ -58,8 +58,8 @@ to be edited before a release is tagged. Filling it in needs git 2.32 or newer
 *where the archive is made*; the git that unpacks or builds it does not matter,
 and an archive made by an older git reports its release as `unknown`.
 
-Where neither says -- a checkout with no release tag in reach, which is what a
-shallow clone and one fetched without tags are, or a partial copy of these
+Where neither says -- a checkout whose history reaches no release tag, which a
+shallow clone or one fetched without tags often is, or a partial copy of these
 sources with no `RELEASE-VERSION` in it -- the release is `unknown` and
 `btbb_get_commit()` is what identifies the build. `PACKAGE_VERSION`, the PEP 440
 version the Python tools carry, is then `0+unknown`, which sorts below every
