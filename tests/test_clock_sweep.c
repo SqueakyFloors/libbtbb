@@ -91,10 +91,12 @@ static const uint8_t MAP_OBSERVER[10] = {0x7f, 0xff, 0xff, 0xff, 0xff};
  * them by default.  The step spreads a short run across the range rather than
  * bunching it at the start: four trials 125 apart sit at offsets 0, 125, 250
  * and 375, so the last is past where the old twelve-trial default stopped
- * (374) and inside the range the full run walks (399).  That spread is what
- * keeps a handful of trials holding locks of both kinds; these four bring a
- * wrong clock to 8 of the 8 points it takes to be accepted, where twelve
- * closer together reached 7.
+ * (374) and inside the range the full run walks (399).  What the spread buys
+ * is pressure on the scored search: across these four a wrong clock reaches
+ * 8 of the 8 points it takes to be accepted, where twelve closer together
+ * reached 7, and none of them is accepted.  That is the whole point of the
+ * checks below, and a run that never pressed a wrong clock that far would
+ * not be testing them.
  *
  * Four points are four points, though: a fault peculiar to a clock between
  * them would not be met, where a run of every value would meet it.  That run
