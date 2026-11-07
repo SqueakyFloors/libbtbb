@@ -121,9 +121,9 @@ target_compile_options(test_clock_sweep PRIVATE -std=gnu90)
 add_test(NAME clock_sweep COMMAND test_clock_sweep)
 # Each trial walks 2^21 clock values and scores up to two million candidates
 # against two hundred hops, and the default is four of them twice over, spread
-# over the whole range the full run covers; a sanitizer build takes several
-# times as long.  The full run the issues quote, "test_clock_sweep 400", is
-# not for CI.
+# across the range rather than bunched at its start; a sanitizer build takes
+# several times as long, measured at 73 s against the 14 s of an ordinary one.
+# The full run the issues quote, "test_clock_sweep 400", is not for CI.
 set_tests_properties(clock_sweep PROPERTIES TIMEOUT 300)
 
 # Likewise internal: it compiles the two translation units it reaches
