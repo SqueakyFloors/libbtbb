@@ -88,12 +88,22 @@ static const uint8_t MAP_OBSERVER[10] = {0x7f, 0xff, 0xff, 0xff, 0xff};
 #define CLOCKS_APART 0x0123456
 
 /* The clock values the sweep walks, how far apart they are, and how many of
- * them by default.  The step spreads a short default run over the same range
- * the full one covers, so a couple of dozen trials still hold locks of both
- * kinds; the full run the issues quote is every clock value, "400". */
+ * them by default.  The step spreads a short run across the range rather than
+ * bunching it at the start: four trials 125 apart sit at offsets 0, 125, 250
+ * and 375, so the last is past where the old twelve-trial default stopped
+ * (374) and inside the range the full run walks (399).  What the spread buys
+ * is pressure on the scored search: across these four a wrong clock reaches
+ * 8 of the 8 points it takes to be accepted, where twelve closer together
+ * reached 7, and none of them is accepted.  That is the whole point of the
+ * checks below, and a run that never pressed a wrong clock that far would
+ * not be testing them.
+ *
+ * Four points are four points, though: a fault peculiar to a clock between
+ * them would not be met, where a run of every value would meet it.  That run
+ * is "test_clock_sweep 400", which the issues quote. */
 #define FIRST_CLOCK 0x1000000
-#define DEFAULT_TRIALS 12
-#define DEFAULT_STEP 34
+#define DEFAULT_TRIALS 4
+#define DEFAULT_STEP 125
 
 static btbb_piconet *discovered(const uint8_t *map)
 {
